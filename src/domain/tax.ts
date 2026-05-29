@@ -1,4 +1,11 @@
-import type { NisaComparison, TaxProfile, TaxProfileId, TaxResult, TradeSimulation } from "@/types/domain";
+import type {
+  NisaComparison,
+  StockSettlementTaxResult,
+  TaxProfile,
+  TaxProfileId,
+  TaxResult,
+  TradeSimulation,
+} from "@/types/domain";
 import { calculateAnnualReturnPercent, calculateTotalFeesJPY } from "./calculations";
 
 export const taxProfiles: Record<TaxProfileId, TaxProfile> = {
@@ -16,27 +23,28 @@ export const taxProfiles: Record<TaxProfileId, TaxProfile> = {
   },
   japan_listed_stock_default_20_315: {
     id: "japan_listed_stock_default_20_315",
-    name: "日本上場株式等 20.315% 参考",
-    description: "一般的な20.315%を参考税率として使う試算です。",
+    name: "上場株式等の譲渡所得等 20.315% 参考",
+    description: "株式売却損益側の参考税率です。オプション損益とは別区分で扱います。",
     enabled: true,
     taxRatePct: 20.315,
-    applyTo: ["option_premium", "option_close", "stock_capital_gain"],
+    applyTo: ["stock_capital_gain"],
     allowLossOffset: true,
     allowCarryForward: true,
     carryForwardYears: 3,
-    notes: "米国株オプションの税区分を断定するものではありません。",
+    notes: "上場株式等の譲渡損益側の参考プロファイルです。オプション損益との自動相殺には使いません。",
     requiresUserConfirmation: true,
   },
   japan_derivative_separate_tax_user_confirm: {
     id: "japan_derivative_separate_tax_user_confirm",
-    name: "デリバティブ分離課税 確認要",
-    description: "デリバティブ取引として扱う可能性をユーザー確認前提で試算します。",
+    name: "先物取引に係る雑所得等 20.315% 確認要",
+    description: "米国株式オプション損益を、先物取引に係る雑所得等の枠として分離して概算します。",
     enabled: true,
     taxRatePct: 20.315,
     applyTo: ["option_premium", "option_close"],
-    allowLossOffset: false,
-    allowCarryForward: false,
-    notes: "証券会社、国税庁資料、税理士確認を優先してください。",
+    allowLossOffset: true,
+    allowCarryForward: true,
+    carryForwardYears: 3,
+    notes: "同じ税務バケット内のオプション損益通算候補として扱います。株式譲渡損益とは自動相殺しません。証券会社、国税庁資料、税理士確認を優先してください。",
     requiresUserConfirmation: true,
   },
   custom: {
@@ -89,6 +97,62 @@ export function calculateTaxResult(params: {
     netMonthlyReturnPct:
       params.denominatorJPY > 0 ? (netProfitJPY / params.denominatorJPY) * 100 * (30 / params.simulation.dte) : 0,
     requiresUserConfirmation: profile.requiresUserConfirmation,
+  };
+}
+
+export function calculateStockSettlementTaxResult(
+  simulation: TradeSimulation,
+): StockSettlementTaxResult {
+  const settlement = simulation.stockSettlement;
+  const profile = taxProfiles.japan_listed_stock_default_20_315;
+  if (!settlement?.enabled) {
+    return {
+      enabled: false,
+      grossProceedsJPY: 0,
+      costBasisJPY: 0,
+      feesJPY: 0,
+      realizedGainJPY: 0,
+      taxableProfitJPY: 0,
+      estimatedTaxJPY: 0,
+      afterTaxGainJPY: 0,
+      holdingDays: 0,
+      annualReturnPct: 0,
+      taxRatePct: profile.taxRatePct,
+    };
+  }
+
+  const fxRateJPY = settlement.fxRateJPY && settlement.fxRateJPY > 0 ? settlement.fxRateJPY : simulation.fxRateJPY;
+  const grossProceedsJPY = settlement.sellPriceUSD * settlement.shares * fxRateJPY;
+  const costBasisJPY = settlement.costBasisUSD * settlement.shares * fxRateJPY;
+  const feesJPY = (settlement.commissionUSD ?? 0) * fxRateJPY + (settlement.commissionJPY ?? 0);
+  const realizedGainJPY = grossProceedsJPY - costBasisJPY - feesJPY;
+  const taxableProfitJPY = Math.max(0, realizedGainJPY);
+  const estimatedTaxJPY = Math.floor((taxableProfitJPY * profile.taxRatePct) / 100);
+  const holdingDays = Math.max(
+    1,
+    Math.ceil(
+      (new Date(`${settlement.settlementDate}T00:00:00Z`).getTime() -
+        new Date(`${simulation.entryDate}T00:00:00Z`).getTime()) /
+        86_400_000,
+    ),
+  );
+
+  return {
+    enabled: true,
+    grossProceedsJPY,
+    costBasisJPY,
+    feesJPY,
+    realizedGainJPY,
+    taxableProfitJPY,
+    estimatedTaxJPY,
+    afterTaxGainJPY: realizedGainJPY - estimatedTaxJPY,
+    holdingDays,
+    annualReturnPct: calculateAnnualReturnPercent({
+      netProfitJPY: realizedGainJPY,
+      denominatorJPY: costBasisJPY,
+      dte: holdingDays,
+    }),
+    taxRatePct: profile.taxRatePct,
   };
 }
 

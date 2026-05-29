@@ -129,7 +129,7 @@ function createBlankSimulation(workspace: WorkspaceMode, settings: AppSettings):
       type: "option_buyback_price",
       value: 0,
     },
-    taxProfileId: "japan_listed_stock_default_20_315",
+    taxProfileId: "japan_derivative_separate_tax_user_confirm",
     nisaExpectedAnnualReturnPct: settings.defaultNisaExpectedAnnualReturnPct,
     beginnerMode: settings.beginnerMode,
     fixtureMeta:

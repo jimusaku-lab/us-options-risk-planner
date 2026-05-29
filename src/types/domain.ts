@@ -84,6 +84,19 @@ export type BrokerFixtureMeta = {
   notes: string;
 };
 
+export type StockSettlement = {
+  enabled: boolean;
+  kind: "manual_sale" | "covered_call_assignment" | "other";
+  settlementDate: string;
+  shares: number;
+  sellPriceUSD: number;
+  costBasisUSD: number;
+  fxRateJPY?: number;
+  commissionUSD?: number;
+  commissionJPY?: number;
+  memo?: string;
+};
+
 export type TradeSimulation = {
   id: string;
   status: SimulationStatus;
@@ -114,6 +127,7 @@ export type TradeSimulation = {
   exchangeFeesJPY?: number;
   fxConversionCostJPY?: number;
   carryingCostJPY?: number;
+  stockSettlement?: StockSettlement;
   beginnerMode?: boolean;
   preOrderChecklist?: Record<string, boolean>;
   fixtureMeta?: BrokerFixtureMeta;
@@ -192,6 +206,31 @@ export type TaxResult = {
   netAnnualReturnPct: number;
   netMonthlyReturnPct: number;
   requiresUserConfirmation: boolean;
+};
+
+export type StockSettlementTaxResult = {
+  enabled: boolean;
+  grossProceedsJPY: number;
+  costBasisJPY: number;
+  feesJPY: number;
+  realizedGainJPY: number;
+  taxableProfitJPY: number;
+  estimatedTaxJPY: number;
+  afterTaxGainJPY: number;
+  holdingDays: number;
+  annualReturnPct: number;
+  taxRatePct: number;
+};
+
+export type TaxBucketSummary = {
+  optionProfitJPY: number;
+  optionCapitalDaysJPY: number;
+  optionAnnualReturnPct: number;
+  stockRealizedGainJPY: number;
+  stockCapitalDaysJPY: number;
+  stockAnnualReturnPct: number;
+  optionCount: number;
+  stockSettlementCount: number;
 };
 
 export type NisaComparison = {

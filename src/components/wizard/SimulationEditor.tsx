@@ -27,8 +27,29 @@ export function SimulationEditor({ simulation, onChange }: SimulationEditorProps
   const needsBrokerMarginInput = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "custom"].includes(
     simulation.strategyType,
   );
+  const defaultStockSettlement = {
+    enabled: false,
+    kind: "manual_sale" as const,
+    settlementDate: simulation.expiryDate,
+    shares: simulation.stockPosition?.shares ?? 100,
+    sellPriceUSD: callLeg?.strikeUSD || simulation.currentPriceUSD,
+    costBasisUSD: simulation.stockPosition?.averageCostUSD ?? simulation.currentPriceUSD,
+    fxRateJPY: simulation.fxRateJPY,
+    commissionUSD: 0,
+    commissionJPY: 0,
+  };
+  const stockSettlement = simulation.stockSettlement ?? defaultStockSettlement;
 
   const update = (patch: Partial<TradeSimulation>) => onChange({ ...simulation, ...patch });
+  const updateStockSettlement = (patch: Partial<NonNullable<TradeSimulation["stockSettlement"]>>) => {
+    update({
+      stockSettlement: {
+        ...defaultStockSettlement,
+        ...stockSettlement,
+        ...patch,
+      },
+    });
+  };
   const updateStrategy = (strategyType: StrategyType) => {
     const nextNeedsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
       strategyType,
@@ -486,6 +507,91 @@ export function SimulationEditor({ simulation, onChange }: SimulationEditorProps
           />
           <NumberInput label="NISA等 比較年率" value={simulation.nisaExpectedAnnualReturnPct ?? 6} suffix="%" onChange={(nisaExpectedAnnualReturnPct) => update({ nisaExpectedAnnualReturnPct })} />
         </div>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-950">5. 現物株の譲渡記録</h3>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              カバードコールで株を渡した、または現物株を売却した場合だけ入力します。オプション損益とは別に「上場株式等の譲渡所得等」として表示します。
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <input
+              type="checkbox"
+              checked={stockSettlement.enabled}
+              onChange={(event) => updateStockSettlement({ enabled: event.target.checked })}
+            />
+            現物株の譲渡を記録する
+          </label>
+        </div>
+        {stockSettlement.enabled ? (
+          <div className="mt-3 grid gap-3 xl:grid-cols-4">
+            <Select
+              label="譲渡の種類"
+              value={stockSettlement.kind}
+              onChange={(kind) => updateStockSettlement({ kind: kind as NonNullable<TradeSimulation["stockSettlement"]>["kind"] })}
+              options={[
+                ["manual_sale", "通常の現物売却"],
+                ["covered_call_assignment", "C権利行使で株を渡した"],
+                ["other", "その他"],
+              ]}
+            />
+            <TextInput
+              label="譲渡日"
+              value={stockSettlement.settlementDate}
+              type="date"
+              onChange={(settlementDate) => updateStockSettlement({ settlementDate })}
+            />
+            <NumberInput
+              label="譲渡株数"
+              value={stockSettlement.shares}
+              suffix="株"
+              min={0}
+              onChange={(shares) => updateStockSettlement({ shares })}
+            />
+            <NumberInput
+              label="売却単価"
+              value={stockSettlement.sellPriceUSD}
+              suffix="USD"
+              min={0}
+              onChange={(sellPriceUSD) => updateStockSettlement({ sellPriceUSD })}
+            />
+            <NumberInput
+              label="取得単価"
+              value={stockSettlement.costBasisUSD}
+              suffix="USD"
+              min={0}
+              onChange={(costBasisUSD) => updateStockSettlement({ costBasisUSD })}
+            />
+            <NumberInput
+              label="譲渡時為替"
+              value={stockSettlement.fxRateJPY ?? simulation.fxRateJPY}
+              suffix="JPY/USD"
+              min={0}
+              onChange={(fxRateJPY) => updateStockSettlement({ fxRateJPY })}
+            />
+            <NumberInput
+              label="売却手数料"
+              value={stockSettlement.commissionUSD ?? 0}
+              suffix="USD"
+              min={0}
+              onChange={(commissionUSD) => updateStockSettlement({ commissionUSD })}
+            />
+            <NumberInput
+              label="売却手数料"
+              value={stockSettlement.commissionJPY ?? 0}
+              suffix="JPY"
+              min={0}
+              onChange={(commissionJPY) => updateStockSettlement({ commissionJPY })}
+            />
+          </div>
+        ) : (
+          <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm leading-6 text-slate-600">
+            現物株を売却していない建玉ではOFFのままで問題ありません。OFFの場合、税務区分別の「上場株式等の譲渡所得等」は未集計として表示されます。
+          </p>
+        )}
       </div>
     </section>
   );

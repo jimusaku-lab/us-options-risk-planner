@@ -5,7 +5,8 @@ import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominat
 import { calculatePayoffSeries } from "@/domain/payoff";
 import { generateChecklist, generateRiskWarnings } from "@/domain/riskRules";
 import { calculateScenarioResults } from "@/domain/scenarios";
-import { calculateNisaComparison, calculateTaxResult, taxProfiles } from "@/domain/tax";
+import { calculateNisaComparison, calculateStockSettlementTaxResult, calculateTaxResult, taxProfiles } from "@/domain/tax";
+import { calculateTaxBucketSummary } from "@/domain/taxBucketSummary";
 import { AccountOverview } from "@/components/dashboard/AccountOverview";
 import { Dashboard } from "@/components/dashboard/Dashboard";
 import { DataPanel } from "@/components/data/DataPanel";
@@ -239,6 +240,8 @@ export default function App() {
     denominatorJPY: primary.amountJPY,
     taxProfile,
   });
+  const stockSettlementTax = calculateStockSettlementTaxResult(selectedWithAccount);
+  const taxBucketSummary = calculateTaxBucketSummary(simulations);
   const denominators = calculateDenominators(selectedWithAccount, premiumJPY, taxResult.netProfitJPY);
   const primaryWithNet = getPrimaryDenominator(denominators);
   const nisaComparison = calculateNisaComparison({
@@ -333,7 +336,12 @@ export default function App() {
           primaryDenominator={primaryWithNet}
           taxResult={taxResult}
         />
-        <TaxComparisonCard taxResult={taxResult} nisaComparison={nisaComparison} />
+        <TaxComparisonCard
+          taxResult={taxResult}
+          nisaComparison={nisaComparison}
+          stockSettlementTax={stockSettlementTax}
+          taxBucketSummary={taxBucketSummary}
+        />
         <ScenarioCards scenarios={scenarios} />
         <CloseDecisionCard simulation={selected} onChange={upsertSimulation} />
         <section className="grid gap-4 xl:grid-cols-2">

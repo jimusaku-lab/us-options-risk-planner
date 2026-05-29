@@ -64,7 +64,7 @@ export const sampleAmznSimulation: TradeSimulation = {
     type: "option_buyback_price",
     value: 14,
   },
-  taxProfileId: "japan_listed_stock_default_20_315",
+  taxProfileId: "japan_derivative_separate_tax_user_confirm",
   nisaExpectedAnnualReturnPct: 6,
   beginnerMode: true,
   fixtureMeta: {
