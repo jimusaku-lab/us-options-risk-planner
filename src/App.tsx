@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { CheckCircle2, ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, Plus, TrendingUp, Upload } from "lucide-react";
+import { ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, Plus, TrendingUp, Upload } from "lucide-react";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculatePayoffSeries } from "@/domain/payoff";
@@ -11,6 +11,7 @@ import { Dashboard } from "@/components/dashboard/Dashboard";
 import { DataPanel } from "@/components/data/DataPanel";
 import { FirstRunNotice } from "@/components/help/FirstRunNotice";
 import { UserGuide } from "@/components/help/UserGuide";
+import { AnnualReturnFormula } from "@/components/results/AnnualReturnFormula";
 import { CloseDecisionCard } from "@/components/results/CloseDecisionCard";
 import { DenominatorChart, PayoffChart } from "@/components/results/Charts";
 import { DenominatorTable } from "@/components/results/DenominatorTable";
@@ -327,9 +328,14 @@ export default function App() {
           blockingCount={warnings.filter((warning) => warning.blocking).length}
         />
         <DenominatorTable denominators={denominators} />
-        <CloseDecisionCard simulation={selected} onChange={upsertSimulation} />
+        <AnnualReturnFormula
+          simulation={selectedWithAccount}
+          primaryDenominator={primaryWithNet}
+          taxResult={taxResult}
+        />
         <TaxComparisonCard taxResult={taxResult} nisaComparison={nisaComparison} />
         <ScenarioCards scenarios={scenarios} />
+        <CloseDecisionCard simulation={selected} onChange={upsertSimulation} />
         <section className="grid gap-4 xl:grid-cols-2">
           <PayoffChart simulation={selectedWithAccount} points={payoff} />
           <DenominatorChart denominators={denominators} />
@@ -400,12 +406,12 @@ function AppHeader({
             新規建玉
           </button>
           <button
-            className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-900"
             onClick={onToggleGuide}
             title="このアプリの使い方とデータ保存方針を表示"
+            aria-label="使い方"
           >
             <HelpCircle size={16} />
-            使い方
           </button>
           <button
             className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-900"
@@ -441,13 +447,6 @@ function AppHeader({
             <JapaneseYen size={16} />
             為替
           </button>
-          <span
-            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-800"
-            title="入力変更はこのブラウザ内に自動保存されます。外部バックアップはJSONを使います。"
-            aria-label="自動保存中"
-          >
-            <CheckCircle2 size={16} />
-          </span>
           <button
             className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900"
             onClick={onCsv}
