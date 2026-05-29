@@ -368,13 +368,13 @@ function AppHeader({
 }) {
   return (
     <header className="border-b border-slate-200 bg-white">
-      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-4">
-        <div>
+      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-3 px-4 py-3">
+        <div className="min-w-0 flex-1">
           <h1 className="text-xl font-bold tracking-normal">米国株オプション建玉管理・リスク確認</h1>
           <p className="mt-1 text-sm text-slate-600">投資助言ではなく、建玉の記録・注文前の試算・資金管理・リスク確認ツールです。</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-md border border-slate-300 bg-slate-50 p-1">
+        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+          <div className="flex rounded-md border border-slate-300 bg-slate-50 p-0.5">
             <button
               className={`rounded px-3 py-1.5 text-sm font-bold ${
                 activeWorkspace === "demo" ? "bg-sky-600 text-white" : "text-slate-700"
@@ -393,14 +393,14 @@ function AppHeader({
             </button>
           </div>
           <button
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-semibold text-slate-900"
             onClick={createSimulationFromTemplate}
           >
             <Plus size={16} />
             新規建玉
           </button>
           <button
-            className="inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-semibold text-slate-900"
+            className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900"
             onClick={onToggleGuide}
             title="このアプリの使い方とデータ保存方針を表示"
           >
@@ -408,15 +408,15 @@ function AppHeader({
             使い方
           </button>
           <button
-            className="inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-semibold text-slate-900"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-900"
             onClick={onToggleData}
-            title="この端末に保存された入力データの説明と削除"
+            title="データ管理: この端末に保存された入力データの説明と削除"
+            aria-label="データ管理"
           >
             <Database size={16} />
-            データ
           </button>
           <button
-            className="inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-semibold text-slate-900 disabled:opacity-40"
+            className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900 disabled:opacity-40"
             onClick={onRefreshQuote}
             disabled={!onRefreshQuote || isExternalQuoteDisabled}
             title={
@@ -429,7 +429,7 @@ function AppHeader({
             株価
           </button>
           <button
-            className="inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-semibold text-slate-900 disabled:opacity-40"
+            className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900 disabled:opacity-40"
             onClick={onRefreshFx}
             disabled={!onRefreshFx || isExternalQuoteDisabled}
             title={
@@ -442,21 +442,21 @@ function AppHeader({
             為替
           </button>
           <span
-            className="inline-flex h-10 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-sm font-semibold text-emerald-800"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-800"
             title="入力変更はこのブラウザ内に自動保存されます。外部バックアップはJSONを使います。"
+            aria-label="自動保存中"
           >
             <CheckCircle2 size={16} />
-            自動保存
           </span>
           <button
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+            className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900"
             onClick={onCsv}
           >
             <Download size={16} />
             CSV
           </button>
           <button
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+            className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900"
             onClick={onJson}
             title="このワークスペースの建玉をJSONでバックアップ"
           >
@@ -464,7 +464,7 @@ function AppHeader({
             JSON
           </button>
           <button
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+            className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900"
             onClick={onImportJson}
             title="JSONバックアップからこのワークスペースへ復元"
           >
