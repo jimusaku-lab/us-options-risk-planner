@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, Plus, TrendingUp, Upload } from "lucide-react";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
+import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculatePayoffSeries } from "@/domain/payoff";
 import { generateChecklist, generateRiskWarnings } from "@/domain/riskRules";
@@ -267,6 +268,11 @@ export default function App() {
   };
   const scenarios = calculateScenarioResults(selectedWithAccount);
   const payoff = calculatePayoffSeries(selectedWithAccount);
+  const coveredCallAssignmentPreview = calculateCoveredCallAssignmentPreview(
+    selectedWithAccount,
+    taxResult,
+    primaryWithNet,
+  );
 
   return (
     <main className="min-h-screen bg-slate-100 text-slate-950">
@@ -329,6 +335,7 @@ export default function App() {
           primaryDenominator={primaryWithNet}
           taxResult={taxResult}
           blockingCount={warnings.filter((warning) => warning.blocking).length}
+          coveredCallAssignmentPreview={coveredCallAssignmentPreview}
         />
         <DenominatorTable denominators={denominators} />
         <AnnualReturnFormula

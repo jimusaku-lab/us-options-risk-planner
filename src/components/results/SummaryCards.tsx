@@ -1,3 +1,4 @@
+import type { CoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import type { DenominatorResult, TaxResult, TradeSimulation } from "@/types/domain";
 import {
   calculateNetInitialPremiumJPY,
@@ -11,9 +12,16 @@ type SummaryCardsProps = {
   primaryDenominator: DenominatorResult;
   taxResult: TaxResult;
   blockingCount: number;
+  coveredCallAssignmentPreview?: CoveredCallAssignmentPreview | null;
 };
 
-export function SummaryCards({ simulation, primaryDenominator, taxResult, blockingCount }: SummaryCardsProps) {
+export function SummaryCards({
+  simulation,
+  primaryDenominator,
+  taxResult,
+  blockingCount,
+  coveredCallAssignmentPreview,
+}: SummaryCardsProps) {
   const premiumJPY = calculateNetInitialPremiumJPY(simulation);
   const putAssignmentJPY = calculatePutAssignmentCapitalTotalJPY(simulation);
   const usedMarginJPY = calculateUsedMarginJPY({
@@ -27,20 +35,27 @@ export function SummaryCards({ simulation, primaryDenominator, taxResult, blocki
       value: formatJPY(premiumJPY),
       note: "C/P売りの合計。手数料・税金は別カードで控除します。",
     },
+    ...(coveredCallAssignmentPreview
+      ? [
+          {
+            title: "満期想定損益",
+            value: formatJPY(coveredCallAssignmentPreview.combinedBeforeTaxJPY, { signed: true }),
+            note: `株を渡す想定: 現物 ${formatJPY(
+              coveredCallAssignmentPreview.stockCapitalGainJPY,
+              { signed: true },
+            )} + プレミアム ${formatJPY(coveredCallAssignmentPreview.optionPremiumBeforeTaxJPY, { signed: true })}`,
+          },
+        ]
+      : []),
     {
       title: "使用分母",
       value: formatJPY(primaryDenominator.amountJPY),
       note: primaryDenominator.label,
     },
     {
-      title: "税前年率",
-      value: formatPct(primaryDenominator.annualReturnPct),
-      note: `${simulation.dte}日換算。分母により大きく変わります。`,
-    },
-    {
-      title: "税引後年率",
-      value: formatPct(taxResult.netAnnualReturnPct),
-      note: taxResult.requiresUserConfirmation ? "税区分はユーザー確認が必要です。" : "選択中の税務プロファイルで試算。",
+      title: "年率",
+      value: `${formatPct(primaryDenominator.annualReturnPct)} / ${formatPct(taxResult.netAnnualReturnPct)}`,
+      note: `税前 / 税引後。${simulation.dte}日換算。`,
     },
     {
       title: "P権利行使時の追加買付資金",
