@@ -615,7 +615,6 @@ function AppHeader({
       <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0 flex-1">
           <h1 className="text-xl font-bold tracking-normal">米国株オプション建玉管理・リスク確認</h1>
-          <p className="mt-1 text-sm text-slate-600">投資助言ではなく、建玉の記録・注文前の試算・資金管理・リスク確認ツールです。</p>
         </div>
         <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
           <div className="flex rounded-md border border-slate-300 bg-slate-50 p-0.5">
