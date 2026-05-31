@@ -1,25 +1,23 @@
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { NumberInput } from "@/components/ui/NumberInput";
-import { formatJPY } from "@/lib/format";
+import type { AccountState, SaxoAccountCode } from "@/types/domain";
+import { formatJPY, formatUSD } from "@/lib/format";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useState } from "react";
 
 export function AccountOverview({
   workspace,
   accountInputs,
+  referenceFxRateJPY,
   onChange,
 }: {
   workspace: WorkspaceMode;
   accountInputs: AccountInputs;
-  onChange: (accountInputs: Partial<AccountInputs>) => void;
+  referenceFxRateJPY?: number;
+  onChange: (accountCode: SaxoAccountCode, accountInputs: Partial<AccountState>) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const usageTone =
-    accountInputs.marginUsagePercent >= 70
-      ? "text-red-700"
-      : accountInputs.marginUsagePercent >= 60
-        ? "text-amber-700"
-        : "text-emerald-700";
+  const isDemo = workspace === "demo";
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -36,25 +34,14 @@ export function AccountOverview({
             </span>
           </div>
           <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
-            Saxo画面下部に出る口座全体の値です。個別銘柄ではなく、全オプション建玉を含む証拠金使用率として警告に使います。
+            {isDemo
+              ? "DEMOはJPYベースの検証用です。本番USD決済口座のUSD残高管理や移管後のホイール管理を完全に再現するものではありません。"
+              : "SaxoのP口座とN口座を別々に入力します。余力や証拠金使用率は合算せず、建玉の口座ごとに警告へ使います。"}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-4">
-          <div className="text-right text-sm">
-            <div className="text-slate-500">証拠金使用率</div>
-            <div className={`numeric-input text-2xl font-bold ${usageTone}`}>
-              {accountInputs.marginUsagePercent.toLocaleString("ja-JP", {
-                maximumFractionDigits: 2,
-              })}
-              %
-            </div>
-          </div>
-          <div className="text-right text-sm">
-            <div className="text-slate-500">現金残高</div>
-            <div className="numeric-input text-lg font-bold text-slate-950">
-              {formatJPY(accountInputs.availableCashJPY)}
-            </div>
-          </div>
+          <AccountMetric account={accountInputs.P} displayName={isDemo ? "DEMO / JPYベース" : "P口座"} />
+          {!isDemo ? <AccountMetric account={accountInputs.N} displayName="N口座" referenceFxRateJPY={referenceFxRateJPY} /> : null}
           <button
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
             onClick={() => setIsOpen((value) => !value)}
@@ -76,25 +63,81 @@ export function AccountOverview({
 
       {isOpen ? (
         <div className="mt-4 border-t border-slate-200 pt-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <NumberInput
-              label="現金残高（未受渡分込み・口座全体）"
-              value={accountInputs.availableCashJPY}
-              suffix="JPY"
-              onChange={(availableCashJPY) => onChange({ availableCashJPY })}
-            />
-            <NumberInput
-              label="証拠金使用率（口座全体）"
-              value={accountInputs.marginUsagePercent}
-              suffix="%"
-              onChange={(marginUsagePercent) => onChange({ marginUsagePercent })}
-            />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <AccountEditor account={accountInputs.P} displayName={isDemo ? "DEMO / JPYベース" : "P口座 JPY決済"} onChange={(patch) => onChange("P", patch)} />
+            {!isDemo ? <AccountEditor account={accountInputs.N} displayName="N口座 USD決済" referenceFxRateJPY={referenceFxRateJPY} onChange={(patch) => onChange("N", patch)} /> : null}
           </div>
           <p className="mt-3 text-sm leading-6 text-slate-600">
-            Saxo画面下部の「現金残高（未受渡分込み）」を入力します。P権利行使時の追加買付資金チェックに使う値です。この欄はAMZNやNVDAごとではなく、口座全体で一度だけ入力します。
+            {isDemo
+              ? "DEMO画面下部に表示される口座通貨、現金残高、買付可能額、評価額、証拠金使用率はJPYベースとして入力します。"
+              : "N口座のJPY換算は参考表示です。円転または税務上の確定損益とは異なる可能性があります。"}
           </p>
         </div>
       ) : null}
     </section>
+  );
+}
+
+function AccountMetric({ account, displayName, referenceFxRateJPY }: { account: AccountState; displayName: string; referenceFxRateJPY?: number }) {
+  const usageTone =
+    account.marginUsagePercent >= 70 ? "text-red-700" : account.marginUsagePercent >= 60 ? "text-amber-700" : "text-emerald-700";
+  return (
+    <div className="text-right text-sm">
+      <div className="font-semibold text-slate-500">{displayName}</div>
+      <div className={`numeric-input text-xl font-bold ${usageTone}`}>{account.marginUsagePercent.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}%</div>
+      <div className="numeric-input text-sm font-bold text-slate-950">
+        {account.currency === "USD" ? formatUSD(account.cashBalance) : formatJPY(account.cashBalance)}
+      </div>
+      {account.currency === "USD" && referenceFxRateJPY && referenceFxRateJPY > 0 ? (
+        <div className="numeric-input text-xs text-slate-500">参考 {formatJPY(account.cashBalance * referenceFxRateJPY)}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function AccountEditor({ account, displayName, referenceFxRateJPY, onChange }: { account: AccountState; displayName: string; referenceFxRateJPY?: number; onChange: (patch: Partial<AccountState>) => void }) {
+  const referenceNote =
+    account.currency === "USD" && referenceFxRateJPY && referenceFxRateJPY > 0
+      ? `参考JPY: 現金 ${formatJPY(account.cashBalance * referenceFxRateJPY)} / 余力 ${formatJPY((account.buyingPower ?? 0) * referenceFxRateJPY)} / 必要証拠金 ${formatJPY(account.marginRequirement * referenceFxRateJPY)}`
+      : "";
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+      <h3 className="text-sm font-bold text-slate-950">
+        {displayName}
+      </h3>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <NumberInput
+          label={`現金残高（${account.currency}）`}
+          value={account.cashBalance}
+          suffix={account.currency}
+          onChange={(cashBalance) => onChange({ cashBalance })}
+        />
+        <NumberInput
+          label={`必要証拠金（${account.currency}）`}
+          value={account.marginRequirement}
+          suffix={account.currency}
+          onChange={(marginRequirement) => onChange({ marginRequirement })}
+        />
+        <NumberInput
+          label={`買付可能額・余力（任意・${account.currency}）`}
+          value={account.buyingPower ?? 0}
+          suffix={account.currency}
+          onChange={(buyingPower) => onChange({ buyingPower })}
+        />
+        <NumberInput
+          label="証拠金使用率"
+          value={account.marginUsagePercent}
+          suffix="%"
+          onChange={(marginUsagePercent) => onChange({ marginUsagePercent })}
+        />
+        <NumberInput
+          label={`口座評価額（任意・${account.currency}）`}
+          value={account.accountValue ?? 0}
+          suffix={account.currency}
+          onChange={(accountValue) => onChange({ accountValue })}
+        />
+      </div>
+      {referenceNote ? <p className="mt-2 text-xs leading-5 text-slate-500">{referenceNote}</p> : null}
+    </div>
   );
 }

@@ -1,9 +1,12 @@
 import type { DenominatorResult } from "@/types/domain";
-import { formatJPY, formatPct } from "@/lib/format";
+import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 function formatComponent(component: DenominatorResult["components"][number]): string {
   if (component.label === "現物株時価" && component.amountJPY === 0) {
     return "現物株なし";
+  }
+  if (component.amountUSD !== undefined) {
+    return `${component.label}: ${formatUSD(component.amountUSD)} / 参考 ${formatJPY(component.amountJPY)}`;
   }
   return `${component.label}: ${formatJPY(component.amountJPY)}`;
 }
@@ -32,7 +35,16 @@ export function DenominatorTable({ denominators }: { denominators: DenominatorRe
                   {row.label}
                   {row.isPrimary ? <span className="ml-2 rounded bg-teal-700 px-2 py-0.5 text-xs text-white">主分母</span> : null}
                 </td>
-                <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatJPY(row.amountJPY)}</td>
+                <td className="numeric-input py-3 pr-3 text-right font-semibold">
+                  {row.currency === "USD" ? (
+                    <>
+                      <span className="block">{formatUSD(row.amountUSD ?? 0)}</span>
+                      <span className="block text-xs text-slate-500">参考 {formatJPY(row.amountJPY)}</span>
+                    </>
+                  ) : (
+                    formatJPY(row.amountJPY)
+                  )}
+                </td>
                 <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatPct(row.annualReturnPct)}</td>
                 <td className="py-3 pr-3 text-slate-600">
                   {row.components.map(formatComponent).join(" / ")}

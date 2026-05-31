@@ -39,7 +39,9 @@ const tickerAliases: Record<string, string> = {
   アルファベット: "GOOGL",
 };
 
-export const isExternalQuoteDisabled = import.meta.env.VITE_DISABLE_EXTERNAL_QUOTES === "true";
+const isGitHubPagesBuild = import.meta.env.BASE_URL === "/us-options-risk-planner/";
+
+export const isExternalQuoteDisabled = import.meta.env.VITE_DISABLE_EXTERNAL_QUOTES === "true" || isGitHubPagesBuild;
 
 export function normalizeTicker(input: string): string {
   const trimmed = input.trim();

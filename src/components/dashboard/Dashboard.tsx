@@ -84,6 +84,7 @@ export function Dashboard({
             <tr className="border-b border-slate-200 text-left text-slate-500">
               <th className="py-2 pr-3">銘柄</th>
               <th className="py-2 pr-3">状態</th>
+              <th className="py-2 pr-3">口座</th>
               <th className="py-2 pr-3">戦略</th>
               <th className="py-2 pr-3 text-right">権利行使価格</th>
               <th className="py-2 pr-3">満期</th>
@@ -98,8 +99,14 @@ export function Dashboard({
             {visibleSimulations.map((simulation, index) => {
               const simulationWithAccount = {
                 ...simulation,
-                availableCashJPY: accountInputs.availableCashJPY,
-                marginUsagePercent: accountInputs.marginUsagePercent,
+                availableCashJPY:
+                  simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+                    ? accountInputs.N.cashBalance * (simulation.referenceFxRateJPY ?? simulation.fxRateJPY)
+                    : accountInputs.P.cashBalance,
+                marginUsagePercent:
+                  simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+                    ? accountInputs.N.marginUsagePercent
+                    : accountInputs.P.marginUsagePercent,
               };
               const premium = calculateNetInitialPremiumJPY(simulationWithAccount);
               const primary = getPrimaryDenominator(calculateDenominators(simulationWithAccount, premium));
@@ -120,7 +127,7 @@ export function Dashboard({
                 <Fragment key={simulation.id}>
                 {isFirstHistory ? (
                   <tr className="bg-slate-100">
-                    <td colSpan={10} className="py-2 pr-3 text-xs font-bold text-slate-600">
+                    <td colSpan={11} className="py-2 pr-3 text-xs font-bold text-slate-600">
                       履歴: 決済済み・権利行使済み・満期終了
                     </td>
                   </tr>
@@ -142,11 +149,34 @@ export function Dashboard({
                       {getStatusLabel(simulation.status)}
                     </span>
                   </td>
+                  <td className="py-3 pr-3">
+                    <span className={simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "rounded bg-emerald-100 px-2 py-1 text-xs font-bold text-emerald-800" : "rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800"}>
+                      {getAccountEnvironmentLabel(simulation.accountEnvironment)}
+                    </span>
+                  </td>
                   <td className="py-3 pr-3 text-slate-700">{getStrategyLabel(simulation.strategyType)}</td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">{strikeLabel}</td>
                   <td className="py-3 pr-3 text-slate-700">{simulation.expiryDate}</td>
-                  <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatJPY(premium)}</td>
-                  <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatJPY(primary.amountJPY)}</td>
+                  <td className="numeric-input py-3 pr-3 text-right font-semibold">
+                    {simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
+                      <>
+                        <span className="block">{formatUSD(premium / ((simulation.referenceFxRateJPY ?? simulation.fxRateJPY) || 1))}</span>
+                        <span className="block text-xs text-slate-500">参考 {formatJPY(premium)}</span>
+                      </>
+                    ) : (
+                      formatJPY(premium)
+                    )}
+                  </td>
+                  <td className="numeric-input py-3 pr-3 text-right font-semibold">
+                    {primary.currency === "USD" ? (
+                      <>
+                        <span className="block">{formatUSD(primary.amountUSD ?? 0)}</span>
+                        <span className="block text-xs text-slate-500">参考 {formatJPY(primary.amountJPY)}</span>
+                      </>
+                    ) : (
+                      formatJPY(primary.amountJPY)
+                    )}
+                  </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatPct(primary.annualReturnPct)}</td>
                   <td
                     className={`py-3 pr-3 text-right text-xs font-bold ${
@@ -187,4 +217,10 @@ export function Dashboard({
       </div> : null}
     </section>
   );
+}
+
+function getAccountEnvironmentLabel(environment: TradeSimulation["accountEnvironment"]): string {
+  if (environment === "DEMO_JPY_BASE") return "DEMO / JPYベース";
+  if (environment === "PROD_N_USD_SETTLEMENT") return "N / USD";
+  return "P / JPY";
 }

@@ -16,6 +16,13 @@ export function calculatePremiumJPY(params: {
   return params.premiumUSD * CONTRACT_SIZE * params.quantity * params.fxRateJPY;
 }
 
+export function calculatePremiumUSD(params: {
+  premiumUSD: number;
+  quantity: number;
+}): number {
+  return params.premiumUSD * CONTRACT_SIZE * params.quantity;
+}
+
 export function calculateStockDenominatorJPY(params: {
   shares: number;
   priceUSD: number;
@@ -46,6 +53,15 @@ export function calculateAnnualReturnPercent(params: {
 }): number {
   if (params.denominatorJPY <= 0 || params.dte <= 0) return 0;
   return (params.netProfitJPY / params.denominatorJPY) * (365 / params.dte) * 100;
+}
+
+export function calculateAnnualReturnPercentByCurrency(params: {
+  netProfit: number;
+  denominator: number;
+  dte: number;
+}): number {
+  if (params.denominator <= 0 || params.dte <= 0) return 0;
+  return (params.netProfit / params.denominator) * (365 / params.dte) * 100;
 }
 
 export function getSelectedStockDenominatorPriceUSD(
@@ -87,6 +103,20 @@ export function calculateTotalPremiumReceivedJPY(simulation: TradeSimulation): n
     );
 }
 
+export function calculateTotalPremiumReceivedUSD(simulation: TradeSimulation): number {
+  return simulation.optionLegs
+    .filter((leg) => leg.side === "sell")
+    .reduce(
+      (sum, leg) =>
+        sum +
+        calculatePremiumUSD({
+          premiumUSD: leg.premiumUSD,
+          quantity: leg.quantity,
+        }),
+      0,
+    );
+}
+
 export function calculateTotalPremiumPaidJPY(simulation: TradeSimulation): number {
   return simulation.optionLegs
     .filter((leg) => leg.side === "buy")
@@ -102,11 +132,37 @@ export function calculateTotalPremiumPaidJPY(simulation: TradeSimulation): numbe
     );
 }
 
+export function calculateTotalPremiumPaidUSD(simulation: TradeSimulation): number {
+  return simulation.optionLegs
+    .filter((leg) => leg.side === "buy")
+    .reduce(
+      (sum, leg) =>
+        sum +
+        calculatePremiumUSD({
+          premiumUSD: leg.premiumUSD,
+          quantity: leg.quantity,
+        }),
+      0,
+    );
+}
+
 export function calculateNetInitialPremiumJPY(simulation: TradeSimulation): number {
+  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
+    return calculateNetInitialPremiumUSD(simulation) * (simulation.referenceFxRateJPY ?? simulation.fxRateJPY);
+  }
+  if (simulation.brokerSettlement?.netCashflowJPY !== undefined) return simulation.brokerSettlement.netCashflowJPY;
   return calculateTotalPremiumReceivedJPY(simulation) - calculateTotalPremiumPaidJPY(simulation);
 }
 
+export function calculateNetInitialPremiumUSD(simulation: TradeSimulation): number {
+  if (simulation.brokerSettlement?.netCashflowUSD !== undefined) return simulation.brokerSettlement.netCashflowUSD;
+  return calculateTotalPremiumReceivedUSD(simulation) - calculateTotalPremiumPaidUSD(simulation);
+}
+
 export function calculateTotalFeesJPY(simulation: TradeSimulation): number {
+  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
+    return calculateTotalFeesUSD(simulation) * (simulation.referenceFxRateJPY ?? simulation.fxRateJPY);
+  }
   return (
     (simulation.brokerCommissionUSD ?? 0) * simulation.fxRateJPY +
     (simulation.brokerCommissionJPY ?? 0) +
@@ -116,11 +172,30 @@ export function calculateTotalFeesJPY(simulation: TradeSimulation): number {
   );
 }
 
+export function calculateTotalFeesUSD(simulation: TradeSimulation): number {
+  if (simulation.brokerSettlement) {
+    return (
+      (simulation.brokerSettlement.commissionUSD ?? 0) +
+      (simulation.brokerSettlement.exchangeFeeUSD ?? 0) +
+      ((simulation.brokerSettlement.commissionJPY ?? 0) + (simulation.brokerSettlement.exchangeFeeJPY ?? 0)) /
+        (simulation.brokerSettlement.appliedFxRate || simulation.fxRateJPY || 1)
+    );
+  }
+  return (
+    (simulation.brokerCommissionUSD ?? 0) +
+    ((simulation.brokerCommissionJPY ?? 0) + (simulation.exchangeFeesJPY ?? 0) + (simulation.fxConversionCostJPY ?? 0) + (simulation.carryingCostJPY ?? 0)) /
+      (simulation.fxRateJPY || 1)
+  );
+}
+
 export function calculateNetInitialPremiumAfterFeesJPY(simulation: TradeSimulation): number {
   return calculateNetInitialPremiumJPY(simulation) - calculateTotalFeesJPY(simulation);
 }
 
 export function calculatePutAssignmentCapitalTotalJPY(simulation: TradeSimulation): number {
+  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
+    return calculatePutAssignmentCapitalTotalUSD(simulation) * (simulation.referenceFxRateJPY ?? simulation.fxRateJPY);
+  }
   return getShortPutLegs(simulation).reduce(
     (sum, leg) =>
       sum +
@@ -131,6 +206,10 @@ export function calculatePutAssignmentCapitalTotalJPY(simulation: TradeSimulatio
       }),
     0,
   );
+}
+
+export function calculatePutAssignmentCapitalTotalUSD(simulation: TradeSimulation): number {
+  return getShortPutLegs(simulation).reduce((sum, leg) => sum + leg.strikeUSD * CONTRACT_SIZE * leg.quantity, 0);
 }
 
 export function calculateUncoveredCallShares(simulation: TradeSimulation): number {
@@ -159,6 +238,27 @@ export function calculateStockDenominatorForSimulationJPY(simulation: TradeSimul
     priceUSD,
     fxRateJPY: simulation.fxRateJPY,
   });
+}
+
+export function calculateStockDenominatorForSimulationUSD(simulation: TradeSimulation): number {
+  const priceUSD = getSelectedStockDenominatorPriceUSD(
+    simulation.stockPosition,
+    simulation.currentPriceUSD,
+  );
+  return (simulation.stockPosition?.shares ?? 0) * priceUSD;
+}
+
+export function calculateUsedMarginUSD(simulation: TradeSimulation): number {
+  const marginUSD = simulation.brokerMarginUSD ?? (simulation.fxRateJPY > 0 ? simulation.brokerMarginJPY / simulation.fxRateJPY : 0);
+  return marginUSD * simulation.marginBufferMultiplier;
+}
+
+export function calculateCallHedgeBuyCapitalUSD(simulation: TradeSimulation): number {
+  return getShortCallLegs(simulation).reduce((sum, leg) => {
+    const uncoveredShares = calculateUncoveredCallShares(simulation);
+    if (uncoveredShares <= 0 || !leg.hedgeBuyStopUSD) return sum;
+    return sum + leg.hedgeBuyStopUSD * uncoveredShares;
+  }, 0);
 }
 
 export function calculateCloseCostJPY(leg: OptionLeg, fxRateJPY: number): number | null {

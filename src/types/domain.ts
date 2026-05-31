@@ -26,6 +26,34 @@ export type OptionSide = "sell" | "buy";
 export type SimulationStatus = "planned" | "open" | "closed" | "assigned" | "expired";
 export type DataSource = "manual" | "saxo_api" | "imported_csv" | "calculated" | "demo_fixture";
 export type RiskSeverity = "info" | "warning" | "danger";
+export type SaxoAccountCode = "P" | "N";
+export type Currency = "JPY" | "USD";
+export type AccountEnvironment =
+  | "DEMO_JPY_BASE"
+  | "PROD_P_JPY_SETTLEMENT"
+  | "PROD_N_USD_SETTLEMENT";
+
+export type BrokerAccount = {
+  id: string;
+  broker: "SAXO_BANK_JP";
+  accountCode: SaxoAccountCode;
+  displayName: string;
+  baseCurrency: Currency;
+  settlementCurrency: Currency;
+  productType: "FOREIGN_STOCK_INDEX_OPTIONS";
+};
+
+export type AccountState = {
+  accountCode: SaxoAccountCode;
+  accountEnvironment?: AccountEnvironment;
+  currency: Currency;
+  cashBalance: number;
+  buyingPower?: number;
+  marginRequirement: number;
+  marginUsagePercent: number;
+  accountValue?: number;
+  updatedAt: string;
+};
 
 export type StockPosition = {
   shares: number;
@@ -97,6 +125,20 @@ export type StockSettlement = {
   memo?: string;
 };
 
+export type BrokerSettlement = {
+  source: "manual" | "broker_statement" | "saxo_api_estimate";
+  tradeCurrency: "USD";
+  settlementCurrency: Currency;
+  grossPremiumUSD: number;
+  commissionUSD?: number;
+  commissionJPY?: number;
+  exchangeFeeUSD?: number;
+  exchangeFeeJPY?: number;
+  appliedFxRate?: number;
+  netCashflowUSD?: number;
+  netCashflowJPY?: number;
+};
+
 export type TradeSimulation = {
   id: string;
   status: SimulationStatus;
@@ -106,13 +148,18 @@ export type TradeSimulation = {
   strategyType: StrategyType;
   currentPriceUSD: number;
   fxRateJPY: number;
+  accountCode: SaxoAccountCode;
+  accountEnvironment: AccountEnvironment;
   entryDate: string;
   expiryDate: string;
   dte: number;
-  accountCurrency: "JPY" | "USD" | string;
+  accountCurrency: Currency;
+  referenceFxRateJPY?: number;
+  brokerSettlement?: BrokerSettlement;
   stockPosition: StockPosition | null;
   optionLegs: OptionLeg[];
   brokerMarginJPY: number;
+  brokerMarginUSD?: number;
   marginBufferMultiplier: number;
   marginUsagePercent?: number;
   availableCashJPY?: number;
@@ -137,12 +184,14 @@ export type TradeSimulation = {
 export type DenominatorResult = {
   mode: DenominatorMode;
   label: string;
+  currency: Currency;
   amountJPY: number;
+  amountUSD?: number;
   annualReturnPct: number;
   netAnnualReturnPct?: number;
   isPrimary: boolean;
   explanation: string;
-  components: Array<{ label: string; amountJPY: number }>;
+  components: Array<{ label: string; amountJPY: number; amountUSD?: number }>;
 };
 
 export type ScenarioResult = {
@@ -244,10 +293,84 @@ export type NisaComparison = {
 export type WheelCycle = {
   id: string;
   ticker: string;
-  phase: "cash" | "short_put" | "assigned_stock" | "covered_call" | "called_away";
-  trades: string[];
-  cumulativePremiumJPY: number;
-  cumulativeRealizedPnlJPY: number;
+  primaryAccountCode: "N";
+  currentPhase: WheelPhase;
+  currentAccountCode: SaxoAccountCode;
   currentShares: number;
-  currentCostBasisUSD: number;
+  averageCostUSD: number;
+  usdCashImpact: number;
+  cumulativePremiumUSD: number;
+  cumulativeStockRealizedPnlUSD: number;
+  cumulativeFeesUSD: number;
+  cumulativeTotalPnlUSD: number;
+  referenceFxRateJPY?: number;
+  eventIds: string[];
+  linkedSimulationIds: string[];
+  openedAt: string;
+  closedAt?: string;
+  memo?: string;
+};
+
+export type WheelPhase =
+  | "n_cash"
+  | "n_short_put"
+  | "n_stock_holding"
+  | "n_covered_call"
+  | "n_called_away"
+  | "p_short_put"
+  | "p_assigned_stock"
+  | "p_to_n_transfer_pending"
+  | "cycle_closed";
+
+export type FxTransferEvent = {
+  id: string;
+  direction: "JPY_TO_USD" | "USD_TO_JPY";
+  fromAccountCode: SaxoAccountCode | "OTHER_JPY" | "OTHER_USD";
+  toAccountCode: SaxoAccountCode | "OTHER_JPY" | "OTHER_USD";
+  fromCurrency: Currency;
+  toCurrency: Currency;
+  fromAmount: number;
+  toAmount: number;
+  appliedFxRate: number;
+  fxCostRate?: number;
+  occurredAt: string;
+  source: "manual" | "broker_statement" | "app_estimate";
+};
+
+export type StockTransferEvent = {
+  id: string;
+  ticker: string;
+  fromAccountCode: SaxoAccountCode;
+  toAccountCode: SaxoAccountCode;
+  shares: number;
+  transferDate: string;
+  costBasisUSD: number;
+  sourceSimulationId?: string;
+  destinationWheelCycleId?: string;
+  memo?: string;
+};
+
+export type WheelEvent = {
+  id: string;
+  wheelCycleId: string;
+  type:
+    | "short_put_opened"
+    | "short_put_closed"
+    | "put_assigned"
+    | "stock_transfer"
+    | "stock_purchase"
+    | "covered_call_opened"
+    | "covered_call_closed"
+    | "call_assigned"
+    | "stock_sold"
+    | "fx_transfer"
+    | "manual_adjustment";
+  occurredAt: string;
+  accountCode: SaxoAccountCode;
+  description: string;
+  usdPnl?: number;
+  sharesChange?: number;
+  phaseAfter: WheelPhase;
+  linkedSimulationId?: string;
+  linkedTransferId?: string;
 };

@@ -1,6 +1,7 @@
 import type { ChecklistItem, RiskWarning, TradeSimulation } from "@/types/domain";
 import {
   calculatePutAssignmentCapitalTotalJPY,
+  calculatePutAssignmentCapitalTotalUSD,
   calculateUncoveredCallShares,
   getShortCallLegs,
   getShortPutLegs,
@@ -30,6 +31,15 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
     });
   }
 
+  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
+    warnings.push({
+      id: "n-reference-jpy",
+      severity: "info",
+      title: "N口座のJPY換算は参考表示です",
+      message: "N口座の損益と年率はUSDで管理します。JPY換算は現在の表示用USD/JPYによる参考値で、円転または税務上の確定損益ではありません。",
+    });
+  }
+
   if (simulation.dte <= 0) {
     warnings.push({
       id: "invalid-dte",
@@ -42,11 +52,23 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
 
   if (uncoveredCallShares > 0) {
     warnings.push({
-      id: "uncovered-call",
+      id: simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "n-covered-call-share-shortage" : "uncovered-call",
       severity: "danger",
-      title: "裸コール部分があります",
-      message: `このコール売りは完全にはカバーされていません。未カバー株数は${uncoveredCallShares}株です。`,
+      title: simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "N口座カバードコールの株数が不足しています" : "裸コール部分があります",
+      message:
+        simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+          ? `N口座の保有株だけで確認します。未カバー株数は${uncoveredCallShares}株です。P口座株や未移管株はN口座のカバーに使いません。`
+          : `このコール売りは完全にはカバーされていません。未カバー株数は${uncoveredCallShares}株です。`,
       blocking: simulation.beginnerMode ?? true,
+    });
+  }
+
+  if (simulation.accountEnvironment === "PROD_P_JPY_SETTLEMENT" && simulation.status === "assigned" && (simulation.stockPosition?.shares ?? 0) > 0) {
+    warnings.push({
+      id: "p-assigned-stock-transfer-pending",
+      severity: "warning",
+      title: "P口座で取得した株式が残っています",
+      message: "N口座へ株式移管してカバードコール管理へ進めるか確認してください。株式移管は売却損益として扱いません。",
     });
   }
 
@@ -129,6 +151,7 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
   }
 
   const putAssignmentCapitalJPY = calculatePutAssignmentCapitalTotalJPY(simulation);
+  const putAssignmentCapitalUSD = calculatePutAssignmentCapitalTotalUSD(simulation);
   if (
     simulation.availableCashJPY !== undefined &&
     putAssignmentCapitalJPY > 0 &&
@@ -137,8 +160,11 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
     warnings.push({
       id: "put-assignment-cash-shortage",
       severity: "danger",
-      title: "P権利行使時の現金残高が不足している可能性があります",
-      message: "権利行使価格で株を買い受ける資金を、Saxo画面下部の「現金残高（未受渡分込み）」と比較して確認します。",
+      title: simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "N口座のUSD現金残高が不足している可能性があります" : "JPYベース口座の現金残高が不足している可能性があります",
+      message:
+        simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+          ? `P/N余力は合算しません。N口座内のUSD現金残高と、権利行使時の買付資金 ${putAssignmentCapitalUSD.toLocaleString("en-US", { maximumFractionDigits: 2 })} USD を比較してください。`
+          : "権利行使価格で株を買い受ける資金を、JPYベースの現金残高と比較して確認します。",
     });
   }
 

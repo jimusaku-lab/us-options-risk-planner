@@ -1,8 +1,11 @@
 import type { DenominatorResult, OptionLeg, TaxResult, TradeSimulation } from "@/types/domain";
 import {
   calculateNetInitialPremiumJPY,
+  calculateNetInitialPremiumUSD,
   calculatePremiumJPY,
+  calculatePremiumUSD,
   calculateTotalFeesJPY,
+  calculateTotalFeesUSD,
 } from "@/domain/calculations";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 
@@ -40,11 +43,16 @@ export function AnnualReturnFormula({
   taxResult,
 }: AnnualReturnFormulaProps) {
   const premiumJPY = calculateNetInitialPremiumJPY(simulation);
+  const premiumUSD = calculateNetInitialPremiumUSD(simulation);
   const totalFeesJPY = calculateTotalFeesJPY(simulation);
+  const totalFeesUSD = calculateTotalFeesUSD(simulation);
   const denominatorJPY = primaryDenominator.amountJPY;
+  const denominatorUSD = primaryDenominator.amountUSD ?? 0;
   const days = simulation.dte;
-  const periodReturnPct = denominatorJPY > 0 ? (premiumJPY / denominatorJPY) * 100 : 0;
-  const netPeriodReturnPct = denominatorJPY > 0 ? (taxResult.netProfitJPY / denominatorJPY) * 100 : 0;
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const periodReturnPct = isN ? (denominatorUSD > 0 ? (premiumUSD / denominatorUSD) * 100 : 0) : denominatorJPY > 0 ? (premiumJPY / denominatorJPY) * 100 : 0;
+  const netProfitUSD = (simulation.referenceFxRateJPY ?? simulation.fxRateJPY) > 0 ? taxResult.netProfitJPY / (simulation.referenceFxRateJPY ?? simulation.fxRateJPY) : 0;
+  const netPeriodReturnPct = isN ? (denominatorUSD > 0 ? (netProfitUSD / denominatorUSD) * 100 : 0) : denominatorJPY > 0 ? (taxResult.netProfitJPY / denominatorJPY) * 100 : 0;
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -53,7 +61,9 @@ export function AnnualReturnFormula({
           <span>
             <span className="block text-base font-bold text-slate-950">年率換算の計算根拠</span>
             <span className="mt-1 block text-sm text-slate-600">
-              {formatJPY(premiumJPY)} ÷ {formatJPY(denominatorJPY)} × 365 ÷ {days}日 = {formatPct(primaryDenominator.annualReturnPct)}
+              {isN
+                ? `${formatUSD(premiumUSD)} ÷ ${formatUSD(denominatorUSD)} × 365 ÷ ${days}日 = ${formatPct(primaryDenominator.annualReturnPct)}`
+                : `${formatJPY(premiumJPY)} ÷ ${formatJPY(denominatorJPY)} × 365 ÷ ${days}日 = ${formatPct(primaryDenominator.annualReturnPct)}`}
             </span>
           </span>
           <span className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700">
@@ -69,7 +79,7 @@ export function AnnualReturnFormula({
                   税前年率 = 受取プレミアム ÷ 使用分母 × 365 ÷ 建玉日から満期日までの日数 × 100
                 </p>
                 <p className="numeric-input font-semibold text-slate-950">
-                  {formatJPY(premiumJPY)} ÷ {formatJPY(denominatorJPY)} × 365 ÷ {days}日 × 100
+                  {isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY)} ÷ {isN ? formatUSD(denominatorUSD) : formatJPY(denominatorJPY)} × 365 ÷ {days}日 × 100
                   = {formatPct(primaryDenominator.annualReturnPct)}
                 </p>
                 <p className="text-slate-600">
@@ -84,11 +94,11 @@ export function AnnualReturnFormula({
                   税引後年率 = 税引後利益 ÷ 使用分母 × 365 ÷ 日数 × 100
                 </p>
                 <p className="numeric-input font-semibold text-slate-950">
-                  {formatJPY(taxResult.netProfitJPY)} ÷ {formatJPY(denominatorJPY)} × 365 ÷ {days}日 × 100
+                  {isN ? formatUSD(netProfitUSD) : formatJPY(taxResult.netProfitJPY)} ÷ {isN ? formatUSD(denominatorUSD) : formatJPY(denominatorJPY)} × 365 ÷ {days}日 × 100
                   = {formatPct(taxResult.netAnnualReturnPct)}
                 </p>
                 <p className="text-slate-600">
-                  税引後利益は、受取プレミアムから手数料等 {formatJPY(totalFeesJPY)} と概算税額 {formatJPY(taxResult.taxJPY)} を差し引いた値です。
+                  税引後利益は、受取プレミアムから手数料等 {isN ? `${formatUSD(totalFeesUSD)} / 参考 ${formatJPY(totalFeesJPY)}` : formatJPY(totalFeesJPY)} と概算税額 {formatJPY(taxResult.taxJPY)} を差し引いた値です。
                 </p>
               </div>
             </div>
@@ -102,26 +112,27 @@ export function AnnualReturnFormula({
                     <tr className="border-b border-slate-200 text-left text-slate-500">
                       <th className="py-2 pr-3">脚</th>
                       <th className="py-2 pr-3 text-right">計算</th>
-                      <th className="py-2 pr-3 text-right">円換算</th>
+                      <th className="py-2 pr-3 text-right">{isN ? "USD主計算" : "円換算"}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {simulation.optionLegs.map((leg) => {
                       const amountJPY = signedLegPremiumJPY(leg, simulation.fxRateJPY);
+                      const amountUSD = calculatePremiumUSD({ premiumUSD: leg.premiumUSD, quantity: leg.quantity });
                       return (
                         <tr key={leg.id} className="border-b border-slate-100">
                           <td className="py-2 pr-3 font-semibold text-slate-900">{legLabel(leg)}</td>
                           <td className="numeric-input py-2 pr-3 text-right text-slate-600">
-                            {formatUSD(leg.premiumUSD)} × 100 × {leg.quantity} × {formatNumber(simulation.fxRateJPY)}
+                            {formatUSD(leg.premiumUSD)} × 100 × {leg.quantity}{isN ? "" : ` × ${formatNumber(simulation.fxRateJPY)}`}
                           </td>
-                          <td className="numeric-input py-2 pr-3 text-right font-semibold">{formatJPY(amountJPY)}</td>
+                          <td className="numeric-input py-2 pr-3 text-right font-semibold">{isN ? formatUSD(leg.side === "sell" ? amountUSD : -amountUSD) : formatJPY(amountJPY)}</td>
                         </tr>
                       );
                     })}
                     <tr>
                       <td className="py-2 pr-3 font-bold text-slate-950">合計</td>
                       <td />
-                      <td className="numeric-input py-2 pr-3 text-right font-bold text-slate-950">{formatJPY(premiumJPY)}</td>
+                      <td className="numeric-input py-2 pr-3 text-right font-bold text-slate-950">{isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -134,13 +145,17 @@ export function AnnualReturnFormula({
                   <div key={`${component.label}-${component.amountJPY}`} className="flex justify-between gap-4 px-3 py-2">
                     <dt className="text-slate-600">{formatComponent(component).split(": ")[0]}</dt>
                     <dd className="numeric-input font-semibold text-slate-950">
-                      {component.label === "現物株時価" && component.amountJPY === 0 ? "なし" : formatJPY(component.amountJPY)}
+                      {component.label === "現物株時価" && component.amountJPY === 0
+                        ? "なし"
+                        : component.amountUSD !== undefined
+                          ? formatUSD(component.amountUSD)
+                          : formatJPY(component.amountJPY)}
                     </dd>
                   </div>
                 ))}
                 <div className="flex justify-between gap-4 px-3 py-2">
                   <dt className="font-bold text-slate-950">合計分母</dt>
-                  <dd className="numeric-input font-bold text-slate-950">{formatJPY(denominatorJPY)}</dd>
+                  <dd className="numeric-input font-bold text-slate-950">{isN ? formatUSD(denominatorUSD) : formatJPY(denominatorJPY)}</dd>
                 </div>
               </dl>
               <p className="mt-2 text-sm leading-6 text-slate-600">
@@ -149,6 +164,11 @@ export function AnnualReturnFormula({
               <p className="mt-2 text-sm leading-6 text-slate-600">
                 期間利回りは税前 {formatPct(periodReturnPct)}、税引後 {formatPct(netPeriodReturnPct)} です。これを年換算しています。
               </p>
+              {isN ? (
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  N口座の式はUSD同士で計算しています。USD/JPYを更新しても、USD建て年率は変わりません。
+                </p>
+              ) : null}
             </div>
           </div>
         </div>

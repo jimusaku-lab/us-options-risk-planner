@@ -2,10 +2,13 @@ import type { CoveredCallAssignmentPreview } from "@/domain/coveredCallAssignmen
 import type { DenominatorResult, TaxResult, TradeSimulation } from "@/types/domain";
 import {
   calculateNetInitialPremiumJPY,
+  calculateNetInitialPremiumUSD,
   calculatePutAssignmentCapitalTotalJPY,
+  calculatePutAssignmentCapitalTotalUSD,
   calculateUsedMarginJPY,
+  calculateUsedMarginUSD,
 } from "@/domain/calculations";
-import { formatJPY, formatPct } from "@/lib/format";
+import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 type SummaryCardsProps = {
   simulation: TradeSimulation;
@@ -23,17 +26,23 @@ export function SummaryCards({
   coveredCallAssignmentPreview,
 }: SummaryCardsProps) {
   const premiumJPY = calculateNetInitialPremiumJPY(simulation);
+  const premiumUSD = calculateNetInitialPremiumUSD(simulation);
   const putAssignmentJPY = calculatePutAssignmentCapitalTotalJPY(simulation);
+  const putAssignmentUSD = calculatePutAssignmentCapitalTotalUSD(simulation);
   const usedMarginJPY = calculateUsedMarginJPY({
     brokerMarginJPY: simulation.brokerMarginJPY,
     marginBufferMultiplier: simulation.marginBufferMultiplier,
   });
+  const usedMarginUSD = calculateUsedMarginUSD(simulation);
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
 
   const cards = [
     {
       title: "受取プレミアム",
-      value: formatJPY(premiumJPY),
-      note: "C/P売りの合計。手数料・税金は別カードで控除します。",
+      value: isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
+      note: isN
+        ? `N口座のUSD主計算。参考JPY ${formatJPY(premiumJPY)}。`
+        : "P口座JPY決済。手数料・税金は別カードで控除します。",
     },
     ...(coveredCallAssignmentPreview
       ? [
@@ -49,8 +58,8 @@ export function SummaryCards({
       : []),
     {
       title: "使用分母",
-      value: formatJPY(primaryDenominator.amountJPY),
-      note: primaryDenominator.label,
+      value: primaryDenominator.currency === "USD" ? formatUSD(primaryDenominator.amountUSD ?? 0) : formatJPY(primaryDenominator.amountJPY),
+      note: primaryDenominator.currency === "USD" ? `${primaryDenominator.label}。参考JPY ${formatJPY(primaryDenominator.amountJPY)}。` : primaryDenominator.label,
     },
     {
       title: "年率",
@@ -59,13 +68,15 @@ export function SummaryCards({
     },
     {
       title: "P権利行使時の追加買付資金",
-      value: formatJPY(putAssignmentJPY),
-      note: "権利行使された場合に株を買い受けるための概算資金です。",
+      value: isN ? formatUSD(putAssignmentUSD) : formatJPY(putAssignmentJPY),
+      note: isN ? `N口座内のUSD買付資金。参考JPY ${formatJPY(putAssignmentJPY)}。` : "権利行使された場合に株を買い受けるための概算資金です。",
     },
     {
       title: "最大注意点",
       value: blockingCount > 0 ? `${blockingCount}件NG` : "注文前NGなし",
-      note: `チケット証拠金 ${formatJPY(simulation.brokerMarginJPY)} / 使用証拠金 ${formatJPY(usedMarginJPY)}`,
+      note: isN
+        ? `チケット証拠金 ${formatUSD(simulation.brokerMarginUSD ?? 0)} / 使用証拠金 ${formatUSD(usedMarginUSD)}`
+        : `チケット証拠金 ${formatJPY(simulation.brokerMarginJPY)} / 使用証拠金 ${formatJPY(usedMarginJPY)}`,
     },
   ];
 

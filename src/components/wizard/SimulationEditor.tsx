@@ -2,16 +2,18 @@ import type { ChangeEvent } from "react";
 import { useState } from "react";
 import { JapaneseYen, RotateCw } from "lucide-react";
 import type { DenominatorMode, PutIntent, SimulationStatus, StrategyType, TradeSimulation } from "@/types/domain";
+import type { WorkspaceMode } from "@/store/useOptionsStore";
 import { calculateDte } from "@/domain/calculations";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { fetchStooqQuote, fetchUsdJpyRate, isExternalQuoteDisabled, normalizeTicker } from "@/lib/marketData";
 
 type SimulationEditorProps = {
   simulation: TradeSimulation;
+  workspace: WorkspaceMode;
   onChange: (simulation: TradeSimulation) => void;
 };
 
-export function SimulationEditor({ simulation, onChange }: SimulationEditorProps) {
+export function SimulationEditor({ simulation, workspace, onChange }: SimulationEditorProps) {
   const [quoteStatus, setQuoteStatus] = useState<string>("");
   const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
   const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
@@ -41,6 +43,17 @@ export function SimulationEditor({ simulation, onChange }: SimulationEditorProps
   const stockSettlement = simulation.stockSettlement ?? defaultStockSettlement;
 
   const update = (patch: Partial<TradeSimulation>) => onChange({ ...simulation, ...patch });
+  const updateAccountEnvironment = (accountEnvironment: TradeSimulation["accountEnvironment"]) => {
+    const accountCode = accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "N" : "P";
+    onChange({
+      ...simulation,
+      accountCode,
+      accountEnvironment,
+      accountCurrency: accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "USD" : "JPY",
+      referenceFxRateJPY: simulation.referenceFxRateJPY ?? simulation.fxRateJPY,
+      brokerMarginUSD: accountEnvironment === "PROD_N_USD_SETTLEMENT" ? simulation.brokerMarginUSD ?? (simulation.fxRateJPY > 0 ? simulation.brokerMarginJPY / simulation.fxRateJPY : 0) : simulation.brokerMarginUSD,
+    });
+  };
   const updateStockSettlement = (patch: Partial<NonNullable<TradeSimulation["stockSettlement"]>>) => {
     update({
       stockSettlement: {
@@ -145,6 +158,19 @@ export function SimulationEditor({ simulation, onChange }: SimulationEditorProps
           <h3 className="text-sm font-bold text-slate-950">1. 銘柄・価格</h3>
           <div className="mt-3 grid gap-3">
           <Select
+            label="Saxo口座"
+            value={simulation.accountEnvironment}
+            onChange={(accountEnvironment) => updateAccountEnvironment(accountEnvironment as TradeSimulation["accountEnvironment"])}
+            options={
+              workspace === "demo"
+                ? [["DEMO_JPY_BASE", "DEMO / JPYベース"]]
+                : [
+                    ["PROD_P_JPY_SETTLEMENT", "本番P口座: JPY決済"],
+                    ["PROD_N_USD_SETTLEMENT", "本番N口座: USD決済"],
+                  ]
+            }
+          />
+          <Select
             label="建玉状態"
             value={simulation.status}
             onChange={(status) => update({ status: status as SimulationStatus })}
@@ -239,7 +265,21 @@ export function SimulationEditor({ simulation, onChange }: SimulationEditorProps
                 取得
               </button>
             </div>
-            <NumberInput label="" value={simulation.fxRateJPY} suffix="JPY/USD" onChange={(fxRateJPY) => update({ fxRateJPY })} />
+            <NumberInput
+              label=""
+              value={simulation.fxRateJPY}
+              suffix="JPY/USD"
+              onChange={(fxRateJPY) => update({ fxRateJPY, referenceFxRateJPY: simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? simulation.referenceFxRateJPY ?? fxRateJPY : fxRateJPY })}
+            />
+            {simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
+              <p className="-mt-2 text-xs leading-5 text-slate-500">
+                N口座ではUSD損益・USD年率を主計算にします。JPYは参考換算で、税務上の確定値ではありません。
+              </p>
+            ) : workspace === "demo" ? (
+              <p className="-mt-2 text-xs leading-5 text-slate-500">
+                DEMOはJPYベース検証用です。名称としてP口座とは扱わず、本番USD決済口座の残高管理の完全検証には使いません。
+              </p>
+            ) : null}
           </div>
           </div>
         </div>
@@ -285,7 +325,18 @@ export function SimulationEditor({ simulation, onChange }: SimulationEditorProps
           )}
           {needsBrokerMarginInput ? (
             <>
-              <NumberInput label="チケット表示証拠金" value={simulation.brokerMarginJPY} suffix="JPY" onChange={(brokerMarginJPY) => update({ brokerMarginJPY })} />
+              <NumberInput
+                label="チケット表示証拠金"
+                value={simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? simulation.brokerMarginUSD ?? 0 : simulation.brokerMarginJPY}
+                suffix={simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "USD" : "JPY"}
+                onChange={(value) =>
+                  update(
+                    simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+                      ? { brokerMarginUSD: value, brokerMarginJPY: value * simulation.fxRateJPY }
+                      : { brokerMarginJPY: value },
+                  )
+                }
+              />
               <NumberInput
                 label="証拠金バッファ"
                 value={simulation.marginBufferMultiplier}
@@ -296,7 +347,7 @@ export function SimulationEditor({ simulation, onChange }: SimulationEditorProps
             </>
           ) : (
             <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
-              カバードコールは保有株でカバーするため、この建玉ではチケット表示証拠金を0円として扱います。Saxoの決済チケットでも必要証拠金が0 JPYなら入力不要です。
+              カバードコールは保有株でカバーするため、この建玉ではチケット表示証拠金を0として扱います。Saxoの決済チケットでも必要証拠金が0なら入力不要です。
             </div>
           )}
           </div>
@@ -371,15 +422,34 @@ export function SimulationEditor({ simulation, onChange }: SimulationEditorProps
               />
             </>
           ) : null}
-          <NumberInput
-            label="取引手数料"
-            value={simulation.brokerCommissionUSD ?? 0}
-            suffix="USD"
-            min={0}
-            onChange={(brokerCommissionUSD) => update({ brokerCommissionUSD })}
-          />
+          {simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
+            <NumberInput
+              label="取引手数料（USD）"
+              value={simulation.brokerCommissionUSD ?? 0}
+              suffix="USD"
+              min={0}
+              onChange={(brokerCommissionUSD) => update({ brokerCommissionUSD })}
+            />
+          ) : (
+            <>
+              <NumberInput
+                label="取引手数料・諸費用（JPY）"
+                value={simulation.brokerCommissionJPY ?? 0}
+                suffix="JPY"
+                min={0}
+                onChange={(brokerCommissionJPY) => update({ brokerCommissionJPY })}
+              />
+              <NumberInput
+                label="USD手数料（任意）"
+                value={simulation.brokerCommissionUSD ?? 0}
+                suffix="USD"
+                min={0}
+                onChange={(brokerCommissionUSD) => update({ brokerCommissionUSD })}
+              />
+            </>
+          )}
           <p className="-mt-2 text-xs leading-5 text-slate-500">
-            Saxoチケットの取引手数料を入力します。税引後カードと満期ペイオフで控除します。
+            P口座取引には0.25%を一律上乗せしません。N口座はUSDを主計算、JPYは参考換算です。
           </p>
           </div>
         </div>
@@ -482,7 +552,15 @@ export function SimulationEditor({ simulation, onChange }: SimulationEditorProps
           <NumberInput
             label="損切りルール値"
             value={simulation.stopLossRule?.value ?? 0}
-            suffix={simulation.stopLossRule?.type === "loss_amount_jpy" ? "JPY" : simulation.stopLossRule?.type === "stock_price_line" ? "USD" : "USD/株"}
+            suffix={
+              simulation.stopLossRule?.type === "loss_amount_jpy"
+                ? simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+                  ? "USD"
+                  : "JPY"
+                : simulation.stopLossRule?.type === "stock_price_line"
+                  ? "USD"
+                  : "USD/株"
+            }
             min={0}
             onChange={(value) =>
               update({

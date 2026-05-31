@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, Plus, TrendingUp, Upload } from "lucide-react";
+import { ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
@@ -8,6 +8,8 @@ import { generateChecklist, generateRiskWarnings } from "@/domain/riskRules";
 import { calculateScenarioResults } from "@/domain/scenarios";
 import { calculateNisaComparison, calculateStockSettlementTaxResult, calculateTaxResult, taxProfiles } from "@/domain/tax";
 import { calculateTaxBucketSummary } from "@/domain/taxBucketSummary";
+import { createSimulationFromCandidate } from "@/domain/candidateConversion";
+import { CandidatePanel } from "@/components/candidates/CandidatePanel";
 import { AccountOverview } from "@/components/dashboard/AccountOverview";
 import { Dashboard } from "@/components/dashboard/Dashboard";
 import { DataPanel } from "@/components/data/DataPanel";
@@ -25,12 +27,15 @@ import { SimulationEditor } from "@/components/wizard/SimulationEditor";
 import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
 import { fetchStooqQuote, fetchUsdJpyRate, isExternalQuoteDisabled, normalizeTicker } from "@/lib/marketData";
+import { useCandidatesStore } from "@/store/useCandidatesStore";
 import { useOptionsStore } from "@/store/useOptionsStore";
+import type { CandidateSymbol } from "@/types/candidates";
 
 export default function App() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [isDataOpen, setIsDataOpen] = useState(false);
+  const [isCandidatesOpen, setIsCandidatesOpen] = useState(false);
   const [hasAcceptedNotice, setHasAcceptedNotice] = useState(() =>
     typeof window === "undefined" ? true : window.localStorage.getItem("us-options-first-run-notice-accepted") === "true",
   );
@@ -40,16 +45,27 @@ export default function App() {
     accountInputs,
     simulations,
     wheelCycles,
+    wheelEvents,
+    stockTransfers,
     selectedSimulationId,
     switchWorkspace,
-    updateAccountInputs,
+    updateAccountState,
     createSimulationFromTemplate,
     selectSimulation,
     deleteSimulation,
     upsertSimulation,
-    replaceWorkspaceSimulations,
+    replaceWorkspaceData,
     createWheelCycleFromSimulation,
+    createStockTransferFromSimulation,
+    settings,
   } = useOptionsStore();
+  const {
+    candidates,
+    importWarnings,
+    importCandidateSymbols,
+    clearCandidates,
+    markCandidateWatchOnly,
+  } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
   const refreshAllQuotes = async () => {
@@ -122,11 +138,19 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
   const downloadJson = () => {
+    const accountStatesForExport =
+      activeWorkspace === "demo"
+        ? [{ ...accountInputs.P, accountEnvironment: "DEMO_JPY_BASE" as const, accountCode: "P" as const, currency: "JPY" as const }]
+        : Object.values(accountInputs);
     const blob = new Blob(
       [
         exportWorkspaceJson({
           workspace: activeWorkspace,
           simulations,
+          accountStates: accountStatesForExport,
+          wheelCycles,
+          wheelEvents,
+          stockTransfers,
           exportedAt: new Date().toISOString(),
         }),
       ],
@@ -144,8 +168,8 @@ export default function App() {
     try {
       const text = await file.text();
       const imported = parseWorkspaceJson(text);
-      replaceWorkspaceSimulations(imported);
-      setQuoteStatus(`${imported.length}件の建玉をJSONから復元しました。`);
+      replaceWorkspaceData(imported);
+      setQuoteStatus(`${imported.simulations.length}件の建玉をJSONから復元しました。`);
       setIsEditorOpen(false);
     } catch (error) {
       setQuoteStatus(error instanceof Error ? error.message : "JSONを読み込めませんでした。");
@@ -156,6 +180,18 @@ export default function App() {
   const createAndOpenEditor = () => {
     createSimulationFromTemplate();
     setIsEditorOpen(true);
+  };
+  const createCandidateSimulation = (candidate: CandidateSymbol, strategyType: "covered_call" | "short_put") => {
+    const simulation = createSimulationFromCandidate({
+      candidate,
+      workspace: activeWorkspace,
+      settings,
+      strategyType,
+      fxRateJPY: selected?.fxRateJPY,
+    });
+    upsertSimulation(simulation);
+    setIsEditorOpen(true);
+    setQuoteStatus(`${candidate.symbol} の${strategyType === "covered_call" ? "カバードコール" : "P売り"}建玉案を作成しました。`);
   };
   const selectAndOpenEditor = (id: string) => {
     selectSimulation(id);
@@ -183,6 +219,7 @@ export default function App() {
           onImportJson={() => importInputRef.current?.click()}
           onToggleGuide={() => setIsGuideOpen((current) => !current)}
           onToggleData={() => setIsDataOpen((current) => !current)}
+          onToggleCandidates={() => setIsCandidatesOpen((current) => !current)}
           onRefreshQuote={undefined}
           onRefreshFx={undefined}
           quoteStatus=""
@@ -200,10 +237,21 @@ export default function App() {
             workspace={activeWorkspace}
             accountInputs={accountInputs}
           />
+          {isCandidatesOpen ? (
+            <CandidatePanel
+              candidates={candidates}
+              importWarnings={importWarnings}
+              simulations={simulations}
+              onImport={importCandidateSymbols}
+              onClear={clearCandidates}
+              onWatchOnly={markCandidateWatchOnly}
+              onCreateSimulation={createCandidateSimulation}
+            />
+          ) : null}
           <AccountOverview
             workspace={activeWorkspace}
             accountInputs={accountInputs}
-            onChange={updateAccountInputs}
+            onChange={updateAccountState}
           />
           <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-bold text-slate-950">
@@ -220,7 +268,11 @@ export default function App() {
               新規建玉
             </button>
           </section>
-          <WheelPanel cycles={wheelCycles} />
+          {activeWorkspace === "live" ? (
+            <WheelPanel cycles={wheelCycles} events={wheelEvents} stockTransfers={stockTransfers} />
+          ) : (
+            <DemoWheelNotice />
+          )}
         </div>
       </main>
     );
@@ -228,8 +280,14 @@ export default function App() {
 
   const selectedWithAccount = {
     ...selected,
-    availableCashJPY: accountInputs.availableCashJPY,
-    marginUsagePercent: accountInputs.marginUsagePercent,
+    availableCashJPY:
+      selected.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+        ? accountInputs.N.cashBalance * (selected.referenceFxRateJPY ?? selected.fxRateJPY)
+        : accountInputs.P.cashBalance,
+    marginUsagePercent:
+      selected.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+        ? accountInputs.N.marginUsagePercent
+        : accountInputs.P.marginUsagePercent,
   };
   const premiumJPY = calculateNetInitialPremiumJPY(selectedWithAccount);
   const grossDenominators = calculateDenominators(selectedWithAccount, premiumJPY);
@@ -286,6 +344,7 @@ export default function App() {
         onImportJson={() => importInputRef.current?.click()}
         onToggleGuide={() => setIsGuideOpen((current) => !current)}
         onToggleData={() => setIsDataOpen((current) => !current)}
+        onToggleCandidates={() => setIsCandidatesOpen((current) => !current)}
         onRefreshQuote={refreshAllQuotes}
         onRefreshFx={refreshAllFx}
         quoteStatus={quoteStatus}
@@ -303,10 +362,22 @@ export default function App() {
           workspace={activeWorkspace}
           accountInputs={accountInputs}
         />
+        {isCandidatesOpen ? (
+          <CandidatePanel
+            candidates={candidates}
+            importWarnings={importWarnings}
+            simulations={simulations}
+            onImport={importCandidateSymbols}
+            onClear={clearCandidates}
+            onWatchOnly={markCandidateWatchOnly}
+            onCreateSimulation={createCandidateSimulation}
+          />
+        ) : null}
         <AccountOverview
           workspace={activeWorkspace}
           accountInputs={accountInputs}
-          onChange={updateAccountInputs}
+          referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
+          onChange={updateAccountState}
         />
         {isEditorOpen ? (
           <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -326,7 +397,7 @@ export default function App() {
               </span>
             </button>
             <div className="border-t border-slate-200 p-4">
-              <SimulationEditor simulation={selected} onChange={upsertSimulation} />
+              <SimulationEditor simulation={selected} workspace={activeWorkspace} onChange={upsertSimulation} />
             </div>
           </section>
         ) : null}
@@ -356,9 +427,34 @@ export default function App() {
           <DenominatorChart denominators={denominators} />
         </section>
         <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} />
-        <WheelPanel cycles={wheelCycles} onCreateFromSelected={() => createWheelCycleFromSimulation(selected)} />
+        {activeWorkspace === "live" ? (
+          <WheelPanel
+            cycles={wheelCycles}
+            events={wheelEvents}
+            stockTransfers={stockTransfers}
+            onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
+            onCreateTransferFromSelected={
+              selected.accountEnvironment === "PROD_P_JPY_SETTLEMENT" && selected.status === "assigned"
+                ? () => createStockTransferFromSimulation(selected)
+                : undefined
+            }
+          />
+        ) : (
+          <DemoWheelNotice />
+        )}
       </div>
     </main>
+  );
+}
+
+function DemoWheelNotice() {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <h2 className="text-lg font-bold text-slate-950">DEMO / JPYベース検証</h2>
+      <p className="mt-1 text-sm leading-6 text-slate-600">
+        DEMOはJPYベースの検証用です。本番USD決済口座の残高管理、JPY→USD資金振替、移管後のUSDホイール台帳を検証済みデータとして扱いません。
+      </p>
+    </section>
   );
 }
 
@@ -371,6 +467,7 @@ function AppHeader({
   onImportJson,
   onToggleGuide,
   onToggleData,
+  onToggleCandidates,
   onRefreshQuote,
   onRefreshFx,
   quoteStatus,
@@ -383,6 +480,7 @@ function AppHeader({
   onImportJson: () => void;
   onToggleGuide: () => void;
   onToggleData: () => void;
+  onToggleCandidates: () => void;
   onRefreshQuote?: () => void;
   onRefreshFx?: () => void;
   quoteStatus: string;
@@ -427,6 +525,14 @@ function AppHeader({
             aria-label="使い方"
           >
             <HelpCircle size={16} />
+          </button>
+          <button
+            className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900"
+            onClick={onToggleCandidates}
+            title="候補リストを表示"
+          >
+            <ListChecks size={16} />
+            候補
           </button>
           <button
             className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-900"

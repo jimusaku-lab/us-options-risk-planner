@@ -13,10 +13,13 @@ export const sampleAmznSimulation: TradeSimulation = {
   strategyType: "covered_call_plus_short_put",
   currentPriceUSD: 266.32,
   fxRateJPY: 159,
+  accountCode: "P",
+  accountEnvironment: "DEMO_JPY_BASE",
   entryDate,
   expiryDate,
   dte: calculateDte(entryDate, expiryDate),
   accountCurrency: "JPY",
+  referenceFxRateJPY: 159,
   stockPosition: {
     shares: 100,
     averageCostUSD: 270.39,

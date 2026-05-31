@@ -19,7 +19,11 @@ describe("position export", () => {
     });
 
     const parsed = parseWorkspaceJson(json);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].id).toBe(sampleAmznSimulation.id);
+    expect(parsed.simulations).toHaveLength(1);
+    expect(parsed.simulations[0].id).toBe(sampleAmznSimulation.id);
+    expect(parsed.simulations[0].accountEnvironment).toBe("DEMO_JPY_BASE");
+    expect(parsed.accountStates).toEqual([]);
+    expect(parsed.wheelCycles).toEqual([]);
+    expect(parsed.stockTransfers).toEqual([]);
   });
 });

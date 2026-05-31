@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { OptionLeg, TradeSimulation } from "@/types/domain";
-import { calculateCloseCostJPY, calculatePremiumJPY } from "@/domain/calculations";
+import { calculateCloseCostJPY, calculatePremiumJPY, calculatePremiumUSD } from "@/domain/calculations";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { formatJPY, formatUSD } from "@/lib/format";
 
@@ -78,12 +78,23 @@ function LegCloseCard({
     quantity: leg.quantity,
     fxRateJPY,
   });
+  const receivedUSD = calculatePremiumUSD({
+    premiumUSD: leg.premiumUSD,
+    quantity: leg.quantity,
+  });
   const closeCostJPY = calculateCloseCostJPY(leg, fxRateJPY);
+  const closePriceUSD = leg.closeCostUSD ?? leg.closePlan?.closePriceUSD;
+  const closeCostUSD = closePriceUSD === undefined || closePriceUSD <= 0 ? null : closePriceUSD * 100 * leg.quantity;
   const closeCommissionUSD = leg.closePlan?.commissionUSD ?? openCommissionUSD;
+  const totalCommissionUSD = openCommissionUSD + (closeCostUSD === null ? 0 : closeCommissionUSD);
   const totalCommissionJPY = (openCommissionUSD + (closeCostJPY === null ? 0 : closeCommissionUSD)) * fxRateJPY;
   const estimatedProfitJPY = closeCostJPY === null ? null : receivedJPY - closeCostJPY - totalCommissionJPY;
+  const estimatedProfitUSD = closeCostUSD === null ? null : receivedUSD - closeCostUSD - totalCommissionUSD;
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
   const keepPercent =
-    estimatedProfitJPY === null || receivedJPY === 0 ? null : Math.max(0, (estimatedProfitJPY / receivedJPY) * 100);
+    (isN ? estimatedProfitUSD : estimatedProfitJPY) === null || (isN ? receivedUSD : receivedJPY) === 0
+      ? null
+      : Math.max(0, (((isN ? estimatedProfitUSD : estimatedProfitJPY) ?? 0) / (isN ? receivedUSD : receivedJPY)) * 100);
   const profitTarget = simulation.profitTakeRule?.targetPremiumKeepPercent ?? 60;
   const profitRuleStatus =
     !simulation.profitTakeRule?.enabled
@@ -93,7 +104,7 @@ function LegCloseCard({
         : keepPercent >= profitTarget
           ? { label: "利確ルール到達", tone: "green" as Tone, detail: `現在 ${keepPercent.toFixed(1)}% / 目安 ${profitTarget}%` }
           : { label: "利確ルール未到達", tone: undefined as Tone, detail: `現在 ${keepPercent.toFixed(1)}% / 目安 ${profitTarget}%` };
-  const stopRuleStatus = getStopRuleStatus({ simulation, leg, estimatedProfitJPY });
+  const stopRuleStatus = getStopRuleStatus({ simulation, leg, estimatedProfitJPY, estimatedProfitUSD });
   const label = `${leg.type === "call" ? "C" : "P"} ${leg.strikeUSD} ${leg.expiryDate}`;
 
   return (
@@ -110,23 +121,38 @@ function LegCloseCard({
         />
       </div>
       <dl className="mt-3 grid gap-2 text-sm">
-        <Row label="建てた時のプレミアム" value={`${formatUSD(leg.premiumUSD)} / ${formatJPY(receivedJPY)}`} />
+        <Row
+          label="建てた時のプレミアム"
+          value={isN ? `${formatUSD(receivedUSD)} / 参考 ${formatJPY(receivedJPY)}` : formatJPY(receivedJPY)}
+        />
         <Row
           label="現在の買戻し価格"
-          value={closeCostJPY === null ? "未入力" : `${formatUSD(leg.closeCostUSD ?? leg.closePlan?.closePriceUSD ?? 0)} / ${formatJPY(closeCostJPY)}`}
+          value={
+            closeCostJPY === null || closeCostUSD === null
+              ? "未入力"
+              : isN
+                ? `${formatUSD(closeCostUSD)} / 参考 ${formatJPY(closeCostJPY)}`
+                : formatJPY(closeCostJPY)
+          }
         />
         <Row
           label="手数料控除"
           value={
-            closeCostJPY === null
-              ? `${formatUSD(openCommissionUSD)} / ${formatJPY(totalCommissionJPY)}`
-              : `${formatUSD(openCommissionUSD + closeCommissionUSD)} / ${formatJPY(totalCommissionJPY)}`
+            isN
+              ? `${formatUSD(totalCommissionUSD)} / 参考 ${formatJPY(totalCommissionJPY)}`
+              : formatJPY(totalCommissionJPY)
           }
         />
         <Row
           label="今閉じた場合の概算損益（手数料後）"
-          value={estimatedProfitJPY === null ? "未計算" : formatJPY(estimatedProfitJPY, { signed: true })}
-          tone={estimatedProfitJPY === null ? undefined : estimatedProfitJPY >= 0 ? "green" : "red"}
+          value={
+            (isN ? estimatedProfitUSD : estimatedProfitJPY) === null
+              ? "未計算"
+              : isN
+                ? `${formatUSD(estimatedProfitUSD ?? 0)} / 参考 ${formatJPY(estimatedProfitJPY ?? 0, { signed: true })}`
+                : formatJPY(estimatedProfitJPY ?? 0, { signed: true })
+          }
+          tone={(isN ? estimatedProfitUSD : estimatedProfitJPY) === null ? undefined : ((isN ? estimatedProfitUSD : estimatedProfitJPY) ?? 0) >= 0 ? "green" : "red"}
         />
         <Row
           label="プレミアム確保率"
@@ -146,10 +172,12 @@ function getStopRuleStatus({
   simulation,
   leg,
   estimatedProfitJPY,
+  estimatedProfitUSD,
 }: {
   simulation: TradeSimulation;
   leg: OptionLeg;
   estimatedProfitJPY: number | null;
+  estimatedProfitUSD: number | null;
 }): { label: string; detail: string; tone: Tone } {
   const rule = simulation.stopLossRule;
   if (!rule?.enabled) {
@@ -173,12 +201,16 @@ function getStopRuleStatus({
       ? { label: "株価ライン到達", detail: `現在 ${formatUSD(simulation.currentPriceUSD)} / 目安 ${formatUSD(rule.value)}`, tone: "red" }
       : { label: "株価ライン未到達", detail: `現在 ${formatUSD(simulation.currentPriceUSD)} / 目安 ${formatUSD(rule.value)}`, tone: undefined };
   }
-  if (estimatedProfitJPY === null) {
-    return { label: "買戻し価格を入れると判定", detail: `目安: ${formatJPY(rule.value)}の損失`, tone: undefined };
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  if ((isN ? estimatedProfitUSD : estimatedProfitJPY) === null) {
+    return { label: "買戻し価格を入れると判定", detail: `目安: ${isN ? formatUSD(rule.value) : formatJPY(rule.value)}の損失`, tone: undefined };
   }
-  return estimatedProfitJPY <= -rule.value
-    ? { label: "損失額ルール到達", detail: `現在 ${formatJPY(estimatedProfitJPY, { signed: true })} / 目安 -${formatJPY(rule.value)}`, tone: "red" }
-    : { label: "損失額ルール未到達", detail: `現在 ${formatJPY(estimatedProfitJPY, { signed: true })} / 目安 -${formatJPY(rule.value)}`, tone: undefined };
+  const estimatedProfit = isN ? estimatedProfitUSD ?? 0 : estimatedProfitJPY ?? 0;
+  const currentLabel = isN ? formatUSD(estimatedProfit) : formatJPY(estimatedProfit, { signed: true });
+  const thresholdLabel = isN ? `-${formatUSD(rule.value)}` : `-${formatJPY(rule.value)}`;
+  return estimatedProfit <= -rule.value
+    ? { label: "損失額ルール到達", detail: `現在 ${currentLabel} / 目安 ${thresholdLabel}`, tone: "red" }
+    : { label: "損失額ルール未到達", detail: `現在 ${currentLabel} / 目安 ${thresholdLabel}`, tone: undefined };
 }
 
 function Row({ label, value, tone }: { label: string; value: string; tone?: Tone }) {
