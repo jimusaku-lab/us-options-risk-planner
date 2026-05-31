@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
+import { ChevronUp, Database, Download, FileJson, Globe2, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
@@ -26,7 +26,7 @@ import { TaxComparisonCard } from "@/components/results/TaxComparisonCard";
 import { SimulationEditor } from "@/components/wizard/SimulationEditor";
 import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
-import { fetchStooqQuote, fetchUsdJpyRate, isExternalQuoteDisabled, normalizeTicker } from "@/lib/marketData";
+import { fetchStooqQuote, fetchUsdJpyRate, isExternalQuoteConsentRequired, isExternalQuoteDisabled, normalizeTicker } from "@/lib/marketData";
 import { useCandidatesStore } from "@/store/useCandidatesStore";
 import { useOptionsStore } from "@/store/useOptionsStore";
 import type { CandidateSymbol } from "@/types/candidates";
@@ -40,6 +40,15 @@ export default function App() {
     typeof window === "undefined" ? true : window.localStorage.getItem("us-options-first-run-notice-accepted") === "true",
   );
   const [quoteStatus, setQuoteStatus] = useState("");
+  const [isExternalQuoteEnabled, setIsExternalQuoteEnabled] = useState(() => {
+    if (typeof window === "undefined" || !isExternalQuoteConsentRequired) return true;
+    return window.localStorage.getItem("us-options-external-quotes-enabled-v1") === "true";
+  });
+  const [hasExternalQuoteConsent, setHasExternalQuoteConsent] = useState(() => {
+    if (typeof window === "undefined" || !isExternalQuoteConsentRequired) return true;
+    return window.localStorage.getItem("us-options-external-quotes-consent-v1") === "true";
+  });
+  const [isExternalQuoteConsentOpen, setIsExternalQuoteConsentOpen] = useState(false);
   const {
     activeWorkspace,
     accountInputs,
@@ -68,9 +77,41 @@ export default function App() {
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
-  const refreshAllQuotes = async () => {
+  const canUseExternalQuotes = !isExternalQuoteDisabled && (!isExternalQuoteConsentRequired || isExternalQuoteEnabled);
+  const externalQuoteModeLabel = isExternalQuoteDisabled
+    ? "外部取得はビルド設定で無効です。株価・為替は手入力してください。"
+    : canUseExternalQuotes
+      ? "外部取得ON: 銘柄ティッカーとUSD/JPY取得リクエストのみ外部サービスへ送信します。"
+      : "外部取得OFF: 株価・為替は手入力してください。";
+  const requestExternalQuoteEnable = () => {
     if (isExternalQuoteDisabled) {
-      setQuoteStatus("公開版では外部通信を避けるため、株価取得は無効です。現在株価は手入力してください。");
+      setQuoteStatus("外部取得はビルド設定で無効です。株価・為替は手入力してください。");
+      return;
+    }
+    if (!isExternalQuoteConsentRequired || hasExternalQuoteConsent) {
+      window.localStorage.setItem("us-options-external-quotes-enabled-v1", "true");
+      setIsExternalQuoteEnabled(true);
+      setQuoteStatus("外部取得をONにしました。送信するのは銘柄ティッカーとUSD/JPY取得リクエストのみです。");
+      return;
+    }
+    setIsExternalQuoteConsentOpen(true);
+  };
+  const disableExternalQuotes = () => {
+    window.localStorage.setItem("us-options-external-quotes-enabled-v1", "false");
+    setIsExternalQuoteEnabled(false);
+    setQuoteStatus("外部取得をOFFにしました。株価・為替は手入力してください。");
+  };
+  const acceptExternalQuoteConsent = () => {
+    window.localStorage.setItem("us-options-external-quotes-consent-v1", "true");
+    window.localStorage.setItem("us-options-external-quotes-enabled-v1", "true");
+    setHasExternalQuoteConsent(true);
+    setIsExternalQuoteEnabled(true);
+    setIsExternalQuoteConsentOpen(false);
+    setQuoteStatus("外部取得をONにしました。送信するのは銘柄ティッカーとUSD/JPY取得リクエストのみです。");
+  };
+  const refreshAllQuotes = async () => {
+    if (!canUseExternalQuotes) {
+      setQuoteStatus("外部取得OFFです。ONにするには同意が必要です。現在株価は手入力してください。");
       return;
     }
     const tickers = Array.from(new Set(simulations.map((simulation) => normalizeTicker(simulation.ticker)).filter(Boolean)));
@@ -106,8 +147,8 @@ export default function App() {
     }
   };
   const refreshAllFx = async () => {
-    if (isExternalQuoteDisabled) {
-      setQuoteStatus("公開版では外部通信を避けるため、為替取得は無効です。USD/JPYは手入力してください。");
+    if (!canUseExternalQuotes) {
+      setQuoteStatus("外部取得OFFです。ONにするには同意が必要です。USD/JPYは手入力してください。");
       return;
     }
     if (simulations.length === 0) return;
@@ -210,6 +251,9 @@ export default function App() {
     return (
       <main className="min-h-screen bg-slate-100 text-slate-950">
         {!hasAcceptedNotice ? <FirstRunNotice onAccept={acceptFirstRunNotice} /> : null}
+        {isExternalQuoteConsentOpen ? (
+          <ExternalQuoteConsentDialog onAccept={acceptExternalQuoteConsent} onCancel={() => setIsExternalQuoteConsentOpen(false)} />
+        ) : null}
         <AppHeader
           activeWorkspace={activeWorkspace}
           switchWorkspace={switchWorkspace}
@@ -222,12 +266,17 @@ export default function App() {
           onToggleCandidates={() => setIsCandidatesOpen((current) => !current)}
           onRefreshQuote={undefined}
           onRefreshFx={undefined}
+          canUseExternalQuotes={canUseExternalQuotes}
+          isExternalQuoteConsentRequired={isExternalQuoteConsentRequired}
+          externalQuoteModeLabel={externalQuoteModeLabel}
+          onEnableExternalQuotes={requestExternalQuoteEnable}
+          onDisableExternalQuotes={disableExternalQuotes}
           quoteStatus=""
         />
         <input ref={importInputRef} className="hidden" type="file" accept="application/json,.json" onChange={(event) => void importJson(event.target.files?.[0] ?? null)} />
         <div className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5">
           {isGuideOpen ? <UserGuide onClose={() => setIsGuideOpen(false)} /> : null}
-          {isDataOpen ? <DataPanel onClose={() => setIsDataOpen(false)} /> : null}
+          {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
           <Dashboard
             simulations={simulations}
             selectedId=""
@@ -335,6 +384,9 @@ export default function App() {
   return (
     <main className="min-h-screen bg-slate-100 text-slate-950">
       {!hasAcceptedNotice ? <FirstRunNotice onAccept={acceptFirstRunNotice} /> : null}
+      {isExternalQuoteConsentOpen ? (
+        <ExternalQuoteConsentDialog onAccept={acceptExternalQuoteConsent} onCancel={() => setIsExternalQuoteConsentOpen(false)} />
+      ) : null}
       <AppHeader
         activeWorkspace={activeWorkspace}
         switchWorkspace={switchWorkspace}
@@ -347,12 +399,17 @@ export default function App() {
         onToggleCandidates={() => setIsCandidatesOpen((current) => !current)}
         onRefreshQuote={refreshAllQuotes}
         onRefreshFx={refreshAllFx}
+        canUseExternalQuotes={canUseExternalQuotes}
+        isExternalQuoteConsentRequired={isExternalQuoteConsentRequired}
+        externalQuoteModeLabel={externalQuoteModeLabel}
+        onEnableExternalQuotes={requestExternalQuoteEnable}
+        onDisableExternalQuotes={disableExternalQuotes}
         quoteStatus={quoteStatus}
       />
       <input ref={importInputRef} className="hidden" type="file" accept="application/json,.json" onChange={(event) => void importJson(event.target.files?.[0] ?? null)} />
       <div className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5">
         {isGuideOpen ? <UserGuide onClose={() => setIsGuideOpen(false)} /> : null}
-        {isDataOpen ? <DataPanel onClose={() => setIsDataOpen(false)} /> : null}
+        {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
         <Dashboard
           simulations={simulations}
           selectedId={selected.id}
@@ -397,7 +454,13 @@ export default function App() {
               </span>
             </button>
             <div className="border-t border-slate-200 p-4">
-              <SimulationEditor simulation={selected} workspace={activeWorkspace} onChange={upsertSimulation} />
+              <SimulationEditor
+                simulation={selected}
+                workspace={activeWorkspace}
+                canUseExternalQuotes={canUseExternalQuotes}
+                externalQuoteModeLabel={externalQuoteModeLabel}
+                onChange={upsertSimulation}
+              />
             </div>
           </section>
         ) : null}
@@ -458,6 +521,58 @@ function DemoWheelNotice() {
   );
 }
 
+function ExternalQuoteConsentDialog({ onAccept, onCancel }: { onAccept: () => void; onCancel: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 px-4">
+      <section className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-lg bg-white p-5 shadow-xl">
+        <div className="flex items-start gap-3">
+          <Globe2 className="mt-1 text-sky-700" size={22} />
+          <div>
+            <h2 className="text-lg font-bold text-slate-950">外部株価・為替取得を有効にします</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-700">
+              この機能をONにすると、価格取得に必要な最小情報だけを外部の価格取得サービスへ送信します。
+              外部取得を使わない場合は、Saxo TraderGO等で確認した株価・為替を手入力してください。
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
+            <h3 className="font-bold">送信される可能性があるもの</h3>
+            <ul className="mt-1 list-disc pl-5">
+              <li>銘柄ティッカー（例: NVDA, AMZN）</li>
+              <li>USD/JPYの取得リクエスト</li>
+              <li>利用者のIPアドレス、ブラウザ情報、アクセス時刻</li>
+            </ul>
+          </div>
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
+            <h3 className="font-bold">送信しないもの</h3>
+            <ul className="mt-1 list-disc pl-5">
+              <li>保有株数、建玉数量、プレミアム</li>
+              <li>口座残高、証拠金使用率</li>
+              <li>DEMO/REALの入力内容全体</li>
+              <li>JSONバックアップの内容</li>
+              <li>localStorageに保存されたデータ</li>
+            </ul>
+          </div>
+        </div>
+        <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+          一括株価更新では、登録されているティッカーの集合だけを送信します。URLに建玉ID、数量、口座種別、残高、証拠金、メモは含めません。
+          この設定は端末ごとのプライバシー設定で、JSONバックアップには含めません。
+        </p>
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700" onClick={onCancel}>
+            OFFのまま使う
+          </button>
+          <button className="rounded-md bg-sky-700 px-3 py-2 text-sm font-bold text-white hover:bg-sky-800" onClick={onAccept}>
+            同意して外部取得ON
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AppHeader({
   activeWorkspace,
   switchWorkspace,
@@ -470,6 +585,11 @@ function AppHeader({
   onToggleCandidates,
   onRefreshQuote,
   onRefreshFx,
+  canUseExternalQuotes,
+  isExternalQuoteConsentRequired,
+  externalQuoteModeLabel,
+  onEnableExternalQuotes,
+  onDisableExternalQuotes,
   quoteStatus,
 }: {
   activeWorkspace: "demo" | "live";
@@ -483,6 +603,11 @@ function AppHeader({
   onToggleCandidates: () => void;
   onRefreshQuote?: () => void;
   onRefreshFx?: () => void;
+  canUseExternalQuotes: boolean;
+  isExternalQuoteConsentRequired: boolean;
+  externalQuoteModeLabel: string;
+  onEnableExternalQuotes: () => void;
+  onDisableExternalQuotes: () => void;
   quoteStatus: string;
 }) {
   return (
@@ -543,12 +668,24 @@ function AppHeader({
             <Database size={16} />
           </button>
           <button
+            className={`inline-flex h-9 items-center gap-1 rounded-md border px-2 text-sm font-semibold ${
+              canUseExternalQuotes ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"
+            }`}
+            onClick={canUseExternalQuotes ? onDisableExternalQuotes : onEnableExternalQuotes}
+            title={externalQuoteModeLabel}
+          >
+            <Globe2 size={16} />
+            外部取得{canUseExternalQuotes ? "ON" : "OFF"}
+          </button>
+          <button
             className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900 disabled:opacity-40"
             onClick={onRefreshQuote}
-            disabled={!onRefreshQuote || isExternalQuoteDisabled}
+            disabled={!onRefreshQuote || !canUseExternalQuotes}
             title={
-              isExternalQuoteDisabled
-                ? "公開版では外部通信を避けるため、株価取得は無効です"
+              !canUseExternalQuotes
+                ? isExternalQuoteConsentRequired
+                  ? "外部取得OFFです。ONにすると株価取得を使えます"
+                  : "外部取得は無効です"
                 : "登録済み建玉の全銘柄について、現在株価を公開クオートから一括取得"
             }
           >
@@ -558,10 +695,12 @@ function AppHeader({
           <button
             className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900 disabled:opacity-40"
             onClick={onRefreshFx}
-            disabled={!onRefreshFx || isExternalQuoteDisabled}
+            disabled={!onRefreshFx || !canUseExternalQuotes}
             title={
-              isExternalQuoteDisabled
-                ? "公開版では外部通信を避けるため、為替取得は無効です"
+              !canUseExternalQuotes
+                ? isExternalQuoteConsentRequired
+                  ? "外部取得OFFです。ONにすると為替取得を使えます"
+                  : "外部取得は無効です"
                 : "USD/JPY為替レートを取得し、登録済み建玉すべてに一括反映"
             }
           >
@@ -600,7 +739,7 @@ function AppHeader({
               ? "DEMO口座ワークスペース: 開発・練習用です。実取引データとは分けて保存します。"
               : "REAL口座ワークスペース: 実資金を前提にした管理用です。DEMOとは別保存です。"}
           </span>
-          {quoteStatus ? <span className="font-normal">{quoteStatus}</span> : null}
+          <span className="font-normal">{quoteStatus || externalQuoteModeLabel}</span>
         </div>
       </div>
     </header>

@@ -5,15 +5,17 @@ import type { DenominatorMode, PutIntent, SimulationStatus, StrategyType, TradeS
 import type { WorkspaceMode } from "@/store/useOptionsStore";
 import { calculateDte } from "@/domain/calculations";
 import { NumberInput } from "@/components/ui/NumberInput";
-import { fetchStooqQuote, fetchUsdJpyRate, isExternalQuoteDisabled, normalizeTicker } from "@/lib/marketData";
+import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
 
 type SimulationEditorProps = {
   simulation: TradeSimulation;
   workspace: WorkspaceMode;
+  canUseExternalQuotes: boolean;
+  externalQuoteModeLabel: string;
   onChange: (simulation: TradeSimulation) => void;
 };
 
-export function SimulationEditor({ simulation, workspace, onChange }: SimulationEditorProps) {
+export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, externalQuoteModeLabel, onChange }: SimulationEditorProps) {
   const [quoteStatus, setQuoteStatus] = useState<string>("");
   const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
   const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
@@ -208,10 +210,10 @@ export function SimulationEditor({ simulation, workspace, onChange }: Simulation
               <span>現在株価</span>
               <button
                 className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                title={isExternalQuoteDisabled ? "公開版では外部通信を避けるため無効です" : "公開クオートから現在株価を取得"}
-                disabled={isExternalQuoteDisabled}
+                title={canUseExternalQuotes ? "公開クオートから現在株価を取得" : externalQuoteModeLabel}
+                disabled={!canUseExternalQuotes}
                 onClick={async () => {
-                  if (isExternalQuoteDisabled) return;
+                  if (!canUseExternalQuotes) return;
                   const ticker = normalizeTicker(simulation.ticker);
                   if (!ticker) {
                     setQuoteStatus("先に銘柄ティッカーを入力してください。");
@@ -243,10 +245,10 @@ export function SimulationEditor({ simulation, workspace, onChange }: Simulation
               <span>為替</span>
               <button
                 className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                title={isExternalQuoteDisabled ? "公開版では外部通信を避けるため無効です" : "公開クオートからUSD/JPYを取得"}
-                disabled={isExternalQuoteDisabled}
+                title={canUseExternalQuotes ? "公開クオートからUSD/JPYを取得" : externalQuoteModeLabel}
+                disabled={!canUseExternalQuotes}
                 onClick={async () => {
-                  if (isExternalQuoteDisabled) return;
+                  if (!canUseExternalQuotes) return;
                   setQuoteStatus("USD/JPYを取得中...");
                   try {
                     const quote = await fetchUsdJpyRate();
