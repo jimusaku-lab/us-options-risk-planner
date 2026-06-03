@@ -2,7 +2,7 @@ import type { ChangeEvent } from "react";
 import { useState } from "react";
 import { JapaneseYen, RotateCw } from "lucide-react";
 import type { DenominatorMode, PutIntent, SimulationStatus, StrategyType, TradeSimulation } from "@/types/domain";
-import type { WorkspaceMode } from "@/store/useOptionsStore";
+import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, type WorkspaceMode } from "@/store/useOptionsStore";
 import { calculateDte } from "@/domain/calculations";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
@@ -436,13 +436,13 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
             <>
               <NumberInput
                 label="取引手数料・諸費用（JPY）"
-                value={simulation.brokerCommissionJPY ?? 0}
+                value={simulation.brokerCommissionJPY ?? Number.NaN}
                 suffix="JPY"
                 min={0}
                 onChange={(brokerCommissionJPY) => update({ brokerCommissionJPY })}
               />
               <NumberInput
-                label="USD手数料（任意）"
+                label="取引手数料（USD）"
                 value={simulation.brokerCommissionUSD ?? 0}
                 suffix="USD"
                 min={0}
@@ -451,7 +451,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
             </>
           )}
           <p className="-mt-2 text-xs leading-5 text-slate-500">
-            P口座取引には0.25%を一律上乗せしません。N口座はUSDを主計算、JPYは参考換算です。
+            Saxoの取引チケットに表示される取引手数料をUSDで入力します。JPY欄は、画面上でJPY手数料が確認できる場合だけ入力します。
           </p>
           </div>
         </div>
@@ -585,7 +585,12 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               ["conservative_common", "保守的共通分母"],
             ]}
           />
-          <NumberInput label="NISA等 比較年率" value={simulation.nisaExpectedAnnualReturnPct ?? 6} suffix="%" onChange={(nisaExpectedAnnualReturnPct) => update({ nisaExpectedAnnualReturnPct })} />
+          <NumberInput
+            label="NISA等 比較年率"
+            value={simulation.nisaExpectedAnnualReturnPct ?? DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT}
+            suffix="%"
+            onChange={(nisaExpectedAnnualReturnPct) => update({ nisaExpectedAnnualReturnPct })}
+          />
         </div>
       </div>
 

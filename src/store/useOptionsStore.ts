@@ -87,6 +87,9 @@ type OptionsStore = {
   updateSettings: (settings: Partial<AppSettings>) => void;
 };
 
+export const DEFAULT_BROKER_COMMISSION_USD = 2.25;
+export const DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT = 9;
+
 function loadJson<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   const raw = window.localStorage.getItem(key);
@@ -246,11 +249,19 @@ function repairWheelCyclePhase(cycle: WheelCycle, simulations: TradeSimulation[]
   return cycle;
 }
 
-const initialSettings = loadJson<AppSettings>(SETTINGS_KEY, {
+const storedSettings = loadJson<AppSettings>(SETTINGS_KEY, {
   beginnerMode: true,
   defaultMarginBufferMultiplier: 2,
-  defaultNisaExpectedAnnualReturnPct: 6,
+  defaultNisaExpectedAnnualReturnPct: DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT,
 });
+
+const initialSettings: AppSettings = {
+  ...storedSettings,
+  defaultNisaExpectedAnnualReturnPct:
+    storedSettings.defaultNisaExpectedAnnualReturnPct === 6
+      ? DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT
+      : storedSettings.defaultNisaExpectedAnnualReturnPct,
+};
 
 function createBlankSimulation(workspace: WorkspaceMode, settings: AppSettings): TradeSimulation {
   const today = new Date();
@@ -321,6 +332,7 @@ function createBlankSimulation(workspace: WorkspaceMode, settings: AppSettings):
     },
     taxProfileId: "japan_derivative_separate_tax_user_confirm",
     nisaExpectedAnnualReturnPct: settings.defaultNisaExpectedAnnualReturnPct,
+    brokerCommissionUSD: DEFAULT_BROKER_COMMISSION_USD,
     beginnerMode: settings.beginnerMode,
     fixtureMeta:
       workspace === "demo"

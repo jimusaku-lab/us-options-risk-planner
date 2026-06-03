@@ -28,7 +28,7 @@ import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
 import { fetchStooqQuote, fetchUsdJpyRate, isExternalQuoteConsentRequired, isExternalQuoteDisabled, normalizeTicker } from "@/lib/marketData";
 import { useCandidatesStore } from "@/store/useCandidatesStore";
-import { useOptionsStore } from "@/store/useOptionsStore";
+import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, useOptionsStore } from "@/store/useOptionsStore";
 import type { CandidateSymbol } from "@/types/candidates";
 
 export default function App() {
@@ -356,7 +356,7 @@ export default function App() {
     netProfitJPY: taxResult.netProfitJPY,
     denominatorJPY: primary.amountJPY,
     days: selected.dte,
-    expectedAnnualReturnPct: selected.nisaExpectedAnnualReturnPct ?? 6,
+    expectedAnnualReturnPct: selected.nisaExpectedAnnualReturnPct ?? DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT,
     taxRatePct: taxProfile.taxRatePct,
   });
   const warnings = generateRiskWarnings(selectedWithAccount);

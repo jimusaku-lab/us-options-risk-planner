@@ -1,5 +1,5 @@
 import type { CandidateSymbol } from "@/types/candidates";
-import type { AppSettings, WorkspaceMode } from "@/store/useOptionsStore";
+import { DEFAULT_BROKER_COMMISSION_USD, type AppSettings, type WorkspaceMode } from "@/store/useOptionsStore";
 import type { StrategyType, TradeSimulation } from "@/types/domain";
 
 function addDays(date: Date, days: number): string {
@@ -75,6 +75,7 @@ export function createSimulationFromCandidate(params: {
     },
     taxProfileId: "japan_derivative_separate_tax_user_confirm",
     nisaExpectedAnnualReturnPct: params.settings.defaultNisaExpectedAnnualReturnPct,
+    brokerCommissionUSD: DEFAULT_BROKER_COMMISSION_USD,
     beginnerMode: params.settings.beginnerMode,
     notes: [
       `TradingView候補から作成: ${params.candidate.symbol}`,
