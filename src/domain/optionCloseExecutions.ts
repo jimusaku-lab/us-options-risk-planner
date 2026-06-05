@@ -1,4 +1,5 @@
 import type { Currency, OptionCloseExecution, OptionLeg, TradeSimulation } from "@/types/domain";
+import { formatLocalDate } from "@/lib/date";
 import { calculateAnnualReturnPercentByCurrency } from "./calculations";
 import { calculateDenominators, getPrimaryDenominator } from "./denominators";
 import { getEntryExecutionCostForLegJPY, getEntryExecutionCostForLegUSD } from "./optionEntryExecutions";
@@ -47,12 +48,12 @@ export function createOptionCloseExecutionDraft(params: {
   closeKind?: "buyback" | "expired";
 }): OptionCloseExecution {
   const closeKind = params.closeKind ?? "buyback";
-  const today = params.closeDate ?? (closeKind === "expired" ? params.simulation.expiryDate : new Date().toISOString().slice(0, 10));
+  const closeDate = params.closeDate ?? formatLocalDate();
   return {
     id: `close-${params.leg.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     legId: params.leg.id,
     closeKind,
-    closeDate: today,
+    closeDate,
     contracts: params.leg.quantity,
     closePriceUSD: params.closePriceUSD,
     commissionUSD: closeKind === "expired" ? 0 : 2.25,

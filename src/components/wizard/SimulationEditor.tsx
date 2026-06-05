@@ -9,6 +9,7 @@ import { calculateOptionEntryExecutionSummary, createOptionEntryExecutionDraft }
 import { calculateOptionCloseExecutionResults, createOptionCloseExecutionDraft } from "@/domain/optionCloseExecutions";
 import { getStatusLabel } from "@/domain/strategyLabels";
 import { NumberInput } from "@/components/ui/NumberInput";
+import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
 
@@ -40,10 +41,11 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const needsBrokerMarginInput = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "custom"].includes(
     simulation.strategyType,
   );
+  const defaultEventDate = formatLocalDate();
   const defaultStockSettlement = {
     enabled: false,
     kind: "manual_sale" as const,
-    settlementDate: simulation.expiryDate,
+    settlementDate: defaultEventDate,
     shares: simulation.stockPosition?.shares ?? 100,
     sellPriceUSD: callLeg?.strikeUSD || simulation.currentPriceUSD,
     costBasisUSD: simulation.stockPosition?.averageCostUSD ?? simulation.currentPriceUSD,
@@ -54,7 +56,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const stockSettlement = simulation.stockSettlement ?? defaultStockSettlement;
   const defaultStockAcquisition = {
     enabled: false,
-    acquisitionDate: simulation.expiryDate,
+    acquisitionDate: defaultEventDate,
     shares: (putLeg?.quantity ?? 1) * 100,
     priceUSD: putLeg?.strikeUSD ?? simulation.currentPriceUSD,
     accountEnvironment: simulation.accountEnvironment,
@@ -315,7 +317,6 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
             simulation,
             leg,
             closeKind: "expired",
-            closeDate: simulation.expiryDate,
           }),
         );
       if (drafts.length > 0) scrollToEditorAnchor("option-close-executions");
@@ -334,7 +335,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
       patch.stockAcquisition = {
         ...defaultStockAcquisition,
         enabled: true,
-        acquisitionDate: simulation.expiryDate,
+        acquisitionDate: defaultEventDate,
         shares: putShares,
         priceUSD: putStrike,
         accountEnvironment: simulation.accountEnvironment,
@@ -347,7 +348,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
         ...defaultStockSettlement,
         enabled: true,
         kind: "covered_call_assignment",
-        settlementDate: simulation.expiryDate,
+        settlementDate: defaultEventDate,
         shares: callShares,
         sellPriceUSD: callStrike,
         costBasisUSD: simulation.stockPosition?.averageCostUSD ?? simulation.currentPriceUSD,
@@ -410,7 +411,6 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           leg,
           closePriceUSD: leg.closeCostUSD ?? leg.closePlan?.closePriceUSD,
           closeKind: simulation.status === "expired" ? "expired" : "buyback",
-          closeDate: simulation.status === "expired" ? simulation.expiryDate : undefined,
         }),
       ],
     });

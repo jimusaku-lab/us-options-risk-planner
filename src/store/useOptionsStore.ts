@@ -14,6 +14,7 @@ import type {
 } from "@/types/domain";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import { getDefaultExitOrderPlan, normalizeExitOrderPlan, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
+import { addLocalDays, formatLocalDate } from "@/lib/date";
 
 export type WorkspaceMode = "demo" | "live";
 
@@ -256,7 +257,7 @@ function normalizeWheelCycle(cycle: LegacyWheelCycle): WheelCycle {
     referenceFxRateJPY: cycle.referenceFxRateJPY,
     eventIds: [],
     linkedSimulationIds: cycle.trades ?? [],
-    openedAt: new Date().toISOString().slice(0, 10),
+    openedAt: formatLocalDate(),
   };
 }
 
@@ -301,10 +302,8 @@ const initialSettings: AppSettings = {
 
 function createBlankSimulation(workspace: WorkspaceMode, settings: AppSettings): TradeSimulation {
   const today = new Date();
-  const expiry = new Date(today);
-  expiry.setDate(today.getDate() + 45);
-  const entryDate = today.toISOString().slice(0, 10);
-  const expiryDate = expiry.toISOString().slice(0, 10);
+  const entryDate = formatLocalDate(today);
+  const expiryDate = formatLocalDate(addLocalDays(today, 45));
   return {
     id: `${workspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     status: "planned",
@@ -670,7 +669,7 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
         fromAccountCode: "P",
         toAccountCode: "N",
         shares,
-        transferDate: new Date().toISOString().slice(0, 10),
+        transferDate: formatLocalDate(),
         costBasisUSD: normalized.stockPosition?.averageCostUSD ?? normalized.currentPriceUSD,
         sourceSimulationId: normalized.id,
         memo: "P口座で取得した株式をN口座ホイールへ移管。売却損益には含めません。",

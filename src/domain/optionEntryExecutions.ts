@@ -1,4 +1,5 @@
 import type { Currency, OptionEntryExecution, OptionLeg, TradeSimulation } from "@/types/domain";
+import { formatLocalDate } from "@/lib/date";
 
 const CONTRACT_SIZE = 100;
 
@@ -16,13 +17,14 @@ export type OptionEntryExecutionSummary = {
 export function createOptionEntryExecutionDraft(params: {
   simulation: TradeSimulation;
   leg: OptionLeg;
+  tradeDate?: string;
 }): OptionEntryExecution {
   const isN = params.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
   const fxRate = isN ? params.simulation.referenceFxRateJPY ?? params.simulation.fxRateJPY : params.simulation.fxRateJPY;
   return {
     id: `entry-${params.leg.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     legId: params.leg.id,
-    tradeDate: params.simulation.entryDate,
+    tradeDate: params.tradeDate ?? formatLocalDate(),
     contracts: params.leg.quantity,
     fillPriceUSD: params.leg.premiumUSD,
     settlementCurrency: isN ? "USD" : "JPY",

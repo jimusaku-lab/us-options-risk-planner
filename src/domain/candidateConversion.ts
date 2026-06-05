@@ -1,11 +1,10 @@
 import type { CandidateSymbol } from "@/types/candidates";
 import { DEFAULT_BROKER_COMMISSION_USD, type AppSettings, type WorkspaceMode } from "@/store/useOptionsStore";
 import type { StrategyType, TradeSimulation } from "@/types/domain";
+import { addLocalDays, formatLocalDate } from "@/lib/date";
 
 function addDays(date: Date, days: number): string {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next.toISOString().slice(0, 10);
+  return formatLocalDate(addLocalDays(date, days));
 }
 
 export function createSimulationFromCandidate(params: {
@@ -16,7 +15,7 @@ export function createSimulationFromCandidate(params: {
   fxRateJPY?: number;
 }): TradeSimulation {
   const today = new Date();
-  const entryDate = today.toISOString().slice(0, 10);
+  const entryDate = formatLocalDate(today);
   const expiryDate = addDays(today, 45);
   const id = `${params.workspace}-candidate-${params.candidate.symbol}-${Date.now()}`;
   const isCoveredCall = params.strategyType === "covered_call";
