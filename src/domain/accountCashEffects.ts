@@ -53,7 +53,7 @@ function getExecutionCashAmount(simulation: TradeSimulation, execution: OptionCl
   if (execution.brokerBookedAmountJPY === undefined || Number.isNaN(execution.brokerBookedAmountJPY)) {
     return {
       currency: "JPY",
-      missingReason: "P口座の現金残高へ反映するには、Saxo履歴の記帳額JPYを照合用詳細に入力してください。",
+      missingReason: "記帳額JPYが未入力のため、現金残高へ反映できません。",
     };
   }
 
@@ -78,10 +78,13 @@ export function calculatePendingAccountCashEffects(
 
       const label = `${simulation.ticker || simulation.name} ${leg ? getLegLabel(leg) : "決済実績"}`;
       const detail =
-        cashEffect.missingReason ??
-        (accountCode === "P"
-          ? "Saxoの記帳額JPYを現金残高へ反映します。実現損益JPYではありません。"
-          : "N口座の買戻しコストとUSD手数料をUSD現金残高へ反映します。");
+        accountCode === "P"
+          ? cashEffect.missingReason
+            ? "現金残高へ反映する場合は、Saxo履歴の記帳額JPYが必要です。反映しない場合は未入力のままで問題ありません。"
+            : "Saxoの記帳額JPYを現金残高へ反映します。実現損益JPYではありません。"
+          : cashEffect.missingReason
+            ? "N口座の現金残高へ反映するための決済情報が不足しています。"
+            : "N口座の買戻しコストとUSD手数料をUSD現金残高へ反映します。";
 
       return [
         {

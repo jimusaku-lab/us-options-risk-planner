@@ -261,16 +261,23 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
       stopLossEnabled: isManualExitMode ? legPlan.stopLossEnabled : ["closing_stop", "oco", "ifd_oco"].includes(brokerOrderType),
     });
   };
+  const findEditorFocusInput = (target: HTMLElement | null, anchorId: string): HTMLInputElement | null | undefined => {
+    if (!target) return null;
+    if (anchorId.startsWith("option-close-execution-")) {
+      target.querySelector<HTMLDetailsElement>("details")?.setAttribute("open", "");
+      return target.querySelector<HTMLInputElement>('input[id^="broker-booked-amount-jpy-"]') ?? target.querySelector<HTMLInputElement>("input");
+    }
+    if (anchorId === "option-close-executions") {
+      return target.querySelector<HTMLInputElement>("#broker-realized-pnl-jpy") ?? target.querySelector<HTMLInputElement>("input");
+    }
+    return target.querySelector<HTMLInputElement>("input");
+  };
   const scrollToEditorAnchor = (anchorId: string) => {
     setHighlightedAnchorId(anchorId);
     window.setTimeout(() => {
       const target = document.getElementById(anchorId);
       target?.scrollIntoView({ behavior: "smooth", block: "center" });
-      const input =
-        anchorId === "option-close-executions"
-          ? target?.querySelector<HTMLInputElement>("#broker-realized-pnl-jpy") ?? target?.querySelector<HTMLInputElement>("input")
-          : target?.querySelector<HTMLInputElement>("input");
-      input?.focus();
+      findEditorFocusInput(target, anchorId)?.focus();
     }, 80);
     window.setTimeout(() => setHighlightedAnchorId((current) => (current === anchorId ? null : current)), 4500);
   };
@@ -417,11 +424,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     window.setTimeout(() => {
       const target = document.getElementById(focusRequest.anchorId);
       target?.scrollIntoView({ behavior: "smooth", block: "center" });
-      const input =
-        focusRequest.anchorId === "option-close-executions"
-          ? target?.querySelector<HTMLInputElement>("#broker-realized-pnl-jpy") ?? target?.querySelector<HTMLInputElement>("input")
-          : target?.querySelector<HTMLInputElement>("input");
-      input?.focus();
+      findEditorFocusInput(target, focusRequest.anchorId)?.focus();
       setHighlightedAnchorId(focusRequest.anchorId);
       window.setTimeout(() => setHighlightedAnchorId((current) => (current === focusRequest.anchorId ? null : current)), 4500);
     }, 80);
@@ -1554,6 +1557,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           ) : null}
           <div className="mt-3 grid gap-3">
             {optionCloseExecutions.map((execution) => {
+              const executionAnchorId = `option-close-execution-${execution.id}`;
               const result = optionCloseResults.find((item) => item.execution.id === execution.id);
               const selectedLeg = shortExitLegs.find((leg) => leg.id === execution.legId) ?? shortExitLegs[0];
               const isExpiredExecution = execution.closeKind === "expired";
@@ -1576,7 +1580,13 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                 closeDetailCostTotal > 0 &&
                 Math.abs(Math.abs(execution.brokerTransactionCostJPY) - closeDetailCostTotal) > 50;
               return (
-                <div key={execution.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div
+                  key={execution.id}
+                  id={executionAnchorId}
+                  className={`rounded-md border bg-slate-50 p-3 ${
+                    highlightedAnchorId === executionAnchorId ? "border-amber-400 ring-2 ring-amber-200" : "border-slate-200"
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="text-sm font-bold text-slate-950">
                       {selectedLeg ? getOptionLegLabel(selectedLeg) : "対象脚未選択"}
@@ -1726,6 +1736,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                           />
                           <NumberInput
                             label="記帳額 JPY"
+                            inputId={`broker-booked-amount-jpy-${execution.id}`}
                             value={execution.brokerBookedAmountJPY ?? Number.NaN}
                             suffix="JPY"
                             onChange={(brokerBookedAmountJPY) => updateOptionCloseExecution(execution.id, { brokerBookedAmountJPY })}

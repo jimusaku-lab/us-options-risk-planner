@@ -12,6 +12,7 @@ export function AccountOverview({
   referenceFxRateJPY,
   pendingCashEffects = [],
   onApplyCashEffect,
+  onResolveCashEffect,
   onChange,
 }: {
   workspace: WorkspaceMode;
@@ -19,6 +20,7 @@ export function AccountOverview({
   referenceFxRateJPY?: number;
   pendingCashEffects?: PendingAccountCashEffect[];
   onApplyCashEffect?: (effect: PendingAccountCashEffect) => void;
+  onResolveCashEffect?: (effect: PendingAccountCashEffect) => void;
   onChange: (accountCode: SaxoAccountCode, accountInputs: Partial<AccountState>) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -72,7 +74,7 @@ export function AccountOverview({
             <div>
               <h3 className="text-sm font-bold text-amber-950">未反映の現金増減</h3>
               <p className="mt-1 text-xs leading-5 text-amber-900">
-                口座残高はSaxo画面からの転記が原則です。ここで反映する場合は、同じ決済実績を二重に反映しないよう履歴を残します。
+                口座残高はSaxo画面からの転記が原則です。ここで反映する場合だけ、同じ決済実績を二重に反映しないよう履歴を残します。
               </p>
             </div>
           </div>
@@ -88,15 +90,31 @@ export function AccountOverview({
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="numeric-input text-right font-bold text-slate-950">
-                    {effect.amount === undefined ? "未入力" : effect.currency === "USD" ? formatSignedUSD(effect.amount) : formatJPY(effect.amount, { signed: true })}
+                    {effect.amount === undefined
+                      ? effect.accountCode === "P"
+                        ? "記帳額未入力"
+                        : "情報不足"
+                      : effect.currency === "USD"
+                        ? formatSignedUSD(effect.amount)
+                        : formatJPY(effect.amount, { signed: true })}
                   </div>
-                  <button
-                    className="rounded-md border border-amber-300 px-3 py-2 text-xs font-bold text-amber-950 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!effect.canApply || effect.amount === undefined || !onApplyCashEffect}
-                    onClick={() => onApplyCashEffect?.(effect)}
-                  >
-                    現金残高に反映
-                  </button>
+                  {effect.amount === undefined ? (
+                    <button
+                      className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-950 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={!onResolveCashEffect}
+                      onClick={() => onResolveCashEffect?.(effect)}
+                    >
+                      {effect.accountCode === "P" ? "記帳額JPYを入力" : "決済情報を入力"}
+                    </button>
+                  ) : (
+                    <button
+                      className="rounded-md border border-amber-300 px-3 py-2 text-xs font-bold text-amber-950 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={!effect.canApply || !onApplyCashEffect}
+                      onClick={() => onApplyCashEffect?.(effect)}
+                    >
+                      現金残高に反映
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { ChevronUp, Database, Download, FileJson, Globe2, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
 import { calculatePendingAccountCashEffects, createAccountCashAdjustment } from "@/domain/accountCashEffects";
+import type { PendingAccountCashEffect } from "@/domain/accountCashEffects";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
@@ -272,6 +273,11 @@ export default function App() {
     setIsEditorOpen(true);
     setEditorFocusRequest({ anchorId, requestId: Date.now() });
   };
+  const goToPendingCashEffectSource = (effect: PendingAccountCashEffect) => {
+    selectSimulation(effect.sourceSimulationId);
+    setIsEditorOpen(true);
+    setEditorFocusRequest({ anchorId: `option-close-execution-${effect.sourceExecutionId}`, requestId: Date.now() });
+  };
   const acceptFirstRunNotice = () => {
     window.localStorage.setItem("us-options-first-run-notice-accepted", "true");
     setHasAcceptedNotice(true);
@@ -334,6 +340,7 @@ export default function App() {
             accountInputs={accountInputs}
             pendingCashEffects={pendingCashEffects}
             onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
+            onResolveCashEffect={goToPendingCashEffectSource}
             onChange={updateAccountState}
           />
           <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
@@ -503,6 +510,7 @@ export default function App() {
           referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
           pendingCashEffects={pendingCashEffects}
           onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
+          onResolveCashEffect={goToPendingCashEffectSource}
           onChange={updateAccountState}
         />
         {isEditorOpen ? (
