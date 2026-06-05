@@ -1,4 +1,4 @@
-import type { AccountState, StockTransferEvent, TradeSimulation, WheelCycle, WheelEvent } from "@/types/domain";
+import type { AccountState, ExitOrderPlan, OptionCloseExecution, OptionEntryExecution, StockTransferEvent, TradeSimulation, WheelCycle, WheelEvent } from "@/types/domain";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
@@ -36,6 +36,26 @@ export function exportWorkspaceJson({
       wheelEvents: wheelEvents ?? [],
       fxTransfers: [],
       stockTransfers: stockTransfers ?? [],
+      exitOrderPlans: simulations
+        .flatMap((simulation) =>
+          (simulation.exitOrderPlans ?? (simulation.exitOrderPlan ? [simulation.exitOrderPlan] : [])).map((plan) => ({
+            simulationId: simulation.id,
+            legId: plan.legId,
+            plan,
+          })),
+        ),
+      optionCloseExecutions: simulations.flatMap((simulation) =>
+        (simulation.optionCloseExecutions ?? []).map((execution) => ({
+          simulationId: simulation.id,
+          execution,
+        })),
+      ),
+      optionEntryExecutions: simulations.flatMap((simulation) =>
+        (simulation.optionEntryExecutions ?? []).map((execution) => ({
+          simulationId: simulation.id,
+          execution,
+        })),
+      ),
     },
     null,
     2,
@@ -48,6 +68,9 @@ export type ParsedWorkspaceJson = {
   wheelCycles?: WheelCycle[];
   wheelEvents?: WheelEvent[];
   stockTransfers?: StockTransferEvent[];
+  exitOrderPlans?: Array<{ simulationId: string; legId?: string; plan: ExitOrderPlan }>;
+  optionCloseExecutions?: Array<{ simulationId: string; execution: OptionCloseExecution }>;
+  optionEntryExecutions?: Array<{ simulationId: string; execution: OptionEntryExecution }>;
 };
 
 export function parseWorkspaceJson(text: string): ParsedWorkspaceJson {
@@ -60,14 +83,48 @@ export function parseWorkspaceJson(text: string): ParsedWorkspaceJson {
       wheelCycles?: unknown;
       wheelEvents?: unknown;
       stockTransfers?: unknown;
+      exitOrderPlans?: unknown;
+      optionCloseExecutions?: unknown;
+      optionEntryExecutions?: unknown;
     };
     if (Array.isArray(workspace.simulations)) {
+      const exitOrderPlans = Array.isArray(workspace.exitOrderPlans)
+        ? (workspace.exitOrderPlans as Array<{ simulationId: string; legId?: string; plan: ExitOrderPlan }>)
+        : undefined;
+      const plansBySimulationId = new Map<string, ExitOrderPlan[]>();
+      for (const item of exitOrderPlans ?? []) {
+        plansBySimulationId.set(item.simulationId, [...(plansBySimulationId.get(item.simulationId) ?? []), { ...item.plan, legId: item.plan.legId ?? item.legId }]);
+      }
+      const optionCloseExecutions = Array.isArray(workspace.optionCloseExecutions)
+        ? (workspace.optionCloseExecutions as Array<{ simulationId: string; execution: OptionCloseExecution }>)
+        : undefined;
+      const executionsBySimulationId = new Map<string, OptionCloseExecution[]>();
+      for (const item of optionCloseExecutions ?? []) {
+        executionsBySimulationId.set(item.simulationId, [...(executionsBySimulationId.get(item.simulationId) ?? []), item.execution]);
+      }
+      const optionEntryExecutions = Array.isArray(workspace.optionEntryExecutions)
+        ? (workspace.optionEntryExecutions as Array<{ simulationId: string; execution: OptionEntryExecution }>)
+        : undefined;
+      const entryExecutionsBySimulationId = new Map<string, OptionEntryExecution[]>();
+      for (const item of optionEntryExecutions ?? []) {
+        entryExecutionsBySimulationId.set(item.simulationId, [...(entryExecutionsBySimulationId.get(item.simulationId) ?? []), item.execution]);
+      }
+      const simulations = (workspace.simulations as TradeSimulation[]).map((simulation) => ({
+        ...simulation,
+        exitOrderPlans: simulation.exitOrderPlans ?? plansBySimulationId.get(simulation.id),
+        exitOrderPlan: simulation.exitOrderPlan ?? plansBySimulationId.get(simulation.id)?.[0],
+        optionEntryExecutions: simulation.optionEntryExecutions ?? entryExecutionsBySimulationId.get(simulation.id) ?? [],
+        optionCloseExecutions: simulation.optionCloseExecutions ?? executionsBySimulationId.get(simulation.id) ?? [],
+      }));
       return {
-        simulations: workspace.simulations as TradeSimulation[],
+        simulations,
         accountStates: Array.isArray(workspace.accountStates) ? (workspace.accountStates as AccountState[]) : undefined,
         wheelCycles: Array.isArray(workspace.wheelCycles) ? (workspace.wheelCycles as WheelCycle[]) : undefined,
         wheelEvents: Array.isArray(workspace.wheelEvents) ? (workspace.wheelEvents as WheelEvent[]) : undefined,
         stockTransfers: Array.isArray(workspace.stockTransfers) ? (workspace.stockTransfers as StockTransferEvent[]) : undefined,
+        exitOrderPlans,
+        optionCloseExecutions,
+        optionEntryExecutions,
       };
     }
   }

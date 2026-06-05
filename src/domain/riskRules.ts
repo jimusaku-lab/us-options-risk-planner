@@ -1,4 +1,4 @@
-import type { ChecklistItem, RiskWarning, TradeSimulation } from "@/types/domain";
+import type { ChecklistItem, OptionLeg, RiskWarning, TradeSimulation } from "@/types/domain";
 import {
   calculatePutAssignmentCapitalTotalJPY,
   calculatePutAssignmentCapitalTotalUSD,
@@ -6,20 +6,112 @@ import {
   getShortCallLegs,
   getShortPutLegs,
 } from "./calculations";
+import { getExitDeadlineInfo, getExitOrderLossAmount, getExitOrderPlan, getExitOrderPlanForLeg, getExitOrderStopValue, isAvoidAssignmentPut } from "./exitOrderPlan";
+import { hasUnconfirmedOptionEntryExecutions } from "./optionEntryExecutions";
+import { calculateOptionCloseExecutionResults } from "./optionCloseExecutions";
 
 function hasAvoidPut(simulation: TradeSimulation): boolean {
-  return getShortPutLegs(simulation).some(
-    (leg) =>
-      leg.putIntent === "avoid_assignment" ||
-      leg.putIntent === "do_not_want_to_buy" ||
-      leg.putIntent === "cannot_buy",
-  );
+  return isAvoidAssignmentPut(simulation);
+}
+
+function closeDecisionAction(simulation: TradeSimulation, leg: OptionLeg): Pick<RiskWarning, "actionAnchorId" | "actionLabel" | "actionLegId" | "actionLegType" | "actionSimulationId"> {
+  return {
+    actionLabel: "反対売買判断へ",
+    actionSimulationId: simulation.id,
+    actionLegId: leg.id,
+    actionLegType: leg.type,
+    actionAnchorId: `close-decision-${leg.type}-${leg.id}`,
+  };
 }
 
 export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[] {
   const warnings: RiskWarning[] = [];
   const uncoveredCallShares = calculateUncoveredCallShares(simulation);
   const avoidPut = hasAvoidPut(simulation);
+  const exitOrderPlan = getExitOrderPlan(simulation);
+
+  const closeExecutionResults = calculateOptionCloseExecutionResults(simulation);
+  if (hasUnconfirmedOptionEntryExecutions(simulation)) {
+    warnings.push({
+      id: "option-entry-unconfirmed",
+      severity: "warning",
+      title: "約定情報未確認",
+      message: "建玉中ですが、建玉約定確認が未完了です。P口座ではSaxo取引履歴のプレミアムJPYと取引費用JPYを確認してください。",
+      blocking: false,
+      actionLabel: "建玉約定確認へ",
+      actionSimulationId: simulation.id,
+      actionAnchorId: "option-entry-executions",
+    });
+  }
+  if (simulation.status === "closed" && closeExecutionResults.length === 0) {
+    warnings.push({
+      id: "closed-without-option-close-execution",
+      severity: "danger",
+      title: "決済実績が未入力です",
+      message: "決済済みですが、決済実績が未入力です。Saxo注文履歴から約定価格と手数料を入力してください。",
+      blocking: false,
+      actionLabel: "決済実績を入力",
+      actionSimulationId: simulation.id,
+      actionAnchorId: "option-close-executions",
+    });
+  }
+
+  if (
+    simulation.status === "expired" &&
+    !(simulation.optionCloseExecutions ?? []).some((execution) => execution.closeKind === "expired")
+  ) {
+    warnings.push({
+      id: "expired-without-option-expiry-record",
+      severity: "danger",
+      title: "満期終了履歴が未入力です",
+      message: "満期終了ですが、買戻しなしの満期終了履歴が未入力です。7. 決済実績で満期終了モードの記録を確認してください。",
+      blocking: false,
+      actionLabel: "満期終了履歴を入力",
+      actionSimulationId: simulation.id,
+      actionAnchorId: "option-close-executions",
+    });
+  }
+
+  if (simulation.status === "assigned") {
+    const hasPut = getShortPutLegs(simulation).length > 0;
+    const hasCall = getShortCallLegs(simulation).length > 0;
+    if (hasPut && !simulation.stockAcquisition?.enabled) {
+      warnings.push({
+        id: "assigned-put-without-stock-acquisition",
+        severity: "danger",
+        title: "株式取得記録が未入力です",
+        message: "P売りが権利行使済みですが、現物株の取得記録が未入力です。株式取得は譲渡損益ではありませんが、取得株数と取得単価を記録してください。",
+        blocking: false,
+        actionLabel: "現物株の取得記録へ",
+        actionSimulationId: simulation.id,
+        actionAnchorId: "stock-acquisition-record",
+      });
+    }
+    if (hasCall && !simulation.stockSettlement?.enabled) {
+      warnings.push({
+        id: "assigned-call-without-stock-settlement",
+        severity: "danger",
+        title: "株式譲渡記録が未入力です",
+        message: "C売りが権利行使済みですが、現物株の譲渡記録が未入力です。オプション損益と株式譲渡損益は自動通算しません。",
+        blocking: false,
+        actionLabel: "現物株の譲渡記録へ",
+        actionSimulationId: simulation.id,
+        actionAnchorId: "stock-settlement-record",
+      });
+    }
+    if (hasCall && uncoveredCallShares > 0) {
+      warnings.push({
+        id: "assigned-uncovered-call",
+        severity: "danger",
+        title: "現物不足のC売りが権利行使済みです",
+        message: "現物株が不足しているC売りが権利行使済みです。Saxo上の決済処理、株式手当、損益を確認して記録してください。",
+        blocking: true,
+        actionLabel: "決済実績とメモを確認",
+        actionSimulationId: simulation.id,
+        actionAnchorId: "option-close-executions",
+      });
+    }
+  }
 
   if (!Number.isFinite(simulation.fxRateJPY) || simulation.fxRateJPY <= 0) {
     warnings.push({
@@ -51,6 +143,7 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
   }
 
   if (uncoveredCallShares > 0) {
+    const firstCall = getShortCallLegs(simulation)[0];
     warnings.push({
       id: simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "n-covered-call-share-shortage" : "uncovered-call",
       severity: "danger",
@@ -58,8 +151,9 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
       message:
         simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
           ? `N口座の保有株だけで確認します。未カバー株数は${uncoveredCallShares}株です。P口座株や未移管株はN口座のカバーに使いません。`
-          : `このコール売りは完全にはカバーされていません。未カバー株数は${uncoveredCallShares}株です。`,
+          : `このC売りは完全にはカバーされていません。C売り対象株数と保有株数を分けて確認してください。未カバー株数は${uncoveredCallShares}株です。`,
       blocking: simulation.beginnerMode ?? true,
+      ...(firstCall ? closeDecisionAction(simulation, firstCall) : {}),
     });
   }
 
@@ -76,53 +170,116 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
     uncoveredCallShares > 0 &&
     getShortCallLegs(simulation).some((leg) => leg.hedgeBuyStopUSD === undefined)
   ) {
+    const firstMissingCall = getShortCallLegs(simulation).find((leg) => leg.hedgeBuyStopUSD === undefined);
     warnings.push({
       id: "missing-call-hedge",
       severity: "danger",
       title: "裸コールの上方向ルールが未設定です",
-      message: "裸コール部分があります。買い逆指値などの上方向リスク管理ルールが未設定です。",
+      message: "未カバーC売り部分があります。逆指値ラインなどの上抜け時の買戻し方針が未設定です。",
       blocking: simulation.beginnerMode ?? true,
+      ...(firstMissingCall ? closeDecisionAction(simulation, firstMissingCall) : {}),
     });
   }
 
-  if (avoidPut && !simulation.stopLossRule?.enabled) {
-    warnings.push({
-      id: "avoid-put-no-stop",
-      severity: "danger",
-      title: "損切りルールが未設定です",
-      message: "株を取得したくないプット売りでは、損切りルールが必須です。",
-      blocking: true,
-    });
+  for (const [legIndex, leg] of getShortPutLegs(simulation).entries()) {
+    const legAvoidPut =
+      leg.putIntent === "avoid_assignment" || leg.putIntent === "do_not_want_to_buy" || leg.putIntent === "cannot_buy";
+    const legExitOrderPlan = getExitOrderPlanForLeg(simulation, leg);
+    if (legAvoidPut && !legExitOrderPlan.stopLossEnabled) {
+      warnings.push({
+        id: legIndex === 0 ? "avoid-put-no-stop" : `avoid-put-no-stop-${leg.id}`,
+        severity: "danger",
+        title: "P売りの損切りルールが未設定です",
+        message: "株を取得したくないP売りでは、そのP売り脚に損切りルールが必須です。",
+        blocking: true,
+        ...closeDecisionAction(simulation, leg),
+      });
+    }
+    const legStopValue =
+      legExitOrderPlan.stopLossType === "loss_amount"
+        ? getExitOrderLossAmount(legExitOrderPlan, simulation)
+        : getExitOrderStopValue(legExitOrderPlan);
+    if (legAvoidPut && legExitOrderPlan.stopLossEnabled && legStopValue <= 0) {
+      warnings.push({
+        id: legIndex === 0 ? "avoid-put-empty-stop-value" : `avoid-put-empty-stop-value-${leg.id}`,
+        severity: "danger",
+        title: "P売りの損切りルール値が未入力です",
+        message: "損切りルールをONにしたP売り脚には、買戻し価格、株価ライン、損失額のいずれかを入れてください。",
+        blocking: true,
+        ...closeDecisionAction(simulation, leg),
+      });
+    }
+    if (legAvoidPut && !legExitOrderPlan.profitTakeEnabled) {
+      warnings.push({
+        id: legIndex === 0 ? "avoid-put-no-profit-take" : `avoid-put-no-profit-take-${leg.id}`,
+        severity: "danger",
+        title: "P売りの利確ルールが未設定です",
+        message: "株を取得したくないP売りでは、そのP売り脚の利確ルールを注文前に決めてください。",
+        blocking: true,
+        ...closeDecisionAction(simulation, leg),
+      });
+    }
+    if (legAvoidPut && legExitOrderPlan.latestCloseDaysBeforeExpiry === undefined) {
+      warnings.push({
+        id: legIndex === 0 ? "avoid-put-no-close-deadline" : `avoid-put-no-close-deadline-${leg.id}`,
+        severity: "danger",
+        title: "P売りの満期前決済期限が未設定です",
+        message: "満期直前まで放置しないため、そのP売り脚を何日前までに閉じるかを設定してください。",
+        blocking: true,
+        ...closeDecisionAction(simulation, leg),
+      });
+    }
+    const exitDeadline = getExitDeadlineInfo(simulation, legExitOrderPlan);
+    if (exitDeadline.isPast && legExitOrderPlan.latestCloseDaysBeforeExpiryUserSet && ["planned", "open"].includes(simulation.status)) {
+      warnings.push({
+        id: `exit-deadline-past-${leg.id}`,
+        severity: legAvoidPut ? "danger" : "warning",
+        title: `${leg.type === "put" ? "P売り" : "C売り"}の満期前判断期限に到達しています`,
+        message: legAvoidPut
+          ? `満期前の判断期限（${exitDeadline.deadlineDate}）に到達しています。P買戻し価格を反対売買判断で確認してください。`
+          : `設定した決済判断期限（${exitDeadline.deadlineDate}）に到達しています。反対売買判断で現在の買戻し価格を確認してください。`,
+        blocking: legAvoidPut,
+        ...closeDecisionAction(simulation, leg),
+      });
+    }
   }
 
-  if (avoidPut && simulation.stopLossRule?.enabled && simulation.stopLossRule.value <= 0) {
-    warnings.push({
-      id: "avoid-put-empty-stop-value",
-      severity: "danger",
-      title: "損切りルールの値が未入力です",
-      message: "損切りルールをONにした場合は、買戻し価格、株価ライン、損失額のいずれかの数値を入れてください。",
-      blocking: true,
-    });
-  }
-
-  if (avoidPut && !simulation.profitTakeRule?.enabled) {
-    warnings.push({
-      id: "avoid-put-no-profit-take",
-      severity: "danger",
-      title: "利確ルールが未設定です",
-      message: "株を取得したくないプット売りでは、利確ルールを注文前に決めてください。",
-      blocking: true,
-    });
-  }
-
-  if (avoidPut && simulation.profitTakeRule?.latestCloseDaysBeforeExpiry === undefined) {
-    warnings.push({
-      id: "avoid-put-no-close-deadline",
-      severity: "danger",
-      title: "満期前決済期限が未設定です",
-      message: "満期直前まで放置しないため、何日前までに閉じるかを設定してください。",
-      blocking: true,
-    });
+  for (const leg of getShortCallLegs(simulation)) {
+    const nakedCall =
+      leg.callExitIntent === "naked_buyback" ||
+      (uncoveredCallShares > 0 && leg.callExitIntent !== "covered_keep_stock" && simulation.stockPosition?.canSellAtStrike !== false);
+    const keepStockCall = !nakedCall && simulation.stockPosition?.canSellAtStrike === false;
+    const legExitOrderPlan = getExitOrderPlanForLeg(simulation, leg);
+    if (nakedCall) {
+      if (!leg.hedgeBuyStopUSD || !legExitOrderPlan.stopLossBuybackPriceUSD || !getExitOrderLossAmount(legExitOrderPlan, simulation) || !legExitOrderPlan.latestCloseDaysBeforeExpiryUserSet || !leg.nakedCallRiskAcknowledged) {
+        warnings.push({
+          id: `naked-call-exit-rule-missing-${leg.id}`,
+          severity: "danger",
+          title: "未カバーC売りの出口ルールが未設定です",
+          message: "現物なし・上抜け時は買戻し方針では、逆指値ライン、買戻し価格ライン、許容損失額、満期前判断期限、不利約定リスクの確認を入力してください。",
+          blocking: simulation.beginnerMode ?? true,
+          ...closeDecisionAction(simulation, leg),
+        });
+      }
+    }
+    const exitDeadline = getExitDeadlineInfo(simulation, legExitOrderPlan);
+    if (
+      (nakedCall || keepStockCall) &&
+      exitDeadline.isPast &&
+      legExitOrderPlan.latestCloseDaysBeforeExpiryUserSet &&
+      ["planned", "open"].includes(simulation.status)
+    ) {
+      warnings.push({
+        id: `call-exit-deadline-past-${leg.id}`,
+        severity: nakedCall ? "danger" : "warning",
+        title: "C売りの満期前判断期限に到達しています",
+        message: nakedCall
+          ? `現物なしのC売りです。判断期限（${exitDeadline.deadlineDate}）に到達しています。上抜け時の買戻し価格または逆指値ラインを反対売買判断で確認してください。`
+          : `株を残したい方針のC売りです。判断期限（${exitDeadline.deadlineDate}）に到達しています。C買戻し価格を反対売買判断で確認してください。`,
+        blocking: nakedCall && (simulation.beginnerMode ?? true),
+        ...closeDecisionAction(simulation, leg),
+      });
+    }
   }
 
   for (const leg of getShortPutLegs(simulation)) {

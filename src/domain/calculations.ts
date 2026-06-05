@@ -1,4 +1,5 @@
 import type { OptionLeg, StockPosition, TradeSimulation } from "@/types/domain";
+import { calculateOptionEntryExecutionSummary } from "./optionEntryExecutions";
 
 const CONTRACT_SIZE = 100;
 
@@ -147,6 +148,8 @@ export function calculateTotalPremiumPaidUSD(simulation: TradeSimulation): numbe
 }
 
 export function calculateNetInitialPremiumJPY(simulation: TradeSimulation): number {
+  const entrySummary = calculateOptionEntryExecutionSummary(simulation);
+  if (entrySummary?.netPremiumJPY !== undefined) return entrySummary.netPremiumJPY;
   if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
     return calculateNetInitialPremiumUSD(simulation) * (simulation.referenceFxRateJPY ?? simulation.fxRateJPY);
   }
@@ -155,11 +158,15 @@ export function calculateNetInitialPremiumJPY(simulation: TradeSimulation): numb
 }
 
 export function calculateNetInitialPremiumUSD(simulation: TradeSimulation): number {
+  const entrySummary = calculateOptionEntryExecutionSummary(simulation);
+  if (entrySummary?.netPremiumUSD !== undefined) return entrySummary.netPremiumUSD;
   if (simulation.brokerSettlement?.netCashflowUSD !== undefined) return simulation.brokerSettlement.netCashflowUSD;
   return calculateTotalPremiumReceivedUSD(simulation) - calculateTotalPremiumPaidUSD(simulation);
 }
 
 export function calculateTotalFeesJPY(simulation: TradeSimulation): number {
+  const entrySummary = calculateOptionEntryExecutionSummary(simulation);
+  if (entrySummary?.transactionCostJPY !== undefined) return entrySummary.transactionCostJPY;
   if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
     return calculateTotalFeesUSD(simulation) * (simulation.referenceFxRateJPY ?? simulation.fxRateJPY);
   }
@@ -173,6 +180,8 @@ export function calculateTotalFeesJPY(simulation: TradeSimulation): number {
 }
 
 export function calculateTotalFeesUSD(simulation: TradeSimulation): number {
+  const entrySummary = calculateOptionEntryExecutionSummary(simulation);
+  if (entrySummary?.commissionUSD !== undefined) return entrySummary.commissionUSD;
   if (simulation.brokerSettlement) {
     return (
       (simulation.brokerSettlement.commissionUSD ?? 0) +
@@ -189,6 +198,7 @@ export function calculateTotalFeesUSD(simulation: TradeSimulation): number {
 }
 
 export function calculateNetInitialPremiumAfterFeesJPY(simulation: TradeSimulation): number {
+  if (calculateOptionEntryExecutionSummary(simulation)) return calculateNetInitialPremiumJPY(simulation);
   return calculateNetInitialPremiumJPY(simulation) - calculateTotalFeesJPY(simulation);
 }
 

@@ -15,6 +15,7 @@ export function calculateScenarioResults(simulation: TradeSimulation): ScenarioR
   const putIntent = puts[0]?.putIntent;
   const avoidPutAssignment =
     putIntent === "avoid_assignment" || putIntent === "do_not_want_to_buy" || putIntent === "cannot_buy";
+  const hasNakedCall = calls.some((leg) => leg.callExitIntent === "naked_buyback") || (calls.length > 0 && (simulation.stockPosition?.shares ?? 0) < calls.reduce((sum, leg) => sum + leg.quantity * 100, 0));
 
   if (simulation.strategyType === "short_put" && putStrike) {
     const breakeven = Math.max(0, putStrike - putPremium);
@@ -96,6 +97,42 @@ export function calculateScenarioResults(simulation: TradeSimulation): ScenarioR
           "割安取得を狙うプット売りでは、権利行使は戦略上の想定内です。",
           "株を買い受けて保有するだけなら、実現損ではなく評価損・含み損です。",
         ],
+      },
+    ];
+  }
+
+  if (simulation.strategyType === "short_strangle" && callStrike && putStrike) {
+    return [
+      {
+        id: "short-strangle-range",
+        title: "レンジ内シナリオ",
+        stockPriceCondition: `${putStrike} USDから${callStrike} USDの間`,
+        premiumJPY,
+        stockChange: "P売りとC売りの両方が権利行使されず、プレミアム獲得を想定",
+        nextAction: "利益が十分なら、各脚の買戻し価格を確認して途中決済するか満期まで待つかを決める",
+        notes: ["P脚とC脚は別々の反対売買判断で確認します。"],
+      },
+      {
+        id: "short-strangle-downside",
+        title: "下抜けシナリオ",
+        stockPriceCondition: `株価が${putStrike} USD未満`,
+        premiumJPY,
+        stockChange: "P売りの権利行使、またはP買戻し判断が必要になる可能性",
+        nextAction: "下落時に買い受ける資金を確認し、株を取得するかPを買い戻すかを決める",
+        notes: ["P権利行使時には、権利行使価格で株を買い受ける資金が必要になります。"],
+      },
+      {
+        id: "short-strangle-upside",
+        title: "上抜けシナリオ",
+        stockPriceCondition: `株価が${callStrike} USD以上`,
+        premiumJPY,
+        stockChange: hasNakedCall ? "未カバーC売りの買戻し、または権利行使リスクを確認" : "C売りが権利行使され、保有株を売却する可能性",
+        nextAction: hasNakedCall
+          ? "上抜け時の買戻し資金、買戻し価格ライン、許容損失額を確認する"
+          : "株を渡してよいか、株を残すためにCを買い戻すかを確認する",
+        notes: hasNakedCall
+          ? ["現物なしC売りでは、逆指値を置いてもギャップや流動性不足で想定より不利な価格になる可能性があります。"]
+          : ["カバードコールでは、権利行使価格で株を渡す想定損益を確認します。"],
       },
     ];
   }

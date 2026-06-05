@@ -33,6 +33,33 @@ export type AccountEnvironment =
   | "PROD_P_JPY_SETTLEMENT"
   | "PROD_N_USD_SETTLEMENT";
 
+export type WorkflowTaskType =
+  | "confirm_entry_execution"
+  | "enter_close_execution"
+  | "confirm_expiry"
+  | "enter_stock_acquisition"
+  | "enter_stock_settlement"
+  | "review_close_decision"
+  | "complete";
+
+export type WorkflowTask = {
+  id: string;
+  simulationId: string;
+  type: WorkflowTaskType;
+  severity: RiskSeverity;
+  label: string;
+  detail: string;
+  actionLabel: string;
+  targetAnchor:
+    | "option-entry-executions"
+    | "option-close-executions"
+    | "stock-acquisition"
+    | "stock-settlement"
+    | "close-decision"
+    | "simulation-editor";
+  focusField?: string;
+};
+
 export type BrokerAccount = {
   id: string;
   broker: "SAXO_BANK_JP";
@@ -49,10 +76,25 @@ export type AccountState = {
   currency: Currency;
   cashBalance: number;
   buyingPower?: number;
-  marginRequirement: number;
+  marginAvailable: number;
+  marginRequirement?: number;
   marginUsagePercent: number;
   accountValue?: number;
   updatedAt: string;
+  cashAdjustments?: AccountCashAdjustment[];
+};
+
+export type AccountCashAdjustment = {
+  id: string;
+  sourceType: "option_close_execution";
+  sourceSimulationId: string;
+  sourceExecutionId: string;
+  accountCode: SaxoAccountCode;
+  currency: Currency;
+  amount: number;
+  label: string;
+  appliedAt: string;
+  memo?: string;
 };
 
 export type StockPosition = {
@@ -84,7 +126,9 @@ export type OptionLeg = {
   closeCostUSD?: number;
   closePlan?: ClosePlan;
   assignmentPolicy?: "accept" | "avoid" | "unknown";
+  callExitIntent?: "covered_can_sell" | "covered_keep_stock" | "naked_buyback";
   hedgeBuyStopUSD?: number;
+  nakedCallRiskAcknowledged?: boolean;
   marketPriceUSD?: number;
   unrealizedPnlJPY?: number;
   theta?: number;
@@ -101,6 +145,41 @@ export type StopLossRule = {
   enabled: boolean;
   type: "option_buyback_price" | "stock_price_line" | "loss_amount_jpy";
   value: number;
+};
+
+export type ExitOrderPlanMode =
+  | "manual_only"
+  | "after_entry_closing_order"
+  | "attached_entry_exit_order";
+
+export type ExitBrokerOrderType =
+  | "none"
+  | "closing_limit"
+  | "closing_stop"
+  | "oco"
+  | "ifd"
+  | "ifd_oco";
+
+export type ExitStopLossType = "buyback_price" | "stock_price_line" | "loss_amount";
+
+export type ExitOrderPlan = {
+  scope: "position" | "leg";
+  legId?: string;
+  mode: ExitOrderPlanMode;
+  brokerOrderType?: ExitBrokerOrderType;
+  profitTakeEnabled: boolean;
+  profitTakePremiumKeepPercent?: number;
+  profitTakeBuybackPriceUSD?: number;
+  stopLossEnabled: boolean;
+  stopLossType?: ExitStopLossType;
+  stopLossBuybackPriceUSD?: number;
+  stopLossStockPriceUSD?: number;
+  stopLossAmountJPY?: number;
+  stopLossAmountUSD?: number;
+  stopLossAmountCurrency?: Currency;
+  latestCloseDaysBeforeExpiry?: number;
+  latestCloseDaysBeforeExpiryUserSet?: boolean;
+  memo?: string;
 };
 
 export type BrokerFixtureMeta = {
@@ -125,6 +204,18 @@ export type StockSettlement = {
   memo?: string;
 };
 
+export type StockAcquisition = {
+  enabled: boolean;
+  acquisitionDate: string;
+  shares: number;
+  priceUSD: number;
+  accountEnvironment: AccountEnvironment;
+  commissionUSD?: number;
+  commissionJPY?: number;
+  source: "manual" | "broker_statement" | "saxo_api_estimate";
+  memo?: string;
+};
+
 export type BrokerSettlement = {
   source: "manual" | "broker_statement" | "saxo_api_estimate";
   tradeCurrency: "USD";
@@ -137,6 +228,58 @@ export type BrokerSettlement = {
   appliedFxRate?: number;
   netCashflowUSD?: number;
   netCashflowJPY?: number;
+};
+
+export type OptionCloseExecution = {
+  id: string;
+  legId: string;
+  closeKind?: "buyback" | "expired";
+  closeDate: string;
+  closeTime?: string;
+  orderId?: string;
+  positionId?: string;
+  contracts: number;
+  closePriceUSD?: number;
+  commissionUSD?: number;
+  commissionJPY?: number;
+  fxRateJPY?: number;
+  settlementCurrency: Currency;
+  brokerBookedAmountJPY?: number;
+  brokerRealizedPnlJPY?: number;
+  brokerTransactionCostJPY?: number;
+  brokerPremiumJPY?: number;
+  brokerFeeJPY?: number;
+  brokerExchangeFeeJPY?: number;
+  brokerExchangeRateJPY?: number;
+  brokerExchangeTradeFeeJPY?: number;
+  brokerTaxIncludedFeeJPY?: number;
+  realizedPnlUSD?: number;
+  inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";
+  source: "manual" | "broker_statement" | "saxo_api_estimate";
+  memo?: string;
+};
+
+export type OptionEntryExecution = {
+  id: string;
+  legId: string;
+  tradeDate: string;
+  contracts: number;
+  fillPriceUSD: number;
+  settlementCurrency: Currency;
+  brokerBookedAmountJPY?: number;
+  brokerPremiumJPY?: number;
+  brokerTransactionCostJPY?: number;
+  brokerFeeJPY?: number;
+  brokerExchangeFeeJPY?: number;
+  brokerExchangeRateJPY?: number;
+  brokerTaxIncludedFeeJPY?: number;
+  commissionUSD?: number;
+  commissionJPY?: number;
+  referenceFxRateJPY?: number;
+  inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";
+  source: "manual" | "broker_statement" | "saxo_api_estimate";
+  confirmed: boolean;
+  memo?: string;
 };
 
 export type TradeSimulation = {
@@ -167,6 +310,10 @@ export type TradeSimulation = {
   customDenominatorJPY?: number;
   profitTakeRule?: ProfitTakeRule;
   stopLossRule?: StopLossRule;
+  exitOrderPlans?: ExitOrderPlan[];
+  exitOrderPlan?: ExitOrderPlan;
+  optionEntryExecutions?: OptionEntryExecution[];
+  optionCloseExecutions?: OptionCloseExecution[];
   taxProfileId: TaxProfileId;
   nisaExpectedAnnualReturnPct?: number;
   brokerCommissionUSD?: number;
@@ -174,6 +321,7 @@ export type TradeSimulation = {
   exchangeFeesJPY?: number;
   fxConversionCostJPY?: number;
   carryingCostJPY?: number;
+  stockAcquisition?: StockAcquisition;
   stockSettlement?: StockSettlement;
   beginnerMode?: boolean;
   preOrderChecklist?: Record<string, boolean>;
@@ -216,6 +364,11 @@ export type RiskWarning = {
   title: string;
   message: string;
   blocking?: boolean;
+  actionLabel?: string;
+  actionSimulationId?: string;
+  actionAnchorId?: string;
+  actionLegId?: string;
+  actionLegType?: OptionType;
 };
 
 export type ChecklistItem = {
@@ -275,6 +428,7 @@ export type TaxBucketSummary = {
   optionProfitJPY: number;
   optionCapitalDaysJPY: number;
   optionAnnualReturnPct: number;
+  optionCloseMissingCount: number;
   stockRealizedGainJPY: number;
   stockCapitalDaysJPY: number;
   stockAnnualReturnPct: number;

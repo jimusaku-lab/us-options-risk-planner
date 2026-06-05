@@ -1,5 +1,5 @@
 import type { CoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
-import type { DenominatorResult, TaxResult, TradeSimulation } from "@/types/domain";
+import type { DenominatorResult, RiskWarning, TaxResult, TradeSimulation } from "@/types/domain";
 import {
   calculateNetInitialPremiumJPY,
   calculateNetInitialPremiumUSD,
@@ -16,6 +16,8 @@ type SummaryCardsProps = {
   taxResult: TaxResult;
   blockingCount: number;
   coveredCallAssignmentPreview?: CoveredCallAssignmentPreview | null;
+  primaryWarning?: RiskWarning;
+  onWarningAction?: (warning: RiskWarning) => void;
 };
 
 export function SummaryCards({
@@ -24,6 +26,8 @@ export function SummaryCards({
   taxResult,
   blockingCount,
   coveredCallAssignmentPreview,
+  primaryWarning,
+  onWarningAction,
 }: SummaryCardsProps) {
   const premiumJPY = calculateNetInitialPremiumJPY(simulation);
   const premiumUSD = calculateNetInitialPremiumUSD(simulation);
@@ -74,9 +78,12 @@ export function SummaryCards({
     {
       title: "最大注意点",
       value: blockingCount > 0 ? `${blockingCount}件NG` : "注文前NGなし",
-      note: isN
-        ? `チケット証拠金 ${formatUSD(simulation.brokerMarginUSD ?? 0)} / 使用証拠金 ${formatUSD(usedMarginUSD)}`
-        : `チケット証拠金 ${formatJPY(simulation.brokerMarginJPY)} / 使用証拠金 ${formatJPY(usedMarginJPY)}`,
+      note: primaryWarning
+        ? primaryWarning.message
+        : isN
+          ? `チケット証拠金 ${formatUSD(simulation.brokerMarginUSD ?? 0)} / 使用証拠金 ${formatUSD(usedMarginUSD)}`
+          : `チケット証拠金 ${formatJPY(simulation.brokerMarginJPY)} / 使用証拠金 ${formatJPY(usedMarginJPY)}`,
+      warning: primaryWarning,
     },
   ];
 
@@ -87,6 +94,16 @@ export function SummaryCards({
           <div className="text-xs font-semibold text-slate-500">{card.title}</div>
           <div className="mt-2 text-2xl font-bold tracking-normal text-slate-950">{card.value}</div>
           <p className="mt-2 text-sm leading-6 text-slate-600">{card.note}</p>
+          {"warning" in card && card.warning?.actionAnchorId ? (
+            <button
+              className="mt-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+              onClick={() => {
+                if ("warning" in card && card.warning) onWarningAction?.(card.warning);
+              }}
+            >
+              {card.warning.actionLabel ?? "反対売買判断へ"}
+            </button>
+          ) : null}
         </div>
       ))}
     </section>

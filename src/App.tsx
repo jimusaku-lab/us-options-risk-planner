@@ -1,8 +1,11 @@
 import { useRef, useState } from "react";
 import { ChevronUp, Database, Download, FileJson, Globe2, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
+import { calculatePendingAccountCashEffects, createAccountCashAdjustment } from "@/domain/accountCashEffects";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
+import { calculateOptionCloseExecutionResults } from "@/domain/optionCloseExecutions";
+import { getWorkflowTargetAnchorId } from "@/domain/workflowTasks";
 import { calculatePayoffSeries } from "@/domain/payoff";
 import { generateChecklist, generateRiskWarnings } from "@/domain/riskRules";
 import { calculateScenarioResults } from "@/domain/scenarios";
@@ -30,6 +33,7 @@ import { fetchStooqQuote, fetchUsdJpyRate, isExternalQuoteConsentRequired, isExt
 import { useCandidatesStore } from "@/store/useCandidatesStore";
 import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, useOptionsStore } from "@/store/useOptionsStore";
 import type { CandidateSymbol } from "@/types/candidates";
+import type { RiskWarning, WorkflowTask } from "@/types/domain";
 
 export default function App() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -49,6 +53,8 @@ export default function App() {
     return window.localStorage.getItem("us-options-external-quotes-consent-v1") === "true";
   });
   const [isExternalQuoteConsentOpen, setIsExternalQuoteConsentOpen] = useState(false);
+  const [closeDecisionFocusRequest, setCloseDecisionFocusRequest] = useState<{ anchorId: string; requestId: number } | null>(null);
+  const [editorFocusRequest, setEditorFocusRequest] = useState<{ anchorId: string; requestId: number } | null>(null);
   const {
     activeWorkspace,
     accountInputs,
@@ -59,6 +65,7 @@ export default function App() {
     selectedSimulationId,
     switchWorkspace,
     updateAccountState,
+    applyAccountCashAdjustment,
     createSimulationFromTemplate,
     selectSimulation,
     deleteSimulation,
@@ -77,6 +84,7 @@ export default function App() {
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
+  const pendingCashEffects = calculatePendingAccountCashEffects(simulations, accountInputs);
   const canUseExternalQuotes = !isExternalQuoteDisabled && (!isExternalQuoteConsentRequired || isExternalQuoteEnabled);
   const externalQuoteModeLabel = isExternalQuoteDisabled
     ? "外部取得はビルド設定で無効です。株価・為替は手入力してください。"
@@ -242,6 +250,28 @@ export default function App() {
     selectSimulation(id);
     setIsEditorOpen(false);
   };
+  const goToCloseDecision = (simulationId: string, warning: RiskWarning) => {
+    if (!warning.actionAnchorId) return;
+    selectSimulation(simulationId);
+    if (["option-entry-executions", "option-close-executions", "stock-acquisition-record", "stock-settlement-record"].includes(warning.actionAnchorId)) {
+      setIsEditorOpen(true);
+      setEditorFocusRequest({ anchorId: warning.actionAnchorId, requestId: Date.now() });
+      return;
+    }
+    setIsEditorOpen(false);
+    setCloseDecisionFocusRequest({ anchorId: warning.actionAnchorId, requestId: Date.now() });
+  };
+  const goToWorkflowTask = (simulationId: string, task: WorkflowTask) => {
+    selectSimulation(simulationId);
+    const anchorId = getWorkflowTargetAnchorId(task);
+    if (task.targetAnchor === "close-decision") {
+      setIsEditorOpen(false);
+      setCloseDecisionFocusRequest({ anchorId: task.focusField ?? anchorId, requestId: Date.now() });
+      return;
+    }
+    setIsEditorOpen(true);
+    setEditorFocusRequest({ anchorId, requestId: Date.now() });
+  };
   const acceptFirstRunNotice = () => {
     window.localStorage.setItem("us-options-first-run-notice-accepted", "true");
     setHasAcceptedNotice(true);
@@ -285,6 +315,8 @@ export default function App() {
             onDelete={deleteSimulation}
             workspace={activeWorkspace}
             accountInputs={accountInputs}
+            onWarningAction={goToCloseDecision}
+            onWorkflowTaskAction={goToWorkflowTask}
           />
           {isCandidatesOpen ? (
             <CandidatePanel
@@ -300,6 +332,8 @@ export default function App() {
           <AccountOverview
             workspace={activeWorkspace}
             accountInputs={accountInputs}
+            pendingCashEffects={pendingCashEffects}
+            onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
             onChange={updateAccountState}
           />
           <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
@@ -339,27 +373,58 @@ export default function App() {
         : accountInputs.P.marginUsagePercent,
   };
   const premiumJPY = calculateNetInitialPremiumJPY(selectedWithAccount);
-  const grossDenominators = calculateDenominators(selectedWithAccount, premiumJPY);
+  const optionCloseExecutionResults = calculateOptionCloseExecutionResults(selectedWithAccount);
+  const hasCloseExecutionResults = optionCloseExecutionResults.length > 0;
+  const selectedRequiresExecutionRecord = selectedWithAccount.status === "closed" || selectedWithAccount.status === "expired";
+  const realizedOptionProfitJPY = optionCloseExecutionResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
+  const realizedOptionDays =
+    hasCloseExecutionResults
+      ? Math.max(1, Math.round(
+          optionCloseExecutionResults.reduce((sum, result) => sum + result.holdingDays, 0) /
+            optionCloseExecutionResults.length,
+        ))
+      : selectedWithAccount.dte;
+  const taxGrossProfitJPY =
+    selectedRequiresExecutionRecord
+      ? hasCloseExecutionResults
+        ? realizedOptionProfitJPY
+        : 0
+      : premiumJPY;
+  const taxSimulation = {
+    ...selectedWithAccount,
+    dte: selectedRequiresExecutionRecord ? realizedOptionDays : selectedWithAccount.dte,
+    ...(selectedRequiresExecutionRecord
+      ? {
+          brokerCommissionUSD: 0,
+          brokerCommissionJPY: 0,
+          exchangeFeesJPY: 0,
+          fxConversionCostJPY: 0,
+          carryingCostJPY: 0,
+        }
+      : {}),
+  };
+  const grossDenominators = calculateDenominators(taxSimulation, taxGrossProfitJPY);
   const primary = getPrimaryDenominator(grossDenominators);
   const taxProfile = taxProfiles[selected.taxProfileId];
   const taxResult = calculateTaxResult({
-    simulation: selectedWithAccount,
-    grossProfitJPY: premiumJPY,
+    simulation: taxSimulation,
+    grossProfitJPY: taxGrossProfitJPY,
     denominatorJPY: primary.amountJPY,
     taxProfile,
   });
   const stockSettlementTax = calculateStockSettlementTaxResult(selectedWithAccount);
   const taxBucketSummary = calculateTaxBucketSummary(simulations);
-  const denominators = calculateDenominators(selectedWithAccount, premiumJPY, taxResult.netProfitJPY);
+  const denominators = calculateDenominators(taxSimulation, taxGrossProfitJPY, taxResult.netProfitJPY);
   const primaryWithNet = getPrimaryDenominator(denominators);
   const nisaComparison = calculateNisaComparison({
     netProfitJPY: taxResult.netProfitJPY,
     denominatorJPY: primary.amountJPY,
-    days: selected.dte,
+    days: taxSimulation.dte,
     expectedAnnualReturnPct: selected.nisaExpectedAnnualReturnPct ?? DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT,
     taxRatePct: taxProfile.taxRatePct,
   });
   const warnings = generateRiskWarnings(selectedWithAccount);
+  const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
   const checklist = generateChecklist(selectedWithAccount).map((item) => ({
     ...item,
     passed: selected.preOrderChecklist?.[item.id] ?? false,
@@ -418,6 +483,8 @@ export default function App() {
           onDelete={deleteSimulation}
           workspace={activeWorkspace}
           accountInputs={accountInputs}
+          onWarningAction={goToCloseDecision}
+          onWorkflowTaskAction={goToWorkflowTask}
         />
         {isCandidatesOpen ? (
           <CandidatePanel
@@ -434,6 +501,8 @@ export default function App() {
           workspace={activeWorkspace}
           accountInputs={accountInputs}
           referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
+          pendingCashEffects={pendingCashEffects}
+          onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
           onChange={updateAccountState}
         />
         {isEditorOpen ? (
@@ -460,6 +529,11 @@ export default function App() {
                 canUseExternalQuotes={canUseExternalQuotes}
                 externalQuoteModeLabel={externalQuoteModeLabel}
                 onChange={upsertSimulation}
+                focusRequest={editorFocusRequest}
+                onCloseDecisionAction={(anchorId) => {
+                  setIsEditorOpen(false);
+                  setCloseDecisionFocusRequest({ anchorId, requestId: Date.now() });
+                }}
               />
             </div>
           </section>
@@ -468,8 +542,10 @@ export default function App() {
           simulation={selectedWithAccount}
           primaryDenominator={primaryWithNet}
           taxResult={taxResult}
-          blockingCount={warnings.filter((warning) => warning.blocking).length}
+          blockingCount={countableWarnings.filter((warning) => warning.blocking).length}
           coveredCallAssignmentPreview={coveredCallAssignmentPreview}
+          primaryWarning={countableWarnings.find((warning) => warning.blocking) ?? countableWarnings[0]}
+          onWarningAction={(warning) => goToCloseDecision(selected.id, warning)}
         />
         <DenominatorTable denominators={denominators} />
         <AnnualReturnFormula
@@ -484,12 +560,20 @@ export default function App() {
           taxBucketSummary={taxBucketSummary}
         />
         <ScenarioCards scenarios={scenarios} />
-        <CloseDecisionCard simulation={selected} onChange={upsertSimulation} />
+        <CloseDecisionCard
+          simulation={selected}
+          onChange={upsertSimulation}
+          focusRequest={closeDecisionFocusRequest}
+          onExecutionDraft={() => {
+            setIsEditorOpen(true);
+            setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
+          }}
+        />
         <section className="grid gap-4 xl:grid-cols-2">
           <PayoffChart simulation={selectedWithAccount} points={payoff} />
           <DenominatorChart denominators={denominators} />
         </section>
-        <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} />
+        <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
         {activeWorkspace === "live" ? (
           <WheelPanel
             cycles={wheelCycles}

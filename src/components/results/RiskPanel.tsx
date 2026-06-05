@@ -10,10 +10,12 @@ export function RiskPanel({
   warnings,
   checklist,
   onChecklistChange,
+  onWarningAction,
 }: {
   warnings: RiskWarning[];
   checklist: ChecklistItem[];
   onChecklistChange: (id: string, checked: boolean) => void;
+  onWarningAction?: (warning: RiskWarning) => void;
 }) {
   const blockingWarnings = warnings.filter((warning) => warning.blocking);
   return (
@@ -33,6 +35,14 @@ export function RiskPanel({
                   {warning.blocking ? <span className="ml-2 rounded bg-red-700 px-2 py-0.5 text-xs text-white">注文前NG</span> : null}
                 </div>
                 <p className="mt-1 leading-6">{warning.message}</p>
+                {warning.actionAnchorId ? (
+                  <button
+                    className="mt-2 rounded-md border border-current bg-white/60 px-3 py-1.5 text-xs font-bold hover:bg-white"
+                    onClick={() => onWarningAction?.(warning)}
+                  >
+                    {warning.actionLabel ?? "反対売買判断へ"}
+                  </button>
+                ) : null}
               </div>
             ))
           )}

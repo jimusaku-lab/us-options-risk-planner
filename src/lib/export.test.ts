@@ -12,9 +12,26 @@ describe("position export", () => {
   });
 
   it("round trips workspace JSON", () => {
+    const simulationWithExecution = {
+      ...sampleAmznSimulation,
+      optionCloseExecutions: [
+        {
+          id: "close-json",
+          legId: sampleAmznSimulation.optionLegs[0].id,
+          closeDate: "2026-06-02",
+          contracts: 1,
+          closePriceUSD: 0.17,
+          commissionUSD: 2.25,
+          fxRateJPY: 150,
+          settlementCurrency: "JPY" as const,
+          source: "manual" as const,
+          orderId: "order-1",
+        },
+      ],
+    };
     const json = exportWorkspaceJson({
       workspace: "demo",
-      simulations: [sampleAmznSimulation],
+      simulations: [simulationWithExecution],
       exportedAt: "2026-05-28T00:00:00.000Z",
     });
 
@@ -22,8 +39,27 @@ describe("position export", () => {
     expect(parsed.simulations).toHaveLength(1);
     expect(parsed.simulations[0].id).toBe(sampleAmznSimulation.id);
     expect(parsed.simulations[0].accountEnvironment).toBe("DEMO_JPY_BASE");
+    expect(parsed.simulations[0].optionCloseExecutions).toHaveLength(1);
+    expect(parsed.simulations[0].optionCloseExecutions?.[0].orderId).toBe("order-1");
+    expect(parsed.optionCloseExecutions).toHaveLength(1);
     expect(parsed.accountStates).toEqual([]);
     expect(parsed.wheelCycles).toEqual([]);
     expect(parsed.stockTransfers).toEqual([]);
+  });
+
+  it("keeps old JSON readable without converting closeCostUSD into executions", () => {
+    const legacyJson = JSON.stringify({
+      simulations: [
+        {
+          ...sampleAmznSimulation,
+          optionCloseExecutions: undefined,
+          optionLegs: sampleAmznSimulation.optionLegs.map((leg, index) => index === 0 ? { ...leg, closeCostUSD: 0.17 } : leg),
+        },
+      ],
+    });
+
+    const parsed = parseWorkspaceJson(legacyJson);
+    expect(parsed.simulations[0].optionCloseExecutions).toEqual([]);
+    expect(parsed.simulations[0].optionLegs[0].closeCostUSD).toBe(0.17);
   });
 });

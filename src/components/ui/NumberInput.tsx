@@ -6,14 +6,16 @@ type NumberInputProps = {
   min?: number;
   step?: number;
   placeholder?: string;
+  inputId?: string;
 };
 
-export function NumberInput({ label, value, onChange, suffix, min, step, placeholder }: NumberInputProps) {
+export function NumberInput({ label, value, onChange, suffix, min, step, placeholder, inputId }: NumberInputProps) {
   return (
     <label className="grid gap-1.5 text-sm font-medium text-slate-700">
       <span>{label}</span>
       <span className="flex items-center overflow-hidden rounded-md border border-slate-300 bg-white">
         <input
+          id={inputId}
           className="numeric-input min-w-0 flex-1 border-0 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-600"
           type="number"
           value={Number.isFinite(value) ? value : ""}

@@ -10,7 +10,7 @@ export function FirstRunNotice({ onAccept }: { onAccept: () => void }) {
             入力内容は利用者本人のパソコン・ブラウザ内に保存されます。
           </li>
           <li className="rounded-md border border-slate-200 bg-slate-50 p-3">作成者へ自動送信されません。</li>
-          <li className="rounded-md border border-slate-200 bg-slate-50 p-3">試算は概算です。</li>
+          <li className="rounded-md border border-slate-200 bg-slate-50 p-3">計算結果は概算です。</li>
           <li className="rounded-md border border-slate-200 bg-slate-50 p-3">
             使い終わったら「データ」画面からこの端末の入力データを削除できます。
           </li>

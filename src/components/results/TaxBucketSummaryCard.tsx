@@ -8,8 +8,13 @@ export function TaxBucketSummaryCard({ summary }: { summary: TaxBucketSummary })
         <div>
           <h2 className="text-lg font-bold text-slate-950">税務区分別の履歴集計</h2>
           <p className="mt-1 text-sm leading-6 text-slate-600">
-            決済済み・権利行使済み・満期終了にした建玉だけを集計します。年率は、各取引の資金量と日数を合算して概算します。
+            決済済みのオプションは決済実績記録を入力したものだけを集計します。反対売買判断の見積もり価格は履歴集計に使いません。
           </p>
+          {summary.optionCloseMissingCount > 0 ? (
+            <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-sm font-semibold text-amber-950">
+              決済済みですが決済実績未入力の建玉が{summary.optionCloseMissingCount}件あります。推定値では集計していません。
+            </p>
+          ) : null}
         </div>
       </div>
       <div className="mt-4 overflow-x-auto">
@@ -29,7 +34,7 @@ export function TaxBucketSummaryCard({ summary }: { summary: TaxBucketSummary })
               count={summary.optionCount}
               profitJPY={summary.optionProfitJPY}
               annualReturnPct={summary.optionAnnualReturnPct}
-              note="オプションの受取プレミアム、買戻し、手数料を反映した履歴側の概算です。"
+              note="決済実績記録に入力した約定価格、数量、手数料を反映します。実績未入力の決済済み建玉は含めません。"
             />
             <SummaryRow
               label="上場株式等の譲渡所得等"

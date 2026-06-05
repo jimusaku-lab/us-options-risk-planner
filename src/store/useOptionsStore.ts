@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  AccountCashAdjustment,
   AccountState,
   AccountEnvironment,
   BrokerAccount,
@@ -12,6 +13,7 @@ import type {
   WheelPhase,
 } from "@/types/domain";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
+import { getDefaultExitOrderPlan, normalizeExitOrderPlan, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
 
 export type WorkspaceMode = "demo" | "live";
 
@@ -78,6 +80,7 @@ type OptionsStore = {
   switchWorkspace: (workspace: WorkspaceMode) => void;
   createSimulationFromTemplate: () => void;
   updateAccountState: (accountCode: SaxoAccountCode, accountInputs: Partial<AccountState>) => void;
+  applyAccountCashAdjustment: (adjustment: AccountCashAdjustment) => void;
   upsertSimulation: (simulation: TradeSimulation) => void;
   replaceWorkspaceData: (data: WorkspaceImportData) => void;
   deleteSimulation: (id: string) => void;
@@ -122,20 +125,22 @@ function createDefaultAccountInputs(overrides?: Partial<Record<SaxoAccountCode, 
       accountEnvironment: "PROD_P_JPY_SETTLEMENT",
       currency: "JPY",
       cashBalance: 0,
-      marginRequirement: 0,
       marginUsagePercent: 0,
       updatedAt: now,
       ...(overrides?.P ?? {}),
+      marginAvailable: overrides?.P?.marginAvailable ?? overrides?.P?.marginRequirement ?? 0,
+      marginRequirement: undefined,
     },
     N: {
       accountCode: "N",
       accountEnvironment: "PROD_N_USD_SETTLEMENT",
       currency: "USD",
       cashBalance: 0,
-      marginRequirement: 0,
       marginUsagePercent: 0,
       updatedAt: now,
       ...(overrides?.N ?? {}),
+      marginAvailable: overrides?.N?.marginAvailable ?? overrides?.N?.marginRequirement ?? 0,
+      marginRequirement: undefined,
     },
   };
 }
@@ -150,7 +155,7 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
   const accountEnvironment = inferAccountEnvironment(simulation, workspace);
   const accountCode = getAccountCode(accountEnvironment);
   const accountCurrency = getAccountCurrency(accountEnvironment);
-  return {
+  const normalized: TradeSimulation = {
     ...simulation,
     accountCode,
     accountEnvironment,
@@ -159,6 +164,37 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
     brokerMarginUSD:
       simulation.brokerMarginUSD ??
       (accountEnvironment === "PROD_N_USD_SETTLEMENT" && simulation.fxRateJPY > 0 ? simulation.brokerMarginJPY / simulation.fxRateJPY : undefined),
+  };
+  const exitOrderPlan = normalizeExitOrderPlan(normalized);
+  const exitOrderPlans = normalizeExitOrderPlans({ ...normalized, exitOrderPlan });
+  return {
+    ...normalized,
+    optionEntryExecutions: normalized.optionEntryExecutions ?? [],
+    optionCloseExecutions: normalized.optionCloseExecutions ?? [],
+    exitOrderPlan,
+    exitOrderPlans,
+    profitTakeRule: normalized.profitTakeRule ?? {
+      enabled: exitOrderPlan.profitTakeEnabled,
+      targetPremiumKeepPercent: exitOrderPlan.profitTakePremiumKeepPercent ?? 60,
+      latestCloseDaysBeforeExpiry: exitOrderPlan.latestCloseDaysBeforeExpiry,
+    },
+    stopLossRule: normalized.stopLossRule ?? {
+      enabled: exitOrderPlan.stopLossEnabled,
+      type:
+        exitOrderPlan.stopLossType === "stock_price_line"
+          ? "stock_price_line"
+          : exitOrderPlan.stopLossType === "loss_amount"
+            ? "loss_amount_jpy"
+            : "option_buyback_price",
+      value:
+        exitOrderPlan.stopLossType === "stock_price_line"
+          ? exitOrderPlan.stopLossStockPriceUSD ?? 0
+          : exitOrderPlan.stopLossType === "loss_amount"
+            ? accountEnvironment === "PROD_N_USD_SETTLEMENT"
+              ? exitOrderPlan.stopLossAmountUSD ?? 0
+              : exitOrderPlan.stopLossAmountJPY ?? 0
+            : exitOrderPlan.stopLossBuybackPriceUSD ?? 0,
+    },
   };
 }
 
@@ -330,6 +366,8 @@ function createBlankSimulation(workspace: WorkspaceMode, settings: AppSettings):
       type: "option_buyback_price",
       value: 0,
     },
+    exitOrderPlan: getDefaultExitOrderPlan(),
+    exitOrderPlans: [],
     taxProfileId: "japan_derivative_separate_tax_user_confirm",
     nisaExpectedAnnualReturnPct: settings.defaultNisaExpectedAnnualReturnPct,
     brokerCommissionUSD: DEFAULT_BROKER_COMMISSION_USD,
@@ -464,11 +502,13 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
     }),
   updateAccountState: (accountCode, accountInputs) =>
     set((state) => {
+      const marginAvailable = accountInputs.marginAvailable ?? accountInputs.marginRequirement;
       const next = {
         ...state.accountInputsByWorkspace[state.activeWorkspace],
         [accountCode]: {
           ...state.accountInputsByWorkspace[state.activeWorkspace][accountCode],
           ...accountInputs,
+          ...(marginAvailable !== undefined ? { marginAvailable, marginRequirement: undefined } : {}),
           accountCode,
           accountEnvironment:
             state.activeWorkspace === "demo"
@@ -479,6 +519,27 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
           currency: accountCode === "N" ? "USD" : "JPY",
           updatedAt: new Date().toISOString(),
         },
+      };
+      const accountInputsByWorkspace = { ...state.accountInputsByWorkspace, [state.activeWorkspace]: next };
+      saveJson(ACCOUNT_KEY, accountInputsByWorkspace);
+      return { accountInputsByWorkspace, accountInputs: next };
+    }),
+  applyAccountCashAdjustment: (adjustment) =>
+    set((state) => {
+      const currentWorkspaceAccounts = state.accountInputsByWorkspace[state.activeWorkspace];
+      const account = currentWorkspaceAccounts[adjustment.accountCode];
+      if (account.currency !== adjustment.currency) return {};
+      if (account.cashAdjustments?.some((item) => item.id === adjustment.id)) return {};
+
+      const nextAccount: AccountState = {
+        ...account,
+        cashBalance: account.cashBalance + adjustment.amount,
+        cashAdjustments: [...(account.cashAdjustments ?? []), adjustment],
+        updatedAt: new Date().toISOString(),
+      };
+      const next = {
+        ...currentWorkspaceAccounts,
+        [adjustment.accountCode]: nextAccount,
       };
       const accountInputsByWorkspace = { ...state.accountInputsByWorkspace, [state.activeWorkspace]: next };
       saveJson(ACCOUNT_KEY, accountInputsByWorkspace);

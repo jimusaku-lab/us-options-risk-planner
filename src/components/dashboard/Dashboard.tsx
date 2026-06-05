@@ -1,4 +1,4 @@
-import type { TradeSimulation } from "@/types/domain";
+import type { RiskWarning, TradeSimulation, WorkflowTask } from "@/types/domain";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { Fragment, useState } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
@@ -6,6 +6,7 @@ import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
+import { getPrimaryWorkflowTask, getWorkflowTasks } from "@/domain/workflowTasks";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 const statusClassName = {
@@ -26,6 +27,8 @@ export function Dashboard({
   onDelete,
   workspace,
   accountInputs,
+  onWarningAction,
+  onWorkflowTaskAction,
 }: {
   simulations: TradeSimulation[];
   selectedId: string;
@@ -34,6 +37,8 @@ export function Dashboard({
   onDelete: (id: string) => void;
   workspace: WorkspaceMode;
   accountInputs: AccountInputs;
+  onWarningAction?: (simulationId: string, warning: RiskWarning) => void;
+  onWorkflowTaskAction?: (simulationId: string, task: WorkflowTask) => void;
 }) {
   const [showHistory, setShowHistory] = useState(false);
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "open");
@@ -92,6 +97,7 @@ export function Dashboard({
               <th className="py-2 pr-3 text-right">使用分母</th>
               <th className="py-2 pr-3 text-right">年率</th>
               <th className="py-2 pr-3 text-right">警告</th>
+              <th className="py-2 pr-3">次にやること</th>
               <th className="py-2 pr-3 text-right">操作</th>
             </tr>
           </thead>
@@ -111,23 +117,28 @@ export function Dashboard({
               const premium = calculateNetInitialPremiumJPY(simulationWithAccount);
               const primary = getPrimaryDenominator(calculateDenominators(simulationWithAccount, premium));
               const warnings = generateRiskWarnings(simulationWithAccount);
+              const workflowTasks = getWorkflowTasks(simulationWithAccount);
+              const primaryTask = getPrimaryWorkflowTask(simulationWithAccount);
+              const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
               const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
               const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
               const strikeLabel = [
                 callLeg ? `C ${formatUSD(callLeg.strikeUSD)}` : "",
                 putLeg ? `P ${formatUSD(putLeg.strikeUSD)}` : "",
               ].filter(Boolean).join(" / ") || "-";
-              const blockingCount = warnings.filter((warning) => warning.blocking).length;
+              const blockingCount = countableWarnings.filter((warning) => warning.blocking).length;
+              const attentionCount = countableWarnings.filter((warning) => !warning.blocking).length;
               const warningLabel =
-                warnings.length === 0
+                countableWarnings.length === 0
                   ? "警告なし"
-                  : `${blockingCount > 0 ? `NG${blockingCount}件` : "NGなし"}・注意${warnings.length}件`;
+                  : `${blockingCount > 0 ? `NG${blockingCount}件` : "NGなし"}・注意${attentionCount}件`;
+              const actionableWarning = countableWarnings.find((warning) => warning.actionAnchorId);
               const isFirstHistory = showHistory && index === currentSimulations.length && historySimulations.length > 0;
               return (
                 <Fragment key={simulation.id}>
                 {isFirstHistory ? (
                   <tr className="bg-slate-100">
-                    <td colSpan={11} className="py-2 pr-3 text-xs font-bold text-slate-600">
+                    <td colSpan={12} className="py-2 pr-3 text-xs font-bold text-slate-600">
                       履歴: 決済済み・権利行使済み・満期終了
                     </td>
                   </tr>
@@ -180,11 +191,43 @@ export function Dashboard({
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatPct(primary.annualReturnPct)}</td>
                   <td
                     className={`py-3 pr-3 text-right text-xs font-bold ${
-                      blockingCount > 0 ? "text-red-700" : warnings.length > 0 ? "text-amber-700" : "text-emerald-700"
+                      blockingCount > 0 ? "text-red-700" : countableWarnings.length > 0 ? "text-amber-700" : "text-emerald-700"
                     }`}
                     title="NGは注文前に解消すべき重大警告、注意は確認項目です。"
                   >
-                    {warningLabel}
+                    <span className="block">{warningLabel}</span>
+                    {actionableWarning ? (
+                      <button
+                        className="mt-1 rounded border border-current px-2 py-1 text-[11px] font-bold hover:bg-white"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onWarningAction?.(simulation.id, actionableWarning);
+                        }}
+                      >
+                        {actionableWarning.actionLabel ?? "反対売買判断へ"}
+                      </button>
+                    ) : null}
+                  </td>
+                  <td className="py-3 pr-3">
+                    <button
+                      className={`rounded-md border px-2 py-1 text-xs font-bold ${
+                        primaryTask.severity === "danger"
+                          ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
+                          : primaryTask.severity === "warning"
+                            ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                            : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
+                      }`}
+                      title={primaryTask.detail}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onWorkflowTaskAction?.(simulation.id, primaryTask);
+                      }}
+                    >
+                      {workflowTasks.length > 1 ? `未完了${workflowTasks.length}件` : primaryTask.label}
+                    </button>
+                    {workflowTasks.length > 1 ? (
+                      <div className="mt-1 text-[11px] leading-4 text-slate-500">{primaryTask.label}</div>
+                    ) : null}
                   </td>
                   <td className="py-3 pr-3 text-right">
                     <button
