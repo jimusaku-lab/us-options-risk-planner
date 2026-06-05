@@ -1,7 +1,11 @@
 import type { TaxBucketSummary, TradeSimulation } from "@/types/domain";
 import { calculateDenominators, getPrimaryDenominator } from "./denominators";
 import { calculateNetInitialPremiumJPY } from "./calculations";
-import { calculateOptionCloseExecutionResults } from "./optionCloseExecutions";
+import {
+  calculateOptionCloseExecutionResults,
+  hasConfirmedBuybackCloseExecution,
+  hasConfirmedExpiredCloseExecution,
+} from "./optionCloseExecutions";
 import { calculateStockSettlementTaxResult, calculateTaxResult, taxProfiles } from "./tax";
 
 const endedStatuses = new Set(["closed", "assigned", "expired"]);
@@ -16,10 +20,16 @@ export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBu
     .filter((simulation) => endedStatuses.has(simulation.status))
     .reduce<TaxBucketSummary>(
       (summary, simulation) => {
-        const closeExecutionResults = calculateOptionCloseExecutionResults(simulation);
+        const closeExecutionResults = calculateOptionCloseExecutionResults(simulation).filter((result) => result.execution.confirmed);
         const hasCloseExecutions = closeExecutionResults.length > 0;
         const requiresExecutionRecord = simulation.status === "closed" || simulation.status === "expired";
-        const missingExecutionRecord = requiresExecutionRecord && !hasCloseExecutions;
+        const hasRequiredExecution =
+          simulation.status === "closed"
+            ? hasConfirmedBuybackCloseExecution(simulation)
+            : simulation.status === "expired"
+              ? hasConfirmedExpiredCloseExecution(simulation)
+              : hasCloseExecutions;
+        const missingExecutionRecord = requiresExecutionRecord && !hasRequiredExecution;
         const premiumJPY = calculateNetInitialPremiumJPY(simulation);
         const primary = getPrimaryDenominator(calculateDenominators(simulation, premiumJPY));
         const taxResult =

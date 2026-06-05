@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
+import { getPrimaryWorkflowTask } from "@/domain/workflowTasks";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "./export";
 
 describe("position export", () => {
@@ -18,6 +19,7 @@ describe("position export", () => {
         {
           id: "close-json",
           legId: sampleAmznSimulation.optionLegs[0].id,
+          confirmed: true,
           closeDate: "2026-06-02",
           contracts: 1,
           closePriceUSD: 0.17,
@@ -41,6 +43,7 @@ describe("position export", () => {
     expect(parsed.simulations[0].accountEnvironment).toBe("DEMO_JPY_BASE");
     expect(parsed.simulations[0].optionCloseExecutions).toHaveLength(1);
     expect(parsed.simulations[0].optionCloseExecutions?.[0].orderId).toBe("order-1");
+    expect(parsed.simulations[0].optionCloseExecutions?.[0].confirmed).toBe(true);
     expect(parsed.optionCloseExecutions).toHaveLength(1);
     expect(parsed.accountStates).toEqual([]);
     expect(parsed.wheelCycles).toEqual([]);
@@ -61,5 +64,66 @@ describe("position export", () => {
     const parsed = parseWorkspaceJson(legacyJson);
     expect(parsed.simulations[0].optionCloseExecutions).toEqual([]);
     expect(parsed.simulations[0].optionLegs[0].closeCostUSD).toBe(0.17);
+  });
+
+  it("migrates old close executions to drafts while positions are open", () => {
+    const legacyJson = JSON.stringify({
+      simulations: [
+        {
+          ...sampleAmznSimulation,
+          status: "open",
+          optionEntryExecutions: sampleAmznSimulation.optionLegs.map((leg) => ({
+            id: `entry-${leg.id}`,
+            legId: leg.id,
+            tradeDate: sampleAmznSimulation.entryDate,
+            contracts: leg.quantity,
+            fillPriceUSD: leg.premiumUSD,
+            settlementCurrency: "JPY",
+            source: "manual",
+            confirmed: true,
+          })),
+          optionCloseExecutions: [
+            {
+              id: "legacy-close-open",
+              legId: sampleAmznSimulation.optionLegs[0].id,
+              closeDate: "2026-06-02",
+              contracts: 1,
+              closePriceUSD: 0.17,
+              settlementCurrency: "JPY",
+              source: "manual",
+            },
+          ],
+        },
+      ],
+    });
+
+    const parsed = parseWorkspaceJson(legacyJson);
+    expect(parsed.simulations[0].optionCloseExecutions?.[0].confirmed).toBe(false);
+    expect(getPrimaryWorkflowTask(parsed.simulations[0]).label).toBe("決済実績を確認");
+  });
+
+  it("preserves old close executions as confirmed for ended positions", () => {
+    const legacyJson = JSON.stringify({
+      simulations: [
+        {
+          ...sampleAmznSimulation,
+          status: "closed",
+          optionCloseExecutions: [
+            {
+              id: "legacy-close-closed",
+              legId: sampleAmznSimulation.optionLegs[0].id,
+              closeDate: "2026-06-02",
+              contracts: 1,
+              closePriceUSD: 0.17,
+              settlementCurrency: "JPY",
+              source: "manual",
+            },
+          ],
+        },
+      ],
+    });
+
+    const parsed = parseWorkspaceJson(legacyJson);
+    expect(parsed.simulations[0].optionCloseExecutions?.[0].confirmed).toBe(true);
   });
 });

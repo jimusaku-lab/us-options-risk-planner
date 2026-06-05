@@ -14,6 +14,7 @@ import type {
 } from "@/types/domain";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import { getDefaultExitOrderPlan, normalizeExitOrderPlan, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
+import { normalizeOptionCloseExecutionsForStatus } from "@/domain/optionCloseExecutions";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
 
 export type WorkspaceMode = "demo" | "live";
@@ -171,7 +172,7 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
   return {
     ...normalized,
     optionEntryExecutions: normalized.optionEntryExecutions ?? [],
-    optionCloseExecutions: normalized.optionCloseExecutions ?? [],
+    optionCloseExecutions: normalizeOptionCloseExecutionsForStatus(normalized.optionCloseExecutions, normalized.status),
     exitOrderPlan,
     exitOrderPlans,
     profitTakeRule: normalized.profitTakeRule ?? {

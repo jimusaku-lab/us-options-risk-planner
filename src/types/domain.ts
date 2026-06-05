@@ -234,6 +234,7 @@ export type OptionCloseExecution = {
   id: string;
   legId: string;
   closeKind?: "buyback" | "expired";
+  confirmed: boolean;
   closeDate: string;
   closeTime?: string;
   orderId?: string;

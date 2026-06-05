@@ -68,6 +68,7 @@ export function calculatePendingAccountCashEffects(
     const accountCode: SaxoAccountCode = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "N" : "P";
     const results = calculateOptionCloseExecutionResults(simulation);
     return (simulation.optionCloseExecutions ?? []).flatMap((execution) => {
+      if (!execution.confirmed) return [];
       const effectId = getCashEffectId(simulation.id, execution.id);
       if (isApplied(accountInputs, effectId, accountCode)) return [];
 

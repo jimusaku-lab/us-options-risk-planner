@@ -41,6 +41,7 @@ describe("stock settlement tax bucket", () => {
           {
             id: "close-1",
             legId: sampleAmznSimulation.optionLegs[0].id,
+            confirmed: true,
             closeDate: "2026-06-02",
             contracts: 1,
             closePriceUSD: 0.1,
@@ -92,6 +93,7 @@ describe("stock settlement tax bucket", () => {
         {
           id: "exec-test",
           legId: "put-test",
+          confirmed: true,
           closeDate: "2026-06-02",
           contracts: 1,
           closePriceUSD: 0.17,

@@ -6,7 +6,13 @@ import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, type WorkspaceMode } from "@/s
 import { calculateDte, getShortOptionLegs } from "@/domain/calculations";
 import { calculateProfitTakeBuybackPriceUSD, getDefaultExitOrderPlanForLeg, getExitOrderPlanForLeg, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
 import { calculateOptionEntryExecutionSummary, createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
-import { calculateOptionCloseExecutionResults, createOptionCloseExecutionDraft } from "@/domain/optionCloseExecutions";
+import {
+  calculateOptionCloseExecutionResults,
+  createOptionCloseExecutionDraft,
+  hasConfirmedBuybackCloseExecution,
+  hasConfirmedExpiredCloseExecution,
+  hasUnconfirmedCloseExecutionDraft,
+} from "@/domain/optionCloseExecutions";
 import { getStatusLabel } from "@/domain/strategyLabels";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { formatLocalDate } from "@/lib/date";
@@ -387,9 +393,21 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     });
   };
   const confirmOptionEntryExecutions = () => {
+    setWorkflowNotice(
+      simulation.status === "open"
+        ? {
+            message: "建玉開始の確認が完了しました。次は反対売買判断または満期管理です。",
+            actionLabel: "反対売買判断へ進む",
+            anchorId: "close-decision",
+          }
+        : null,
+    );
     update({
       optionEntryExecutions: optionEntryExecutions.map((execution) => ({ ...execution, confirmed: true })),
     });
+  };
+  const confirmOptionCloseExecution = (id: string) => {
+    updateOptionCloseExecution(id, { confirmed: true });
   };
   const addOptionEntryExecution = (leg: OptionLeg) => {
     update({
@@ -432,8 +450,9 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const hasMultipleAssignedRecords =
     simulation.status === "assigned" && Boolean(stockAcquisition.enabled && stockSettlement.enabled);
   const entryExecutionsConfirmed = optionEntryExecutions.length > 0 && optionEntryExecutions.every((execution) => execution.confirmed);
-  const hasBuybackCloseExecutionResult = optionCloseResults.some((result) => (result.execution.closeKind ?? "buyback") === "buyback");
-  const hasExpiredCloseExecutionResult = optionCloseResults.some((result) => result.execution.closeKind === "expired");
+  const hasConfirmedBuybackClose = hasConfirmedBuybackCloseExecution(simulation);
+  const hasConfirmedExpiredClose = hasConfirmedExpiredCloseExecution(simulation);
+  const hasUnconfirmedCloseDraft = hasUnconfirmedCloseExecutionDraft(simulation);
 
   return (
     <section>
@@ -1531,9 +1550,9 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               決済済みですが、決済実績が未入力です。Saxo注文履歴から約定価格と手数料を入力してください。
             </div>
           ) : null}
-          {simulation.status === "open" && hasBuybackCloseExecutionResult ? (
+          {simulation.status === "open" && hasConfirmedBuybackClose ? (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
-              <span className="font-semibold">決済実績が入力されています。建玉状態を決済済みに変更できます。</span>
+              <span className="font-semibold">確認済みの決済実績があります。建玉状態を決済済みに変更できます。</span>
               <button
                 type="button"
                 className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-100"
@@ -1543,9 +1562,9 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               </button>
             </div>
           ) : null}
-          {simulation.status === "open" && !hasBuybackCloseExecutionResult && hasExpiredCloseExecutionResult ? (
+          {simulation.status === "open" && !hasConfirmedBuybackClose && hasConfirmedExpiredClose ? (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-950">
-              <span className="font-semibold">満期終了の記録が入力されています。建玉状態を満期終了に変更できます。</span>
+              <span className="font-semibold">確認済みの満期終了記録があります。建玉状態を満期終了に変更できます。</span>
               <button
                 type="button"
                 className="rounded-md border border-sky-300 bg-white px-3 py-2 text-xs font-bold text-sky-800 hover:bg-sky-100"
@@ -1553,6 +1572,11 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               >
                 満期終了に変更
               </button>
+            </div>
+          ) : null}
+          {simulation.status === "open" && !hasConfirmedBuybackClose && !hasConfirmedExpiredClose && hasUnconfirmedCloseDraft ? (
+            <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">
+              決済実績の下書きがあります。Saxo注文履歴を見て入力内容を確認し、「決済実績を確認済みにする」を押してください。
             </div>
           ) : null}
           <div className="mt-3 grid gap-3">
@@ -1591,12 +1615,17 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                     <div className="text-sm font-bold text-slate-950">
                       {selectedLeg ? getOptionLegLabel(selectedLeg) : "対象脚未選択"}
                     </div>
-                    <button
-                      className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-50"
-                      onClick={() => removeOptionCloseExecution(execution.id)}
-                    >
-                      削除
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-md px-2 py-1 text-xs font-bold ${execution.confirmed ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
+                        {execution.confirmed ? "確認済み" : "下書き"}
+                      </span>
+                      <button
+                        className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-50"
+                        onClick={() => removeOptionCloseExecution(execution.id)}
+                      >
+                        削除
+                      </button>
+                    </div>
                   </div>
                   {isExpiredExecution ? (
                     <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm font-semibold text-sky-950">
@@ -1857,6 +1886,21 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                         : "決済日、約定価格USD、Saxo実現損益JPYを確認してください。"}
                     </div>
                   )}
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
+                    <span className="text-slate-600">
+                      {execution.confirmed
+                        ? "この決済実績は確認済みです。"
+                        : "Saxo注文履歴で約定日、価格、数量、損益を確認してから確定してください。"}
+                    </span>
+                    <button
+                      type="button"
+                      className="rounded-md border border-emerald-300 bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-200 disabled:text-slate-500"
+                      disabled={!result || execution.confirmed}
+                      onClick={() => confirmOptionCloseExecution(execution.id)}
+                    >
+                      決済実績を確認済みにする
+                    </button>
+                  </div>
                 </div>
               );
             })}

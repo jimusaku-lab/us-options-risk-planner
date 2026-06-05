@@ -1,6 +1,7 @@
 import type { AccountState, ExitOrderPlan, OptionCloseExecution, OptionEntryExecution, StockTransferEvent, TradeSimulation, WheelCycle, WheelEvent } from "@/types/domain";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
+import { normalizeOptionCloseExecutionsForStatus } from "@/domain/optionCloseExecutions";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
 
 export function exportSimulationJson(simulation: TradeSimulation): string {
@@ -114,7 +115,10 @@ export function parseWorkspaceJson(text: string): ParsedWorkspaceJson {
         exitOrderPlans: simulation.exitOrderPlans ?? plansBySimulationId.get(simulation.id),
         exitOrderPlan: simulation.exitOrderPlan ?? plansBySimulationId.get(simulation.id)?.[0],
         optionEntryExecutions: simulation.optionEntryExecutions ?? entryExecutionsBySimulationId.get(simulation.id) ?? [],
-        optionCloseExecutions: simulation.optionCloseExecutions ?? executionsBySimulationId.get(simulation.id) ?? [],
+        optionCloseExecutions: normalizeOptionCloseExecutionsForStatus(
+          simulation.optionCloseExecutions ?? executionsBySimulationId.get(simulation.id),
+          simulation.status,
+        ),
       }));
       return {
         simulations,

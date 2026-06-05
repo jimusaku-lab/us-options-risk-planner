@@ -53,6 +53,8 @@ describe("date defaults", () => {
     expect(entry.tradeDate).toBe("2026-06-05");
     expect(close.closeDate).toBe("2026-06-05");
     expect(expired.closeDate).toBe("2026-06-05");
+    expect(close.confirmed).toBe(false);
+    expect(expired.confirmed).toBe(false);
     expect(expired.closeDate).not.toBe(sampleAmznSimulation.expiryDate);
   });
 

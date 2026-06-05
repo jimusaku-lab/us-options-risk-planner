@@ -29,8 +29,34 @@ export function getOptionCloseExecutions(simulation: TradeSimulation): OptionClo
   return simulation.optionCloseExecutions ?? [];
 }
 
+export function normalizeOptionCloseExecutionsForStatus(
+  executions: OptionCloseExecution[] | undefined,
+  status: TradeSimulation["status"],
+): OptionCloseExecution[] {
+  return (executions ?? []).map((execution) => ({
+    ...execution,
+    confirmed: execution.confirmed ?? ["closed", "expired"].includes(status),
+  }));
+}
+
 export function hasOptionCloseExecutions(simulation: TradeSimulation): boolean {
   return getOptionCloseExecutions(simulation).length > 0;
+}
+
+export function hasConfirmedBuybackCloseExecution(simulation: TradeSimulation): boolean {
+  return getOptionCloseExecutions(simulation).some(
+    (execution) => execution.confirmed && (execution.closeKind ?? "buyback") === "buyback",
+  );
+}
+
+export function hasConfirmedExpiredCloseExecution(simulation: TradeSimulation): boolean {
+  return getOptionCloseExecutions(simulation).some(
+    (execution) => execution.confirmed && execution.closeKind === "expired",
+  );
+}
+
+export function hasUnconfirmedCloseExecutionDraft(simulation: TradeSimulation): boolean {
+  return getOptionCloseExecutions(simulation).some((execution) => !execution.confirmed);
 }
 
 export function calculateHoldingDays(entryDate: string, closeDate: string): number {
@@ -53,6 +79,7 @@ export function createOptionCloseExecutionDraft(params: {
     id: `close-${params.leg.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     legId: params.leg.id,
     closeKind,
+    confirmed: false,
     closeDate,
     contracts: params.leg.quantity,
     closePriceUSD: params.closePriceUSD,

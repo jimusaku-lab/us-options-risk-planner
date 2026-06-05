@@ -8,7 +8,7 @@ import {
 } from "./calculations";
 import { getExitDeadlineInfo, getExitOrderLossAmount, getExitOrderPlan, getExitOrderPlanForLeg, getExitOrderStopValue, isAvoidAssignmentPut } from "./exitOrderPlan";
 import { hasUnconfirmedOptionEntryExecutions } from "./optionEntryExecutions";
-import { calculateOptionCloseExecutionResults } from "./optionCloseExecutions";
+import { hasConfirmedBuybackCloseExecution, hasConfirmedExpiredCloseExecution, hasUnconfirmedCloseExecutionDraft } from "./optionCloseExecutions";
 
 function hasAvoidPut(simulation: TradeSimulation): boolean {
   return isAvoidAssignmentPut(simulation);
@@ -30,7 +30,6 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
   const avoidPut = hasAvoidPut(simulation);
   const exitOrderPlan = getExitOrderPlan(simulation);
 
-  const closeExecutionResults = calculateOptionCloseExecutionResults(simulation);
   if (hasUnconfirmedOptionEntryExecutions(simulation)) {
     warnings.push({
       id: "option-entry-unconfirmed",
@@ -43,7 +42,19 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
       actionAnchorId: "option-entry-executions",
     });
   }
-  if (simulation.status === "closed" && closeExecutionResults.length === 0) {
+  if (hasUnconfirmedCloseExecutionDraft(simulation) && simulation.status === "open") {
+    warnings.push({
+      id: "option-close-execution-unconfirmed",
+      severity: "warning",
+      title: "決済実績が未確認です",
+      message: "決済実績の下書きがあります。Saxo注文履歴を見て内容を確認済みにしてください。",
+      blocking: false,
+      actionLabel: "決済実績を確認",
+      actionSimulationId: simulation.id,
+      actionAnchorId: "option-close-executions",
+    });
+  }
+  if (simulation.status === "closed" && !hasConfirmedBuybackCloseExecution(simulation)) {
     warnings.push({
       id: "closed-without-option-close-execution",
       severity: "danger",
@@ -58,7 +69,7 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
 
   if (
     simulation.status === "expired" &&
-    !(simulation.optionCloseExecutions ?? []).some((execution) => execution.closeKind === "expired")
+    !hasConfirmedExpiredCloseExecution(simulation)
   ) {
     warnings.push({
       id: "expired-without-option-expiry-record",

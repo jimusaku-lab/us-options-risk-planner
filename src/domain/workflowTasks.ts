@@ -1,6 +1,10 @@
 import type { TradeSimulation, WorkflowTask } from "@/types/domain";
 import { getShortCallLegs, getShortOptionLegs, getShortPutLegs } from "./calculations";
-import { calculateOptionCloseExecutionResults } from "./optionCloseExecutions";
+import {
+  hasConfirmedBuybackCloseExecution,
+  hasConfirmedExpiredCloseExecution,
+  hasUnconfirmedCloseExecutionDraft,
+} from "./optionCloseExecutions";
 import { hasUnconfirmedOptionEntryExecutions } from "./optionEntryExecutions";
 
 function task(simulation: TradeSimulation, task: Omit<WorkflowTask, "simulationId">): WorkflowTask {
@@ -27,10 +31,20 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
 
   if (simulation.status === "open") {
     const firstShortLeg = shortLegs[0];
-    const closeResults = calculateOptionCloseExecutionResults(simulation);
-    const hasBuybackCloseResult = closeResults.some((result) => (result.execution.closeKind ?? "buyback") === "buyback");
-    const hasExpiredCloseResult = closeResults.some((result) => result.execution.closeKind === "expired");
-    if (hasBuybackCloseResult) {
+    if (shortLegs.length > 0 && hasUnconfirmedOptionEntryExecutions(simulation)) {
+      tasks.push(
+        task(simulation, {
+          id: `${simulation.id}-confirm-entry`,
+          type: "confirm_entry_execution",
+          severity: "warning",
+          label: "約定確認へ",
+          detail: "Saxo取引履歴を見ながら、建玉約定確認を完了してください。",
+          actionLabel: "約定確認へ進む",
+          targetAnchor: "option-entry-executions",
+          focusField: "brokerBookedAmountJPY",
+        }),
+      );
+    } else if (hasConfirmedBuybackCloseExecution(simulation)) {
       tasks.push(
         task(simulation, {
           id: `${simulation.id}-mark-closed`,
@@ -43,7 +57,7 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
           focusField: "broker-realized-pnl-jpy",
         }),
       );
-    } else if (hasExpiredCloseResult) {
+    } else if (hasConfirmedExpiredCloseExecution(simulation)) {
       tasks.push(
         task(simulation, {
           id: `${simulation.id}-mark-expired`,
@@ -55,17 +69,17 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
           targetAnchor: "option-close-executions",
         }),
       );
-    } else if (shortLegs.length > 0 && hasUnconfirmedOptionEntryExecutions(simulation)) {
+    } else if (hasUnconfirmedCloseExecutionDraft(simulation)) {
       tasks.push(
         task(simulation, {
-          id: `${simulation.id}-confirm-entry`,
-          type: "confirm_entry_execution",
+          id: `${simulation.id}-confirm-close-execution`,
+          type: "enter_close_execution",
           severity: "warning",
-          label: "約定確認へ",
-          detail: "Saxo取引履歴を見ながら、建玉約定確認を完了してください。",
-          actionLabel: "約定確認へ進む",
-          targetAnchor: "option-entry-executions",
-          focusField: "brokerBookedAmountJPY",
+          label: "決済実績を確認",
+          detail: "決済実績の下書きがあります。Saxo注文履歴を見て確認済みにしてください。",
+          actionLabel: "決済実績へ進む",
+          targetAnchor: "option-close-executions",
+          focusField: "broker-realized-pnl-jpy",
         }),
       );
     } else {
@@ -86,7 +100,7 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
   }
 
   if (simulation.status === "closed") {
-    if (calculateOptionCloseExecutionResults(simulation).length === 0) {
+    if (!hasConfirmedBuybackCloseExecution(simulation)) {
       return [
         task(simulation, {
           id: `${simulation.id}-enter-close`,
@@ -104,7 +118,7 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
   }
 
   if (simulation.status === "expired") {
-    if (!(simulation.optionCloseExecutions ?? []).some((execution) => execution.closeKind === "expired")) {
+    if (!hasConfirmedExpiredCloseExecution(simulation)) {
       return [
         task(simulation, {
           id: `${simulation.id}-confirm-expiry`,

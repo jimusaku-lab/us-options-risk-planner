@@ -75,6 +75,7 @@ describe("workflow tasks", () => {
           id: "close-put",
           legId: putLeg.id,
           closeKind: "buyback",
+          confirmed: true,
           closeDate: "2026-06-02",
           contracts: 1,
           closePriceUSD: 0.13,
@@ -88,6 +89,27 @@ describe("workflow tasks", () => {
     expect(getPrimaryWorkflowTask(sim).label).toBe("決済済みに変更");
   });
 
+  it("keeps buyback close execution drafts as confirmation tasks", () => {
+    const sim = createOpenSimulation({
+      optionCloseExecutions: [
+        {
+          id: "close-put",
+          legId: putLeg.id,
+          closeKind: "buyback",
+          confirmed: false,
+          closeDate: "2026-06-02",
+          contracts: 1,
+          closePriceUSD: 0.13,
+          settlementCurrency: "JPY",
+          brokerRealizedPnlJPY: 15_491,
+          source: "manual",
+        },
+      ],
+    });
+
+    expect(getPrimaryWorkflowTask(sim).label).toBe("決済実績を確認");
+  });
+
   it("shows marking expired when an expiry execution is valid", () => {
     const sim = createOpenSimulation({
       optionCloseExecutions: [
@@ -95,6 +117,7 @@ describe("workflow tasks", () => {
           id: "expire-put",
           legId: putLeg.id,
           closeKind: "expired",
+          confirmed: true,
           closeDate: sampleAmznSimulation.expiryDate,
           contracts: 1,
           settlementCurrency: "JPY",
