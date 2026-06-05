@@ -177,10 +177,10 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const shortExitLegs = getShortOptionLegs(simulation);
   const optionEntryExecutions = simulation.optionEntryExecutions ?? [];
   const optionEntrySummary = calculateOptionEntryExecutionSummary(simulation);
-  const showOptionEntryExecutions = simulation.status === "open" || optionEntryExecutions.length > 0;
+  const showOptionEntryExecutions = ["planned", "open"].includes(simulation.status) || optionEntryExecutions.length > 0;
   const optionCloseExecutions = simulation.optionCloseExecutions ?? [];
   const optionCloseResults = calculateOptionCloseExecutionResults(simulation);
-  const showOptionCloseExecutions = ["closed", "expired"].includes(simulation.status) || optionCloseExecutions.length > 0;
+  const showOptionCloseExecutions = ["open", "closed", "expired"].includes(simulation.status) || optionCloseExecutions.length > 0;
   const exitOrderPlans = normalizeExitOrderPlans(simulation);
   const updateExitOrderPlan = (legId: string, patch: Partial<ExitOrderPlan>) => {
     const leg = shortExitLegs.find((item) => item.id === legId);
@@ -401,7 +401,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
         createOptionCloseExecutionDraft({
           simulation,
           leg,
-          closePriceUSD: leg.closeCostUSD ?? leg.closePlan?.closePriceUSD ?? 0,
+          closePriceUSD: leg.closeCostUSD ?? leg.closePlan?.closePriceUSD,
           closeKind: simulation.status === "expired" ? "expired" : "buyback",
           closeDate: simulation.status === "expired" ? simulation.expiryDate : undefined,
         }),
@@ -428,6 +428,9 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   }, [focusRequest?.requestId, focusRequest?.anchorId]);
   const hasMultipleAssignedRecords =
     simulation.status === "assigned" && Boolean(stockAcquisition.enabled && stockSettlement.enabled);
+  const entryExecutionsConfirmed = optionEntryExecutions.length > 0 && optionEntryExecutions.every((execution) => execution.confirmed);
+  const hasBuybackCloseExecutionResult = optionCloseResults.some((result) => (result.execution.closeKind ?? "buyback") === "buyback");
+  const hasExpiredCloseExecutionResult = optionCloseResults.some((result) => result.execution.closeKind === "expired");
 
   return (
     <section>
@@ -827,7 +830,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
         <div id="option-entry-executions" className={`mt-4 rounded-lg border bg-white p-3 ${highlightedAnchorId === "option-entry-executions" ? "border-amber-400 ring-2 ring-amber-200" : "border-slate-200"}`}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-slate-950">3-A. 建玉約定確認</h3>
+              <h3 className="text-sm font-bold text-slate-950">3-A. 建玉開始の約定確認</h3>
               <p className="mt-1 text-xs leading-5 text-slate-500">
                 注文前の予定値を、Saxoで実際に約定した建玉実績に確認・修正します。注文ID、ポジションID、約定時刻は通常入力に使わず、必要な場合だけメモへ残します。
               </p>
@@ -848,7 +851,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                   type="button"
                   onClick={confirmOptionEntryExecutions}
                 >
-                  約定情報を確認済みにする
+                  建玉開始を確認済みにする
                 </button>
               ) : null}
             </div>
@@ -856,6 +859,23 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           {simulation.status === "open" && optionEntryExecutions.some((execution) => !execution.confirmed) ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">
               約定情報未確認です。P口座ではSaxo取引履歴のプレミアムJPYと取引費用JPYを確認してください。
+            </div>
+          ) : null}
+          {entryExecutionsConfirmed && simulation.status === "planned" ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
+              <span className="font-semibold">建玉開始を確認しました。建玉状態を建玉中に変更できます。</span>
+              <button
+                type="button"
+                className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-100"
+                onClick={() => updateStatus("open")}
+              >
+                建玉中に変更
+              </button>
+            </div>
+          ) : null}
+          {entryExecutionsConfirmed && simulation.status === "open" ? (
+            <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm font-semibold leading-6 text-sky-950">
+              建玉開始の確認が完了しました。次は反対売買判断または満期管理です。
             </div>
           ) : null}
           <div className="mt-3 grid gap-3">
@@ -1506,6 +1526,30 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           {simulation.status === "closed" && optionCloseExecutions.length === 0 ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">
               決済済みですが、決済実績が未入力です。Saxo注文履歴から約定価格と手数料を入力してください。
+            </div>
+          ) : null}
+          {simulation.status === "open" && hasBuybackCloseExecutionResult ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
+              <span className="font-semibold">決済実績が入力されています。建玉状態を決済済みに変更できます。</span>
+              <button
+                type="button"
+                className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-100"
+                onClick={() => updateStatus("closed")}
+              >
+                決済済みに変更
+              </button>
+            </div>
+          ) : null}
+          {simulation.status === "open" && !hasBuybackCloseExecutionResult && hasExpiredCloseExecutionResult ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-950">
+              <span className="font-semibold">満期終了の記録が入力されています。建玉状態を満期終了に変更できます。</span>
+              <button
+                type="button"
+                className="rounded-md border border-sky-300 bg-white px-3 py-2 text-xs font-bold text-sky-800 hover:bg-sky-100"
+                onClick={() => updateStatus("expired")}
+              >
+                満期終了に変更
+              </button>
             </div>
           ) : null}
           <div className="mt-3 grid gap-3">

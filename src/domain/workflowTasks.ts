@@ -27,7 +27,35 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
 
   if (simulation.status === "open") {
     const firstShortLeg = shortLegs[0];
-    if (shortLegs.length > 0 && hasUnconfirmedOptionEntryExecutions(simulation)) {
+    const closeResults = calculateOptionCloseExecutionResults(simulation);
+    const hasBuybackCloseResult = closeResults.some((result) => (result.execution.closeKind ?? "buyback") === "buyback");
+    const hasExpiredCloseResult = closeResults.some((result) => result.execution.closeKind === "expired");
+    if (hasBuybackCloseResult) {
+      tasks.push(
+        task(simulation, {
+          id: `${simulation.id}-mark-closed`,
+          type: "enter_close_execution",
+          severity: "warning",
+          label: "決済済みに変更",
+          detail: "決済実績が入力されています。建玉状態を決済済みに変更できます。",
+          actionLabel: "決済実績へ進む",
+          targetAnchor: "option-close-executions",
+          focusField: "broker-realized-pnl-jpy",
+        }),
+      );
+    } else if (hasExpiredCloseResult) {
+      tasks.push(
+        task(simulation, {
+          id: `${simulation.id}-mark-expired`,
+          type: "confirm_expiry",
+          severity: "warning",
+          label: "満期終了に変更",
+          detail: "満期終了の記録が入力されています。建玉状態を満期終了に変更できます。",
+          actionLabel: "満期終了履歴へ",
+          targetAnchor: "option-close-executions",
+        }),
+      );
+    } else if (shortLegs.length > 0 && hasUnconfirmedOptionEntryExecutions(simulation)) {
       tasks.push(
         task(simulation, {
           id: `${simulation.id}-confirm-entry`,
