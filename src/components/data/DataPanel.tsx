@@ -59,7 +59,7 @@ export function DataPanel({ externalQuoteModeLabel, onClose }: { externalQuoteMo
         <h3 className="font-bold">外部株価・為替取得</h3>
         <p className="mt-1">{externalQuoteModeLabel}</p>
         <p className="mt-1">
-          ONの場合でも、株価取得時に送信するのは銘柄ティッカー、為替取得時に送信するのはUSD/JPY取得リクエストだけです。
+          株価更新で送信するのは銘柄ティッカー、為替更新で送信するのはUSD/JPY取得リクエストだけです。
           保有株数、建玉数量、プレミアム、口座残高、証拠金使用率、JSONバックアップ、localStorageの保存内容は送信しません。
         </p>
       </div>
