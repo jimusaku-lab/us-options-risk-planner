@@ -18,7 +18,7 @@ export const taxProfiles: Record<TaxProfileId, TaxProfile> = {
     applyTo: [],
     allowLossOffset: false,
     allowCarryForward: false,
-    notes: "税額を0円として扱う比較用プロファイルです。",
+    notes: "税額を0円として扱う試算プロファイルです。",
     requiresUserConfirmation: false,
   },
   japan_listed_stock_default_20_315: {

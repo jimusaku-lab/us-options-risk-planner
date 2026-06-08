@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
+import { BarChart3, ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
 import { calculatePendingAccountCashEffects, createAccountCashAdjustment } from "@/domain/accountCashEffects";
 import type { PendingAccountCashEffect } from "@/domain/accountCashEffects";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
@@ -13,9 +13,11 @@ import { calculateScenarioResults } from "@/domain/scenarios";
 import { calculateNisaComparison, calculateStockSettlementTaxResult, calculateTaxResult, taxProfiles } from "@/domain/tax";
 import { calculateTaxBucketSummary } from "@/domain/taxBucketSummary";
 import { createSimulationFromCandidate } from "@/domain/candidateConversion";
+import { calculateYearlyPerformanceSummary } from "@/domain/yearlyPerformance";
 import { CandidatePanel } from "@/components/candidates/CandidatePanel";
 import { AccountOverview } from "@/components/dashboard/AccountOverview";
 import { Dashboard } from "@/components/dashboard/Dashboard";
+import { YearlyPerformanceSummaryCard } from "@/components/dashboard/YearlyPerformanceSummaryCard";
 import { DataPanel } from "@/components/data/DataPanel";
 import { FirstRunNotice } from "@/components/help/FirstRunNotice";
 import { UserGuide } from "@/components/help/UserGuide";
@@ -31,10 +33,12 @@ import { SimulationEditor } from "@/components/wizard/SimulationEditor";
 import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
+import { formatLocalDate } from "@/lib/date";
 import { useCandidatesStore } from "@/store/useCandidatesStore";
 import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, useOptionsStore } from "@/store/useOptionsStore";
 import type { CandidateSymbol } from "@/types/candidates";
 import type { RiskWarning, WorkflowTask } from "@/types/domain";
+import type { YearlyPerformanceIssue } from "@/domain/yearlyPerformance";
 
 export default function App() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -47,6 +51,8 @@ export default function App() {
   const [quoteStatus, setQuoteStatus] = useState("");
   const [closeDecisionFocusRequest, setCloseDecisionFocusRequest] = useState<{ anchorId: string; requestId: number } | null>(null);
   const [editorFocusRequest, setEditorFocusRequest] = useState<{ anchorId: string; requestId: number } | null>(null);
+  const [performanceYear, setPerformanceYear] = useState(() => Number(formatLocalDate().slice(0, 4)));
+  const [activeView, setActiveView] = useState<"positions" | "performance">("positions");
   const {
     activeWorkspace,
     accountInputs,
@@ -77,6 +83,7 @@ export default function App() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
   const pendingCashEffects = calculatePendingAccountCashEffects(simulations, accountInputs);
+  const yearlyPerformanceSummary = calculateYearlyPerformanceSummary(simulations, performanceYear);
   const canUseExternalQuotes = true;
   const externalQuoteModeLabel = "株価更新では銘柄ティッカー、為替更新ではUSD/JPY取得リクエストだけを外部サービスへ送信します。";
   const refreshAllQuotes = async () => {
@@ -234,6 +241,12 @@ export default function App() {
     setIsEditorOpen(true);
     setEditorFocusRequest({ anchorId: `option-close-execution-${effect.sourceExecutionId}`, requestId: Date.now() });
   };
+  const goToYearlyPerformanceIssue = (issue: YearlyPerformanceIssue) => {
+    setActiveView("positions");
+    selectSimulation(issue.simulationId);
+    setIsEditorOpen(true);
+    setEditorFocusRequest({ anchorId: issue.targetAnchor, requestId: Date.now() });
+  };
   const acceptFirstRunNotice = () => {
     window.localStorage.setItem("us-options-first-run-notice-accepted", "true");
     setHasAcceptedNotice(true);
@@ -253,6 +266,8 @@ export default function App() {
           onToggleGuide={() => setIsGuideOpen((current) => !current)}
           onToggleData={() => setIsDataOpen((current) => !current)}
           onToggleCandidates={() => setIsCandidatesOpen((current) => !current)}
+          activeView={activeView}
+          onViewChange={setActiveView}
           onRefreshQuote={refreshAllQuotes}
           onRefreshFx={refreshAllFx}
           externalQuoteModeLabel={externalQuoteModeLabel}
@@ -262,55 +277,66 @@ export default function App() {
         <div className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5">
           {isGuideOpen ? <UserGuide onClose={() => setIsGuideOpen(false)} /> : null}
           {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
-          <Dashboard
-            simulations={simulations}
-            selectedId=""
-            onSelect={selectOnly}
-            onEdit={selectAndOpenEditor}
-            onDelete={deleteSimulation}
-            workspace={activeWorkspace}
-            accountInputs={accountInputs}
-            onWarningAction={goToCloseDecision}
-            onWorkflowTaskAction={goToWorkflowTask}
-          />
-          {isCandidatesOpen ? (
-            <CandidatePanel
-              candidates={candidates}
-              importWarnings={importWarnings}
-              simulations={simulations}
-              onImport={importCandidateSymbols}
-              onClear={clearCandidates}
-              onWatchOnly={markCandidateWatchOnly}
-              onCreateSimulation={createCandidateSimulation}
+          {activeView === "performance" ? (
+            <PerformanceView
+              summary={yearlyPerformanceSummary}
+              selectedYear={performanceYear}
+              onYearChange={setPerformanceYear}
+              onIssueAction={goToYearlyPerformanceIssue}
             />
-          ) : null}
-          <AccountOverview
-            workspace={activeWorkspace}
-            accountInputs={accountInputs}
-            pendingCashEffects={pendingCashEffects}
-            onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
-            onResolveCashEffect={goToPendingCashEffectSource}
-            onChange={updateAccountState}
-          />
-          <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-950">
-              {activeWorkspace === "demo" ? "デモ口座の建玉がありません" : "リアル口座の建玉がありません"}
-            </h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              デモ口座とリアル口座は別々に保存されます。リアル口座側にはデモサンプルを自動投入しないため、実口座画面を見ながら建玉を新規登録してください。
-            </p>
-            <button
-              className="mt-4 inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
-              onClick={createAndOpenEditor}
-            >
-              <Plus size={16} />
-              新規建玉
-            </button>
-          </section>
-          {activeWorkspace === "live" ? (
-            <WheelPanel cycles={wheelCycles} events={wheelEvents} stockTransfers={stockTransfers} />
           ) : (
-            <DemoWheelNotice />
+            <>
+              <Dashboard
+                simulations={simulations}
+                selectedId=""
+                onSelect={selectOnly}
+                onEdit={selectAndOpenEditor}
+                onDelete={deleteSimulation}
+                workspace={activeWorkspace}
+                accountInputs={accountInputs}
+                onWarningAction={goToCloseDecision}
+                onWorkflowTaskAction={goToWorkflowTask}
+              />
+              {isCandidatesOpen ? (
+                <CandidatePanel
+                  candidates={candidates}
+                  importWarnings={importWarnings}
+                  simulations={simulations}
+                  onImport={importCandidateSymbols}
+                  onClear={clearCandidates}
+                  onWatchOnly={markCandidateWatchOnly}
+                  onCreateSimulation={createCandidateSimulation}
+                />
+              ) : null}
+              <AccountOverview
+                workspace={activeWorkspace}
+                accountInputs={accountInputs}
+                pendingCashEffects={pendingCashEffects}
+                onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
+                onResolveCashEffect={goToPendingCashEffectSource}
+                onChange={updateAccountState}
+              />
+              <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="text-lg font-bold text-slate-950">
+                  {activeWorkspace === "demo" ? "デモ口座の建玉がありません" : "リアル口座の建玉がありません"}
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                  デモ口座とリアル口座は別々に保存されます。リアル口座側にはデモサンプルを自動投入しないため、実口座画面を見ながら建玉を新規登録してください。
+                </p>
+                <button
+                  className="mt-4 inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
+                  onClick={createAndOpenEditor}
+                >
+                  <Plus size={16} />
+                  新規建玉
+                </button>
+              </section>
+              {activeWorkspace === "live" ? (
+                <WheelPanel cycles={wheelCycles} events={wheelEvents} stockTransfers={stockTransfers} />
+              ) : (
+                <DemoWheelNotice />
+              )}
+            </>
           )}
         </div>
       </main>
@@ -415,6 +441,8 @@ export default function App() {
         onToggleGuide={() => setIsGuideOpen((current) => !current)}
         onToggleData={() => setIsDataOpen((current) => !current)}
         onToggleCandidates={() => setIsCandidatesOpen((current) => !current)}
+        activeView={activeView}
+        onViewChange={setActiveView}
         onRefreshQuote={refreshAllQuotes}
         onRefreshFx={refreshAllFx}
         externalQuoteModeLabel={externalQuoteModeLabel}
@@ -424,120 +452,131 @@ export default function App() {
       <div className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5">
         {isGuideOpen ? <UserGuide onClose={() => setIsGuideOpen(false)} /> : null}
         {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
-        <Dashboard
-          simulations={simulations}
-          selectedId={selected.id}
-          onSelect={selectOnly}
-          onEdit={selectAndOpenEditor}
-          onDelete={deleteSimulation}
-          workspace={activeWorkspace}
-          accountInputs={accountInputs}
-          onWarningAction={goToCloseDecision}
-          onWorkflowTaskAction={goToWorkflowTask}
-        />
-        {isCandidatesOpen ? (
-          <CandidatePanel
-            candidates={candidates}
-            importWarnings={importWarnings}
-            simulations={simulations}
-            onImport={importCandidateSymbols}
-            onClear={clearCandidates}
-            onWatchOnly={markCandidateWatchOnly}
-            onCreateSimulation={createCandidateSimulation}
-          />
-        ) : null}
-        <AccountOverview
-          workspace={activeWorkspace}
-          accountInputs={accountInputs}
-          referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
-          pendingCashEffects={pendingCashEffects}
-          onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
-          onResolveCashEffect={goToPendingCashEffectSource}
-          onChange={updateAccountState}
-        />
-        {isEditorOpen ? (
-          <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-            <button
-              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-              onClick={() => setIsEditorOpen(false)}
-            >
-              <span>
-                <span className="block text-lg font-bold text-slate-950">建玉入力</span>
-                <span className="mt-1 block text-sm text-slate-600">
-                  Saxo画面の数値を入力・修正します。閉じると俯瞰画面に戻ります。
-                </span>
-              </span>
-              <span className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
-                <ChevronUp size={16} />
-                閉じる
-              </span>
-            </button>
-            <div className="border-t border-slate-200 p-4">
-              <SimulationEditor
-                simulation={selected}
-                workspace={activeWorkspace}
-                canUseExternalQuotes={canUseExternalQuotes}
-                externalQuoteModeLabel={externalQuoteModeLabel}
-                onChange={upsertSimulation}
-                focusRequest={editorFocusRequest}
-                onCloseDecisionAction={(anchorId) => {
-                  setIsEditorOpen(false);
-                  setCloseDecisionFocusRequest({ anchorId, requestId: Date.now() });
-                }}
-              />
-            </div>
-          </section>
-        ) : null}
-        <SummaryCards
-          simulation={selectedWithAccount}
-          primaryDenominator={primaryWithNet}
-          taxResult={taxResult}
-          blockingCount={countableWarnings.filter((warning) => warning.blocking).length}
-          coveredCallAssignmentPreview={coveredCallAssignmentPreview}
-          primaryWarning={countableWarnings.find((warning) => warning.blocking) ?? countableWarnings[0]}
-          onWarningAction={(warning) => goToCloseDecision(selected.id, warning)}
-        />
-        <DenominatorTable denominators={denominators} />
-        <AnnualReturnFormula
-          simulation={selectedWithAccount}
-          primaryDenominator={primaryWithNet}
-          taxResult={taxResult}
-        />
-        <TaxComparisonCard
-          taxResult={taxResult}
-          nisaComparison={nisaComparison}
-          stockSettlementTax={stockSettlementTax}
-          taxBucketSummary={taxBucketSummary}
-        />
-        <ScenarioCards scenarios={scenarios} />
-        <CloseDecisionCard
-          simulation={selected}
-          onChange={upsertSimulation}
-          focusRequest={closeDecisionFocusRequest}
-          onExecutionDraft={() => {
-            setIsEditorOpen(true);
-            setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
-          }}
-        />
-        <section className="grid gap-4 xl:grid-cols-2">
-          <PayoffChart simulation={selectedWithAccount} points={payoff} />
-          <DenominatorChart denominators={denominators} />
-        </section>
-        <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
-        {activeWorkspace === "live" ? (
-          <WheelPanel
-            cycles={wheelCycles}
-            events={wheelEvents}
-            stockTransfers={stockTransfers}
-            onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
-            onCreateTransferFromSelected={
-              selected.accountEnvironment === "PROD_P_JPY_SETTLEMENT" && selected.status === "assigned"
-                ? () => createStockTransferFromSimulation(selected)
-                : undefined
-            }
+        {activeView === "performance" ? (
+          <PerformanceView
+            summary={yearlyPerformanceSummary}
+            selectedYear={performanceYear}
+            onYearChange={setPerformanceYear}
+            onIssueAction={goToYearlyPerformanceIssue}
           />
         ) : (
-          <DemoWheelNotice />
+          <>
+            <Dashboard
+              simulations={simulations}
+              selectedId={selected.id}
+              onSelect={selectOnly}
+              onEdit={selectAndOpenEditor}
+              onDelete={deleteSimulation}
+              workspace={activeWorkspace}
+              accountInputs={accountInputs}
+              onWarningAction={goToCloseDecision}
+              onWorkflowTaskAction={goToWorkflowTask}
+            />
+            {isCandidatesOpen ? (
+              <CandidatePanel
+                candidates={candidates}
+                importWarnings={importWarnings}
+                simulations={simulations}
+                onImport={importCandidateSymbols}
+                onClear={clearCandidates}
+                onWatchOnly={markCandidateWatchOnly}
+                onCreateSimulation={createCandidateSimulation}
+              />
+            ) : null}
+            <AccountOverview
+              workspace={activeWorkspace}
+              accountInputs={accountInputs}
+              referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
+              pendingCashEffects={pendingCashEffects}
+              onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
+              onResolveCashEffect={goToPendingCashEffectSource}
+              onChange={updateAccountState}
+            />
+            {isEditorOpen ? (
+              <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                <button
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                  onClick={() => setIsEditorOpen(false)}
+                >
+                  <span>
+                    <span className="block text-lg font-bold text-slate-950">建玉入力</span>
+                    <span className="mt-1 block text-sm text-slate-600">
+                      Saxo画面の数値を入力・修正します。閉じると俯瞰画面に戻ります。
+                    </span>
+                  </span>
+                  <span className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
+                    <ChevronUp size={16} />
+                    閉じる
+                  </span>
+                </button>
+                <div className="border-t border-slate-200 p-4">
+                  <SimulationEditor
+                    simulation={selected}
+                    workspace={activeWorkspace}
+                    canUseExternalQuotes={canUseExternalQuotes}
+                    externalQuoteModeLabel={externalQuoteModeLabel}
+                    onChange={upsertSimulation}
+                    focusRequest={editorFocusRequest}
+                    onCloseDecisionAction={(anchorId) => {
+                      setIsEditorOpen(false);
+                      setCloseDecisionFocusRequest({ anchorId, requestId: Date.now() });
+                    }}
+                  />
+                </div>
+              </section>
+            ) : null}
+            <SummaryCards
+              simulation={selectedWithAccount}
+              primaryDenominator={primaryWithNet}
+              taxResult={taxResult}
+              blockingCount={countableWarnings.filter((warning) => warning.blocking).length}
+              coveredCallAssignmentPreview={coveredCallAssignmentPreview}
+              primaryWarning={countableWarnings.find((warning) => warning.blocking) ?? countableWarnings[0]}
+              onWarningAction={(warning) => goToCloseDecision(selected.id, warning)}
+            />
+            <DenominatorTable denominators={denominators} />
+            <AnnualReturnFormula
+              simulation={selectedWithAccount}
+              primaryDenominator={primaryWithNet}
+              taxResult={taxResult}
+            />
+            <TaxComparisonCard
+              taxResult={taxResult}
+              nisaComparison={nisaComparison}
+              stockSettlementTax={stockSettlementTax}
+              taxBucketSummary={taxBucketSummary}
+            />
+            <ScenarioCards scenarios={scenarios} />
+            <CloseDecisionCard
+              simulation={selected}
+              onChange={upsertSimulation}
+              focusRequest={closeDecisionFocusRequest}
+              onExecutionDraft={() => {
+                setIsEditorOpen(true);
+                setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
+              }}
+            />
+            <section className="grid gap-4 xl:grid-cols-2">
+              <PayoffChart simulation={selectedWithAccount} points={payoff} />
+              <DenominatorChart denominators={denominators} />
+            </section>
+            <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+            {activeWorkspace === "live" ? (
+              <WheelPanel
+                cycles={wheelCycles}
+                events={wheelEvents}
+                stockTransfers={stockTransfers}
+                onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
+                onCreateTransferFromSelected={
+                  selected.accountEnvironment === "PROD_P_JPY_SETTLEMENT" && selected.status === "assigned"
+                    ? () => createStockTransferFromSimulation(selected)
+                    : undefined
+                }
+              />
+            ) : (
+              <DemoWheelNotice />
+            )}
+          </>
         )}
       </div>
     </main>
@@ -555,6 +594,39 @@ function DemoWheelNotice() {
   );
 }
 
+function PerformanceView({
+  summary,
+  selectedYear,
+  onYearChange,
+  onIssueAction,
+}: {
+  summary: ReturnType<typeof calculateYearlyPerformanceSummary>;
+  selectedYear: number;
+  onYearChange: (year: number) => void;
+  onIssueAction: (issue: YearlyPerformanceIssue) => void;
+}) {
+  return (
+    <section className="grid gap-4">
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <BarChart3 className="text-teal-700" size={20} />
+          <h2 className="text-lg font-bold text-slate-950">成績</h2>
+        </div>
+        <p className="mt-1 text-sm leading-6 text-slate-600">
+          確認済みの決済実績と入力済みの株式譲渡記録だけを、対象年ごとに集計します。注文前・建玉中・反対売買判断の見積もりは含めません。
+        </p>
+      </div>
+      <YearlyPerformanceSummaryCard
+        summary={summary}
+        selectedYear={selectedYear}
+        onYearChange={onYearChange}
+        onIssueAction={onIssueAction}
+        detailsMode="always"
+      />
+    </section>
+  );
+}
+
 function AppHeader({
   activeWorkspace,
   switchWorkspace,
@@ -565,6 +637,8 @@ function AppHeader({
   onToggleGuide,
   onToggleData,
   onToggleCandidates,
+  activeView,
+  onViewChange,
   onRefreshQuote,
   onRefreshFx,
   externalQuoteModeLabel,
@@ -579,6 +653,8 @@ function AppHeader({
   onToggleGuide: () => void;
   onToggleData: () => void;
   onToggleCandidates: () => void;
+  activeView: "positions" | "performance";
+  onViewChange: (view: "positions" | "performance") => void;
   onRefreshQuote?: () => void;
   onRefreshFx?: () => void;
   externalQuoteModeLabel: string;
@@ -611,10 +687,25 @@ function AppHeader({
           </div>
           <button
             className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-semibold text-slate-900"
-            onClick={createSimulationFromTemplate}
+            onClick={() => {
+              onViewChange("positions");
+              createSimulationFromTemplate();
+            }}
           >
             <Plus size={16} />
             新規建玉
+          </button>
+          <button
+            className={`inline-flex h-9 items-center gap-1 rounded-md border px-2 text-sm font-semibold ${
+              activeView === "performance"
+                ? "border-teal-300 bg-teal-50 text-teal-900"
+                : "border-slate-300 bg-white text-slate-900"
+            }`}
+            onClick={() => onViewChange(activeView === "performance" ? "positions" : "performance")}
+            title={activeView === "performance" ? "建玉管理へ戻る" : "成績画面を表示"}
+          >
+            <BarChart3 size={16} />
+            成績
           </button>
           <button
             className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-900"
