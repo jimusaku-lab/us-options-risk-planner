@@ -38,13 +38,21 @@
 - `GITHUB_PAGES=true npm run build`: 通過
 - Git commit: 済み
 - GitHub push: 済み
-- GitHub Pages公開URL確認: 実行予定
+- GitHub Pages公開URL確認: 済み
 
 ## push情報
 
 - 実装commit hash: `d84ab44`
+- 報告書commit hash: `818288f`
+- Pages deploy commit hash: `e270c4e`
 - push branch: `main`
 - push状態: 済み
+- Pages branch: `gh-pages`
+- Pages push状態: 済み
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 公開URL確認:
+  - HTMLが `assets/index-Bo3NY2iX.js` を参照することを確認した。
+  - 公開bundle内に `使用分母 / 実績分母` と `税前 / 税後` が含まれることを確認した。
 
 ## 残課題
 
