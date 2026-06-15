@@ -4,6 +4,7 @@ import { Fragment, useState } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
+import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
 import { getPrimaryWorkflowTask, getWorkflowTasks } from "@/domain/workflowTasks";
@@ -114,8 +115,12 @@ export function Dashboard({
                     ? accountInputs.N.marginUsagePercent
                     : accountInputs.P.marginUsagePercent,
               };
-              const premium = calculateNetInitialPremiumJPY(simulationWithAccount);
-              const primary = getPrimaryDenominator(calculateDenominators(simulationWithAccount, premium));
+              const isHistoryRow = endedStatuses.has(simulation.status);
+              const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
+              const premium = historyPerformance?.premiumJPY ?? calculateNetInitialPremiumJPY(simulationWithAccount);
+              const primary =
+                historyPerformance?.primaryDenominator ??
+                getPrimaryDenominator(calculateDenominators(simulationWithAccount, premium));
               const warnings = generateRiskWarnings(simulationWithAccount);
               const workflowTasks = getWorkflowTasks(simulationWithAccount);
               const primaryTask = getPrimaryWorkflowTask(simulationWithAccount);
@@ -136,6 +141,10 @@ export function Dashboard({
               const firstVisibleWarning = countableWarnings[0];
               const stockAcquisitionSummary = getStockAcquisitionSummary(simulation);
               const isFirstHistory = showHistory && index === currentSimulations.length && historySimulations.length > 0;
+              const annualReturnLabel =
+                isHistoryRow && primary.netAnnualReturnPct !== undefined
+                  ? `${formatPct(primary.annualReturnPct)} / ${formatPct(primary.netAnnualReturnPct)}`
+                  : formatPct(primary.annualReturnPct);
               return (
                 <Fragment key={simulation.id}>
                 {isFirstHistory ? (
@@ -194,6 +203,7 @@ export function Dashboard({
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
+                    {isHistoryRow ? <span className="mb-1 block text-[11px] font-bold text-slate-500">実績分母</span> : null}
                     {primary.currency === "USD" ? (
                       <>
                         <span className="block">{formatUSD(primary.amountUSD ?? 0)}</span>
@@ -203,7 +213,10 @@ export function Dashboard({
                       formatJPY(primary.amountJPY)
                     )}
                   </td>
-                  <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatPct(primary.annualReturnPct)}</td>
+                  <td className="numeric-input py-3 pr-3 text-right font-semibold">
+                    {annualReturnLabel}
+                    {isHistoryRow ? <span className="mt-1 block text-[11px] font-semibold text-slate-500">税前 / 税後</span> : null}
+                  </td>
                   <td
                     className={`py-3 pr-3 text-right text-xs font-bold ${
                       blockingCount > 0 ? "text-red-700" : countableWarnings.length > 0 ? "text-amber-700" : "text-emerald-700"

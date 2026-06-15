@@ -2,16 +2,15 @@ import { useRef, useState } from "react";
 import { BarChart3, ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
 import { calculatePendingAccountCashEffects, createAccountCashAdjustment } from "@/domain/accountCashEffects";
 import type { PendingAccountCashEffect } from "@/domain/accountCashEffects";
-import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
-import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
-import { calculateOptionCloseExecutionResults, createOptionCloseExecutionDraft, sanitizeSaxoHistoryCloseExecutions } from "@/domain/optionCloseExecutions";
+import { calculateHistoryPerformance } from "@/domain/historyPerformance";
+import { createOptionCloseExecutionDraft, sanitizeSaxoHistoryCloseExecutions } from "@/domain/optionCloseExecutions";
 import { createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
 import { getWorkflowTargetAnchorId } from "@/domain/workflowTasks";
 import { calculatePayoffSeries } from "@/domain/payoff";
 import { generateChecklist, generateRiskWarnings } from "@/domain/riskRules";
 import { calculateScenarioResults } from "@/domain/scenarios";
-import { calculateNisaComparison, calculateStockSettlementTaxResult, calculateTaxResult, taxProfiles } from "@/domain/tax";
+import { calculateNisaComparison, calculateStockSettlementTaxResult, taxProfiles } from "@/domain/tax";
 import { calculateTaxBucketSummary } from "@/domain/taxBucketSummary";
 import { createSimulationFromCandidate } from "@/domain/candidateConversion";
 import { calculateYearlyPerformanceSummary } from "@/domain/yearlyPerformance";
@@ -889,82 +888,25 @@ export default function App() {
         ? accountInputs.N.marginUsagePercent
         : accountInputs.P.marginUsagePercent,
   };
-  const historyResultMode = selectedWithAccount.status === "closed" || selectedWithAccount.status === "assigned" || selectedWithAccount.status === "expired";
-  const assignedShortPutLeg = selectedWithAccount.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell");
-  const assignedStockAcquisition = selectedWithAccount.stockAcquisition;
-  const assignedPutStockHoldingMode =
-    selectedWithAccount.status === "assigned" &&
-    Boolean(assignedShortPutLeg) &&
-    Boolean(
-      assignedStockAcquisition?.enabled &&
-        Number.isFinite(assignedStockAcquisition.shares) &&
-        assignedStockAcquisition.shares > 0 &&
-        Number.isFinite(assignedStockAcquisition.priceUSD) &&
-        assignedStockAcquisition.priceUSD > 0,
-    );
-  const optionPerformanceSimulation = assignedPutStockHoldingMode
-    ? {
-        ...selectedWithAccount,
-        stockPosition: selectedWithAccount.stockPosition
-          ? { ...selectedWithAccount.stockPosition, shares: 0 }
-          : selectedWithAccount.stockPosition,
-        denominatorMode: "cash_secured" as const,
-      }
-    : selectedWithAccount;
-  const assignedDenominatorFx = selectedWithAccount.referenceFxRateJPY ?? selectedWithAccount.fxRateJPY;
-  const assignedDenominatorShares = assignedShortPutLeg ? Math.abs(assignedShortPutLeg.quantity) * 100 : assignedStockAcquisition?.shares ?? 0;
-  const assignedPutDenominatorJPY =
-    assignedPutStockHoldingMode && assignedShortPutLeg && assignedDenominatorFx > 0
-      ? assignedShortPutLeg.strikeUSD * assignedDenominatorShares * assignedDenominatorFx
-      : undefined;
+  const historyPerformance = calculateHistoryPerformance(selectedWithAccount);
+  const historyResultMode = historyPerformance.historyResultMode;
+  const assignedShortPutLeg = historyPerformance.assignedShortPutLeg;
+  const assignedPutStockHoldingMode = historyPerformance.assignedPutStockHoldingMode;
+  const assignedDenominatorFx = historyPerformance.assignedPutDenominatorFx ?? 0;
+  const assignedDenominatorShares = historyPerformance.assignedPutDenominatorShares ?? 0;
+  const assignedPutDenominatorJPY = historyPerformance.assignedPutDenominatorJPY;
   const assignedPutDenominatorFormula =
     assignedPutDenominatorJPY !== undefined && assignedShortPutLeg
       ? `計算式: ${formatNumber(assignedShortPutLeg.strikeUSD)} USD × ${assignedDenominatorShares}株 × ${formatNumber(assignedDenominatorFx)} = ${formatJPY(assignedPutDenominatorJPY)}`
       : undefined;
-  const premiumJPY = calculateNetInitialPremiumJPY(selectedWithAccount);
-  const optionCloseExecutionResults = calculateOptionCloseExecutionResults(selectedWithAccount);
-  const hasCloseExecutionResults = optionCloseExecutionResults.length > 0;
-  const selectedRequiresExecutionRecord = selectedWithAccount.status === "closed" || selectedWithAccount.status === "expired";
-  const realizedOptionProfitJPY = optionCloseExecutionResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
-  const realizedOptionDays =
-    hasCloseExecutionResults
-      ? Math.max(1, Math.round(
-          optionCloseExecutionResults.reduce((sum, result) => sum + result.holdingDays, 0) /
-            optionCloseExecutionResults.length,
-        ))
-      : selectedWithAccount.dte;
-  const taxGrossProfitJPY =
-    selectedRequiresExecutionRecord
-      ? hasCloseExecutionResults
-        ? realizedOptionProfitJPY
-        : 0
-      : premiumJPY;
-  const taxSimulation = {
-    ...optionPerformanceSimulation,
-    dte: selectedRequiresExecutionRecord ? realizedOptionDays : selectedWithAccount.dte,
-    ...(selectedRequiresExecutionRecord
-      ? {
-          brokerCommissionUSD: 0,
-          brokerCommissionJPY: 0,
-          exchangeFeesJPY: 0,
-          fxConversionCostJPY: 0,
-          carryingCostJPY: 0,
-        }
-      : {}),
-  };
-  const grossDenominators = calculateDenominators(taxSimulation, taxGrossProfitJPY);
-  const primary = getPrimaryDenominator(grossDenominators);
+  const taxSimulation = historyPerformance.taxSimulation;
+  const primary = historyPerformance.primaryGrossDenominator;
+  const taxResult = historyPerformance.taxResult;
   const taxProfile = taxProfiles[selected.taxProfileId];
-  const taxResult = calculateTaxResult({
-    simulation: taxSimulation,
-    grossProfitJPY: taxGrossProfitJPY,
-    denominatorJPY: primary.amountJPY,
-    taxProfile,
-  });
   const stockSettlementTax = calculateStockSettlementTaxResult(selectedWithAccount);
   const taxBucketSummary = calculateTaxBucketSummary(simulations);
-  const denominators = calculateDenominators(taxSimulation, taxGrossProfitJPY, taxResult.netProfitJPY);
-  const primaryWithNet = getPrimaryDenominator(denominators);
+  const denominators = historyPerformance.denominators;
+  const primaryWithNet = historyPerformance.primaryDenominator;
   const nisaComparison = calculateNisaComparison({
     netProfitJPY: taxResult.netProfitJPY,
     denominatorJPY: primary.amountJPY,
