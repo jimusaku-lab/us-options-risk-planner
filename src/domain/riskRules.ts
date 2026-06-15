@@ -173,7 +173,7 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
       id: "p-assigned-stock-transfer-pending",
       severity: "warning",
       title: "P口座で取得した株式が残っています",
-      message: "N口座へ株式移管してカバードコール管理へ進めるか確認してください。株式移管は売却損益として扱いません。",
+      message: "P口座で株式取得済み。N口座へ移管したら移管記録を入力してください。株式移管は売却損益として扱いません。",
     });
   }
 

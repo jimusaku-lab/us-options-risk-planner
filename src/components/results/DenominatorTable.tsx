@@ -11,12 +11,26 @@ function formatComponent(component: DenominatorResult["components"][number]): st
   return `${component.label}: ${formatJPY(component.amountJPY)}`;
 }
 
-export function DenominatorTable({ denominators }: { denominators: DenominatorResult[] }) {
-  return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+type DenominatorTableProps = {
+  denominators: DenominatorResult[];
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  title?: string;
+  subtitle?: string;
+};
+
+export function DenominatorTable({
+  denominators,
+  collapsible = false,
+  defaultOpen = true,
+  title = "分母比較",
+  subtitle = "どの資金を分母にした利回りかを必ず確認",
+}: DenominatorTableProps) {
+  const table = (
+    <div className="p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-bold text-slate-950">分母比較</h2>
-        <span className="text-sm text-slate-500">どの資金を分母にした利回りかを必ず確認</span>
+        <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+        <span className="text-sm text-slate-500">{subtitle}</span>
       </div>
       <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[760px] border-collapse text-sm">
@@ -54,6 +68,22 @@ export function DenominatorTable({ denominators }: { denominators: DenominatorRe
           </tbody>
         </table>
       </div>
-    </section>
+    </div>
+  );
+
+  if (!collapsible) {
+    return <section className="rounded-lg border border-slate-200 bg-white shadow-sm">{table}</section>;
+  }
+
+  return (
+    <details className="rounded-lg border border-slate-200 bg-white shadow-sm" open={defaultOpen}>
+      <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-900">
+        {title}
+        <span className="ml-2 font-normal text-slate-500">{subtitle}</span>
+      </summary>
+      <div className="border-t border-slate-200">
+        {table}
+      </div>
+    </details>
   );
 }

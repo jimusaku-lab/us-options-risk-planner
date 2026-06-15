@@ -39,6 +39,90 @@ export function normalizeOptionCloseExecutionsForStatus(
   }));
 }
 
+export type SaxoHistoryCloseExecutionValidation = {
+  valid: boolean;
+  remove: boolean;
+  reason?: string;
+};
+
+export function validateSaxoHistoryCloseExecution(
+  simulation: TradeSimulation,
+  execution: OptionCloseExecution,
+): SaxoHistoryCloseExecutionValidation {
+  if (execution.source !== "saxo_history" || execution.confirmed) return { valid: true, remove: false };
+  if (execution.confirmationStatus === "ignored") return { valid: true, remove: false };
+  if (isStaleSaxoHistoryPlaceholderCloseExecution(execution)) {
+    return {
+      valid: false,
+      remove: true,
+      reason: "Saxo履歴候補由来の古いプレースホルダ値が残っているため破棄しました。",
+    };
+  }
+  if (!execution.sourceCandidateId && !execution.sourceTradeId) {
+    return {
+      valid: false,
+      remove: false,
+      reason: "元になったSaxo履歴IDがないため、対象履歴を再検証できません。",
+    };
+  }
+  if (execution.targetPositionId && execution.targetPositionId !== simulation.id) {
+    return {
+      valid: false,
+      remove: false,
+      reason: "この決済実績候補は別の建玉に紐づいているため、この建玉では正式保存できません。",
+    };
+  }
+  const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
+  if (!leg) {
+    return {
+      valid: false,
+      remove: false,
+      reason: "対象脚が見つからないため、決済実績候補を再検証できません。",
+    };
+  }
+  if ((execution.closeKind ?? "buyback") === "buyback" && execution.closePriceUSD === undefined) {
+    return {
+      valid: false,
+      remove: false,
+      reason: "買戻し決済の約定価格が未取得です。Saxo履歴を選び直すか、手入力で確認してください。",
+    };
+  }
+  return { valid: true, remove: false };
+}
+
+export function sanitizeSaxoHistoryCloseExecutions(simulation: TradeSimulation): TradeSimulation {
+  const executions = simulation.optionCloseExecutions ?? [];
+  if (executions.length === 0) return simulation;
+  let changed = false;
+  const next = executions.flatMap((execution) => {
+    const validation = validateSaxoHistoryCloseExecution(simulation, execution);
+    if (validation.remove) {
+      changed = true;
+      return [];
+    }
+    if (!validation.valid && execution.confirmationStatus !== "invalid") {
+      changed = true;
+      return [
+        {
+          ...execution,
+          confirmationStatus: "invalid" as const,
+          invalidReason: validation.reason,
+        },
+      ];
+    }
+    return [execution];
+  });
+  return changed ? { ...simulation, optionCloseExecutions: next } : simulation;
+}
+
+function isStaleSaxoHistoryPlaceholderCloseExecution(execution: OptionCloseExecution): boolean {
+  if (execution.source !== "saxo_history" || execution.confirmed) return false;
+  const hasOneYenPlaceholder = execution.brokerRealizedPnlJPY === 1 || execution.brokerBookedAmountJPY === 1;
+  const hasKnownWrongClosePrice = execution.closePriceUSD === 0.13;
+  const hasBothOneYenFields = execution.brokerRealizedPnlJPY === 1 && execution.brokerBookedAmountJPY === 1;
+  return hasOneYenPlaceholder && (hasKnownWrongClosePrice || hasBothOneYenFields);
+}
+
 export function hasOptionCloseExecutions(simulation: TradeSimulation): boolean {
   return getOptionCloseExecutions(simulation).length > 0;
 }
@@ -112,6 +196,17 @@ export function calculateOptionCloseExecutionResult(
   const shortLegs = simulation.optionLegs.filter((item) => item.side === "sell");
   const closeKind = execution.closeKind ?? "buyback";
   if (closeKind === "buyback" && (execution.closePriceUSD === undefined || Number.isNaN(execution.closePriceUSD))) return null;
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const entryExecution = simulation.optionEntryExecutions?.find((item) => item.legId === execution.legId);
+  const entryExecutionProportion = entryExecution ? contracts / Math.max(1, entryExecution.contracts || leg.quantity) : 1;
+  const entryBookedAmountJPY =
+    entryExecution?.brokerBookedAmountJPY !== undefined
+      ? entryExecution.brokerBookedAmountJPY * entryExecutionProportion
+      : undefined;
+  const cashflowRealizedPnlJPY =
+    !isN && entryBookedAmountJPY !== undefined && execution.brokerBookedAmountJPY !== undefined
+      ? entryBookedAmountJPY + execution.brokerBookedAmountJPY
+      : undefined;
   const openCommissionUSD =
     getEntryExecutionCostForLegUSD(simulation, leg, contracts) ??
     (simulation.brokerCommissionUSD ?? 0) / Math.max(1, shortLegs.length) * (contracts / Math.max(1, leg.quantity));
@@ -120,7 +215,6 @@ export function calculateOptionCloseExecutionResult(
     (simulation.brokerCommissionJPY ?? 0) / Math.max(1, shortLegs.length) * (contracts / Math.max(1, leg.quantity));
   const entryPremiumUSD = leg.premiumUSD * CONTRACT_SIZE * contracts;
   const closeCostUSD = closeKind === "expired" ? 0 : (execution.closePriceUSD ?? 0) * CONTRACT_SIZE * contracts;
-  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
   const closeCommissionUSD = execution.commissionUSD ?? 0;
   const closeCommissionJPY =
     !isN && execution.brokerTransactionCostJPY !== undefined
@@ -145,9 +239,11 @@ export function calculateOptionCloseExecutionResult(
   const realizedPnlJPY =
     !isN && execution.brokerRealizedPnlJPY !== undefined
       ? execution.brokerRealizedPnlJPY
+      : !isN && cashflowRealizedPnlJPY !== undefined
+        ? cashflowRealizedPnlJPY
       : estimatedRealizedPnlJPY;
   const basis =
-    !isN && execution.brokerRealizedPnlJPY !== undefined
+    !isN && (execution.brokerRealizedPnlJPY !== undefined || cashflowRealizedPnlJPY !== undefined)
       ? "saxo_broker_statement"
       : "estimated";
   const holdingDays = calculateHoldingDays(simulation.entryDate, execution.closeDate);

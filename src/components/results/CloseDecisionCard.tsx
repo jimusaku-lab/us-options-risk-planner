@@ -1,20 +1,24 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import type { ExitBrokerOrderType, ExitOrderPlanMode, OptionLeg, TradeSimulation } from "@/types/domain";
 import { calculateCloseCostJPY, calculatePremiumJPY, calculatePremiumUSD } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateProfitTakeBuybackPriceUSD, getExitDeadlineInfo, getExitOrderPlanForLeg } from "@/domain/exitOrderPlan";
 import { createOptionCloseExecutionDraft } from "@/domain/optionCloseExecutions";
+import { fetchSaxoOptionPremiumCandidate } from "@/features/saxo/saxoApiClient";
+import { findOrderCandidatesForLeg, type SaxoApiOrderSnapshot, type SaxoOptionPremiumCandidate } from "@/features/saxo/saxoAccountSync";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 export function CloseDecisionCard({
   simulation,
+  saxoOrderCandidates = [],
   onChange,
   focusRequest,
   onExecutionDraft,
 }: {
   simulation: TradeSimulation;
+  saxoOrderCandidates?: SaxoApiOrderSnapshot[];
   onChange: (simulation: TradeSimulation) => void;
   focusRequest?: { anchorId: string; requestId: number } | null;
   onExecutionDraft?: () => void;
@@ -51,7 +55,7 @@ export function CloseDecisionCard({
   }, [focusRequest?.requestId, focusRequest?.anchorId]);
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <section id="close-decision" className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-bold text-slate-950">反対売買判断</h2>
         <button
@@ -75,6 +79,7 @@ export function CloseDecisionCard({
                 simulation={simulation}
                 fxRateJPY={simulation.fxRateJPY}
                 openCommissionUSD={(simulation.brokerCommissionUSD ?? 0) / Math.max(1, shortLegs.length)}
+                saxoOrderCandidates={saxoOrderCandidates}
                 onCloseCostChange={(closeCostUSD) => updateLeg(leg.id, { closeCostUSD })}
                 onExecutionDraft={() => addExecutionDraft(leg)}
               />
@@ -95,6 +100,7 @@ function LegCloseCard({
   simulation,
   fxRateJPY,
   openCommissionUSD,
+  saxoOrderCandidates,
   onCloseCostChange,
   onExecutionDraft,
 }: {
@@ -102,9 +108,13 @@ function LegCloseCard({
   simulation: TradeSimulation;
   fxRateJPY: number;
   openCommissionUSD: number;
+  saxoOrderCandidates: SaxoApiOrderSnapshot[];
   onCloseCostChange: (closeCostUSD: number) => void;
   onExecutionDraft: () => void;
 }) {
+  const [apiCandidate, setApiCandidate] = useState<SaxoOptionPremiumCandidate | null>(null);
+  const [apiCandidateMessage, setApiCandidateMessage] = useState("");
+  const [isLoadingApiCandidate, setIsLoadingApiCandidate] = useState(false);
   const receivedJPY = calculatePremiumJPY({
     premiumUSD: leg.premiumUSD,
     quantity: leg.quantity,
@@ -146,6 +156,8 @@ function LegCloseCard({
   const callKeepStock = leg.type === "call" && !nakedCall && simulation.stockPosition?.canSellAtStrike === false;
   const exitDeadline = getExitDeadlineInfo(simulation, exitOrderPlan);
   const stopLossAmount = isN ? exitOrderPlan.stopLossAmountUSD ?? 0 : exitOrderPlan.stopLossAmountJPY ?? 0;
+  const orderCandidates = findOrderCandidatesForLeg(simulation, leg, saxoOrderCandidates).filter((order) => order.isExitCandidate);
+  const candidatePriceUSD = getPremiumCandidatePrice(apiCandidate);
   const keepPercent =
     (isN ? estimatedProfitUSD : estimatedProfitJPY) === null || (isN ? receivedUSD : receivedJPY) === 0
       ? null
@@ -166,6 +178,30 @@ function LegCloseCard({
   const stopRuleStatus = getStopRuleStatus({ simulation, leg, estimatedProfitJPY, estimatedProfitUSD, exitOrderPlan });
   const label = `${leg.type === "call" ? "C" : "P"} ${leg.strikeUSD} ${leg.expiryDate}`;
 
+  async function loadApiCandidate() {
+    setIsLoadingApiCandidate(true);
+    setApiCandidateMessage("");
+    try {
+      const candidate = await fetchSaxoOptionPremiumCandidate({
+        symbol: simulation.ticker,
+        expiry: leg.expiryDate,
+        strike: leg.strikeUSD,
+        optionType: leg.type,
+      });
+      setApiCandidate(candidate);
+      setApiCandidateMessage(candidate.message);
+    } catch (error) {
+      setApiCandidate(null);
+      setApiCandidateMessage(
+        error instanceof Error
+          ? `${error.message} 既存の買戻し価格は変更していません。`
+          : "API候補価格を取得できませんでした。既存の買戻し価格は変更していません。",
+      );
+    } finally {
+      setIsLoadingApiCandidate(false);
+    }
+  }
+
   if (callCanSell) {
     return (
       <div id={`close-decision-call-${leg.id}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -183,6 +219,15 @@ function LegCloseCard({
             onChange={onCloseCostChange}
           />
         </div>
+        <ApiPremiumCandidatePanel
+          candidate={apiCandidate}
+          candidatePriceUSD={candidatePriceUSD}
+          message={apiCandidateMessage}
+          isLoading={isLoadingApiCandidate}
+          onLoad={loadApiCandidate}
+          onAdopt={onCloseCostChange}
+        />
+        <SaxoExitOrderStatus candidates={orderCandidates} totalFetched={saxoOrderCandidates.length} />
         {(leg.closeCostUSD ?? leg.closePlan?.closePriceUSD ?? 0) > 0 ? (
           <button
             className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
@@ -208,6 +253,15 @@ function LegCloseCard({
           onChange={onCloseCostChange}
         />
       </div>
+      <ApiPremiumCandidatePanel
+        candidate={apiCandidate}
+        candidatePriceUSD={candidatePriceUSD}
+        message={apiCandidateMessage}
+        isLoading={isLoadingApiCandidate}
+        onLoad={loadApiCandidate}
+        onAdopt={onCloseCostChange}
+      />
+      <SaxoExitOrderStatus candidates={orderCandidates} totalFetched={saxoOrderCandidates.length} />
       {(leg.closeCostUSD ?? leg.closePlan?.closePriceUSD ?? 0) > 0 ? (
         <button
           className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
@@ -404,6 +458,117 @@ function LegCloseCard({
 }
 
 type Tone = "green" | "red" | "amber" | undefined;
+
+function ApiPremiumCandidatePanel({
+  candidate,
+  candidatePriceUSD,
+  message,
+  isLoading,
+  onLoad,
+  onAdopt,
+}: {
+  candidate: SaxoOptionPremiumCandidate | null;
+  candidatePriceUSD: number | null;
+  message: string;
+  isLoading: boolean;
+  onLoad: () => void;
+  onAdopt: (price: number) => void;
+}) {
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-bold text-slate-950">API候補価格</div>
+        <button
+          className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 font-bold text-slate-700 disabled:opacity-40"
+          onClick={onLoad}
+          disabled={isLoading}
+        >
+          <RefreshCw size={13} />
+          候補価格を取得
+        </button>
+      </div>
+      {candidate ? (
+        <>
+          <dl className="mt-2 grid gap-1 sm:grid-cols-4">
+            <MiniRow label="Bid" value={formatOptionalUSD(candidate.bid)} />
+            <MiniRow label="Ask" value={formatOptionalUSD(candidate.ask)} />
+            <MiniRow label="Last" value={formatOptionalUSD(candidate.last)} />
+            <MiniRow label="Mid" value={formatOptionalUSD(candidate.mid)} />
+          </dl>
+          <div className="mt-2 rounded border border-slate-200 bg-white px-2 py-1">
+            <div className="font-bold text-slate-800">{candidate.classification}</div>
+            <div className="mt-1 leading-5 text-slate-600">{candidate.message}</div>
+            <div className="mt-1 text-slate-500">取得元: {candidate.source}</div>
+          </div>
+          {candidatePriceUSD !== null ? (
+            <button
+              className="mt-2 rounded border border-slate-300 bg-white px-2 py-1 font-bold text-slate-700 hover:bg-slate-50"
+              onClick={() => onAdopt(candidatePriceUSD)}
+            >
+              {formatUSD(candidatePriceUSD)}を候補として採用
+            </button>
+          ) : null}
+        </>
+      ) : message ? (
+        <p className="mt-2 leading-5 text-slate-600">{message}</p>
+      ) : (
+        <p className="mt-2 leading-5 text-slate-500">
+          Options Chain / 現在プレミアムは候補表示だけです。採用しても自動で決済済みにはしません。
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SaxoExitOrderStatus({ candidates, totalFetched }: { candidates: SaxoApiOrderSnapshot[]; totalFetched: number }) {
+  const hasFetched = totalFetched > 0;
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-xs">
+      <div className="font-bold text-slate-950">Saxo側出口注文</div>
+      <p className="mt-1 leading-5 text-slate-600">
+        {!hasFetched
+          ? "未約定注文は未取得です。Saxo API Read-onlyパネルで取得すると、決済指値・逆指値・OCO/IFD系の候補を照合します。"
+          : candidates.length > 0
+            ? `Saxo側に設定あり: ${candidates.length}件。アプリ側の利確/損切りルールとは別物として扱います。`
+            : "取得済みの未約定注文内に、この脚へ紐づく出口注文候補はありません。"}
+      </p>
+      {candidates.length > 0 ? (
+        <ul className="mt-2 grid gap-1 text-slate-700">
+          {candidates.slice(0, 3).map((candidate) => (
+            <li key={candidate.id} className="rounded bg-slate-50 px-2 py-1">
+              {candidate.orderType ?? "注文種別未取得"} /{" "}
+              {candidate.price !== undefined
+                ? formatUSD(candidate.price)
+                : candidate.stopPrice !== undefined
+                  ? `Stop ${formatUSD(candidate.stopPrice)}`
+                  : "価格未取得"}{" "}
+              / {candidate.status ?? "状態未取得"}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function getPremiumCandidatePrice(candidate: SaxoOptionPremiumCandidate | null): number | null {
+  if (!candidate) return null;
+  const price = candidate.mid ?? candidate.last ?? candidate.ask ?? candidate.bid;
+  return price !== undefined && Number.isFinite(price) && price > 0 ? price : null;
+}
+
+function formatOptionalUSD(value?: number): string {
+  return value !== undefined && Number.isFinite(value) ? formatUSD(value) : "未取得";
+}
+
+function MiniRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-2 rounded bg-white px-2 py-1">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="numeric-input font-bold text-slate-950">{value}</dd>
+    </div>
+  );
+}
 
 function calculateElapsedDaysSinceEntry(entryDate: string, now = new Date()): number {
   const entry = new Date(`${entryDate}T00:00:00`);

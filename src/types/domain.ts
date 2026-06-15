@@ -82,6 +82,18 @@ export type AccountState = {
   accountValue?: number;
   updatedAt: string;
   cashAdjustments?: AccountCashAdjustment[];
+  saxoSyncHistory?: SaxoAccountSyncHistory[];
+};
+
+export type SaxoAccountSyncHistory = {
+  id: string;
+  source: "saxo_api";
+  accountKey: string;
+  accountId?: string;
+  displayName?: string;
+  fetchedAt: string;
+  appliedAt: string;
+  appliedFields: string[];
 };
 
 export type AccountCashAdjustment = {
@@ -189,6 +201,10 @@ export type BrokerFixtureMeta = {
   purpose: "development-fixture";
   createdAt: string;
   notes: string;
+  saxoAccountKey?: string;
+  saxoPositionId?: string;
+  saxoInstrumentCode?: string;
+  saxoUic?: number;
 };
 
 export type StockSettlement = {
@@ -212,7 +228,11 @@ export type StockAcquisition = {
   accountEnvironment: AccountEnvironment;
   commissionUSD?: number;
   commissionJPY?: number;
-  source: "manual" | "broker_statement" | "saxo_api_estimate";
+  source: "manual" | "broker_statement" | "saxo_api_estimate" | "saxo_history";
+  sourceCandidateId?: string;
+  sourceTradeId?: string;
+  sourceStockCandidateId?: string;
+  confirmationStatus?: "pending" | "confirmed" | "ignored" | "invalid";
   memo?: string;
 };
 
@@ -256,7 +276,12 @@ export type OptionCloseExecution = {
   brokerTaxIncludedFeeJPY?: number;
   realizedPnlUSD?: number;
   inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";
-  source: "manual" | "broker_statement" | "saxo_api_estimate";
+  source: "manual" | "broker_statement" | "saxo_api_estimate" | "saxo_history";
+  sourceCandidateId?: string;
+  sourceTradeId?: string;
+  targetPositionId?: string;
+  confirmationStatus?: "pending" | "confirmed" | "ignored" | "invalid";
+  invalidReason?: string;
   memo?: string;
 };
 
@@ -279,6 +304,9 @@ export type OptionEntryExecution = {
   referenceFxRateJPY?: number;
   inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";
   source: "manual" | "broker_statement" | "saxo_api_estimate";
+  saxoSourceType?: "current_position" | "history";
+  historyCompletionStatus?: "unmatched" | "matched" | "multiple" | "manual";
+  historyCandidateIds?: string[];
   confirmed: boolean;
   memo?: string;
 };

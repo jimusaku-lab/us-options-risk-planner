@@ -135,7 +135,7 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
   }
 
   if (simulation.status === "assigned") {
-    if (getShortPutLegs(simulation).length > 0 && !simulation.stockAcquisition?.enabled) {
+    if (getShortPutLegs(simulation).length > 0 && !hasValidStockAcquisition(simulation)) {
       tasks.push(
         task(simulation, {
           id: `${simulation.id}-stock-acquisition`,
@@ -167,6 +167,17 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
   }
 
   return [completeTask(simulation)];
+}
+
+function hasValidStockAcquisition(simulation: TradeSimulation): boolean {
+  const acquisition = simulation.stockAcquisition;
+  return Boolean(
+    acquisition?.enabled &&
+      Number.isFinite(acquisition.shares) &&
+      acquisition.shares > 0 &&
+      Number.isFinite(acquisition.priceUSD) &&
+      acquisition.priceUSD > 0,
+  );
 }
 
 export function getPrimaryWorkflowTask(simulation: TradeSimulation): WorkflowTask {

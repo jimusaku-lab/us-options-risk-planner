@@ -133,6 +133,8 @@ export function Dashboard({
                   ? "警告なし"
                   : `${blockingCount > 0 ? `NG${blockingCount}件` : "NGなし"}・注意${attentionCount}件`;
               const actionableWarning = countableWarnings.find((warning) => warning.actionAnchorId);
+              const firstVisibleWarning = countableWarnings[0];
+              const stockAcquisitionSummary = getStockAcquisitionSummary(simulation);
               const isFirstHistory = showHistory && index === currentSimulations.length && historySimulations.length > 0;
               return (
                 <Fragment key={simulation.id}>
@@ -154,7 +156,20 @@ export function Dashboard({
                   }`}
                   onClick={() => onSelect(simulation.id)}
                 >
-                  <td className="py-3 pr-3 font-bold text-slate-950">{simulation.ticker}</td>
+                  <td className="py-3 pr-3 font-bold text-slate-950">
+                    <span className="block">{simulation.ticker}</span>
+                    {stockAcquisitionSummary ? (
+                      <div className="mt-2 max-w-[260px] rounded-md border border-violet-200 bg-violet-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-violet-950">
+                        <div>現物株取得: {stockAcquisitionSummary.shares}株 @ {stockAcquisitionSummary.price}</div>
+                        <div>取得日: {stockAcquisitionSummary.date}</div>
+                        <div>口座: {stockAcquisitionSummary.account}</div>
+                        <div>入力状態: 完了</div>
+                        <div className="mt-1 border-t border-violet-200 pt-1 text-violet-900">
+                          今回の権利行使反映は完了です。次はJSONバックアップを保存してください。P→N移管を実行した場合のみ、移管記録へ進みます。
+                        </div>
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="py-3 pr-3">
                     <span className={`rounded px-2 py-1 text-xs font-bold ${statusClassName[simulation.status]}`}>
                       {getStatusLabel(simulation.status)}
@@ -196,6 +211,11 @@ export function Dashboard({
                     title="NGは注文前に解消すべき重大警告、注意は確認項目です。"
                   >
                     <span className="block">{warningLabel}</span>
+                    {firstVisibleWarning ? (
+                      <span className="mt-1 block max-w-[220px] text-left text-[11px] font-semibold leading-4 text-slate-600">
+                        {firstVisibleWarning.message}
+                      </span>
+                    ) : null}
                     {actionableWarning ? (
                       <button
                         className="mt-1 rounded border border-current px-2 py-1 text-[11px] font-bold hover:bg-white"
@@ -266,4 +286,17 @@ function getAccountEnvironmentLabel(environment: TradeSimulation["accountEnviron
   if (environment === "DEMO_JPY_BASE") return "DEMO / JPYベース";
   if (environment === "PROD_N_USD_SETTLEMENT") return "N / USD";
   return "P / JPY";
+}
+
+function getStockAcquisitionSummary(simulation: TradeSimulation): { shares: number; price: string; date: string; account: string } | null {
+  const acquisition = simulation.stockAcquisition;
+  if (simulation.status !== "assigned" || !acquisition?.enabled) return null;
+  if (!Number.isFinite(acquisition.shares) || acquisition.shares <= 0) return null;
+  if (!Number.isFinite(acquisition.priceUSD) || acquisition.priceUSD <= 0) return null;
+  return {
+    shares: acquisition.shares,
+    price: formatUSD(acquisition.priceUSD),
+    date: acquisition.acquisitionDate || simulation.expiryDate || "未入力",
+    account: getAccountEnvironmentLabel(acquisition.accountEnvironment),
+  };
 }

@@ -12,9 +12,11 @@ import {
   hasConfirmedBuybackCloseExecution,
   hasConfirmedExpiredCloseExecution,
   hasUnconfirmedCloseExecutionDraft,
+  validateSaxoHistoryCloseExecution,
 } from "@/domain/optionCloseExecutions";
 import { getStatusLabel } from "@/domain/strategyLabels";
 import { NumberInput } from "@/components/ui/NumberInput";
+import { getSaxoHistoryCandidateTarget, isSaxoHistoryMatchingOptionLeg, type SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
@@ -25,14 +27,20 @@ type SimulationEditorProps = {
   canUseExternalQuotes: boolean;
   externalQuoteModeLabel: string;
   onChange: (simulation: TradeSimulation) => void;
+  saxoHistoryCandidates?: SaxoHistoryDiscoveryItem[];
+  onDiscardDraft?: (simulationId: string) => void;
   onCloseDecisionAction?: (anchorId: string) => void;
-  focusRequest?: { anchorId: string; requestId: number } | null;
+  onCloseEditor?: () => void;
+  onReturnToSaxoHistory?: () => void;
+  onRecreateSaxoHistoryCandidate?: (sourceTradeId?: string) => void;
+  focusRequest?: { anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string } | null;
 };
 
-export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, externalQuoteModeLabel, onChange, onCloseDecisionAction, focusRequest }: SimulationEditorProps) {
+export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, focusRequest }: SimulationEditorProps) {
   const [quoteStatus, setQuoteStatus] = useState<string>("");
   const [workflowNotice, setWorkflowNotice] = useState<{ message: string; actionLabel: string; anchorId: string } | null>(null);
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
+  const [entryCandidatePickerId, setEntryCandidatePickerId] = useState<string | null>(null);
   const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
   const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
   const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
@@ -72,6 +80,13 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     memo: "",
   };
   const stockAcquisition = simulation.stockAcquisition ?? defaultStockAcquisition;
+  const stockAcquisitionComplete =
+    simulation.status === "assigned" &&
+    stockAcquisition.enabled &&
+    Number.isFinite(stockAcquisition.shares) &&
+    stockAcquisition.shares > 0 &&
+    Number.isFinite(stockAcquisition.priceUSD) &&
+    stockAcquisition.priceUSD > 0;
 
   const update = (patch: Partial<TradeSimulation>) => onChange({ ...simulation, ...patch });
   const updateAccountEnvironment = (accountEnvironment: TradeSimulation["accountEnvironment"]) => {
@@ -273,7 +288,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     if (!target) return null;
     if (anchorId.startsWith("option-close-execution-")) {
       target.querySelector<HTMLDetailsElement>("details")?.setAttribute("open", "");
-      return target.querySelector<HTMLInputElement>('input[id^="broker-booked-amount-jpy-"]') ?? target.querySelector<HTMLInputElement>("input");
+      return target.querySelector<HTMLInputElement>("#broker-realized-pnl-jpy") ?? target.querySelector<HTMLInputElement>('input[id^="broker-booked-amount-jpy-"]') ?? target.querySelector<HTMLInputElement>("input");
     }
     if (anchorId === "option-close-executions") {
       return target.querySelector<HTMLInputElement>("#broker-realized-pnl-jpy") ?? target.querySelector<HTMLInputElement>("input");
@@ -407,7 +422,72 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     });
   };
   const confirmOptionCloseExecution = (id: string) => {
-    updateOptionCloseExecution(id, { confirmed: true });
+    const execution = optionCloseExecutions.find((item) => item.id === id);
+    if (!execution) return;
+    const validation = validateSaxoHistoryCloseExecution(simulation, execution);
+    if (!validation.valid) {
+      updateOptionCloseExecution(id, {
+        confirmationStatus: "invalid",
+        invalidReason: validation.reason,
+      });
+      return;
+    }
+    updateOptionCloseExecution(id, { confirmed: true, confirmationStatus: "confirmed", invalidReason: undefined });
+  };
+  const applySaxoEntryHistoryCandidate = (executionId: string, item: SaxoHistoryDiscoveryItem) => {
+    const execution = optionEntryExecutions.find((entry) => entry.id === executionId);
+    if (!execution) return;
+    const isNEntry = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+    const nextExecution: OptionEntryExecution = {
+      ...execution,
+      tradeDate: item.tradeDate ?? execution.tradeDate,
+      contracts: item.quantity !== undefined ? Math.max(1, Math.abs(item.quantity)) : execution.contracts,
+      fillPriceUSD: item.price ?? execution.fillPriceUSD,
+      brokerBookedAmountJPY: !isNEntry ? item.bookedAmount ?? item.profitLossBase ?? execution.brokerBookedAmountJPY : execution.brokerBookedAmountJPY,
+      brokerPremiumJPY: !isNEntry ? item.premiumAmount ?? execution.brokerPremiumJPY : execution.brokerPremiumJPY,
+      brokerTransactionCostJPY: !isNEntry ? item.transactionCost ?? execution.brokerTransactionCostJPY : execution.brokerTransactionCostJPY,
+      brokerFeeJPY: !isNEntry ? item.feeAmount ?? execution.brokerFeeJPY : execution.brokerFeeJPY,
+      brokerExchangeFeeJPY: !isNEntry ? item.exchangeFee ?? execution.brokerExchangeFeeJPY : execution.brokerExchangeFeeJPY,
+      brokerExchangeRateJPY: !isNEntry ? item.exchangeRate ?? execution.brokerExchangeRateJPY : execution.brokerExchangeRateJPY,
+      brokerTaxIncludedFeeJPY: !isNEntry ? item.taxIncludedFee ?? execution.brokerTaxIncludedFeeJPY : execution.brokerTaxIncludedFeeJPY,
+      commissionUSD: isNEntry ? Math.abs(item.transactionCost ?? execution.commissionUSD ?? 0) : execution.commissionUSD,
+      referenceFxRateJPY: item.exchangeRate ?? execution.referenceFxRateJPY,
+      source: "saxo_api_estimate",
+      saxoSourceType: "current_position",
+      historyCandidateIds: Array.from(new Set([...(execution.historyCandidateIds ?? []), item.id])),
+    };
+    const missingItems = getEntryExecutionMissingItems(nextExecution, isNEntry);
+    updateOptionEntryExecution(executionId, {
+      ...nextExecution,
+      historyCompletionStatus: missingItems.length > 0 ? "manual" : "matched",
+      memo:
+        missingItems.length > 0
+          ? `入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 要手入力。不足項目: ${missingItems.join("、")}`
+          : "入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 補完済み。正式保存前にSaxo履歴と照合してください。",
+    });
+    setEntryCandidatePickerId(null);
+    setQuoteStatus(
+      missingItems.length > 0
+        ? `Saxo取引履歴から一部補完しました。不足項目: ${missingItems.join("、")}。Saxo画面の取引履歴に表示されている値を手入力してください。`
+        : "Saxo取引履歴から建玉開始の約定候補を補完しました。内容を確認して正式保存してください。",
+    );
+  };
+  const complementSaxoEntryHistory = (execution: OptionEntryExecution) => {
+    const candidates = findSaxoEntryCandidatesForExecution(simulation, execution, saxoHistoryCandidates);
+    if (candidates.length === 1) {
+      applySaxoEntryHistoryCandidate(execution.id, candidates[0]);
+      return;
+    }
+    if (candidates.length > 1) {
+      setEntryCandidatePickerId(execution.id);
+      setQuoteStatus("Saxo取引履歴に複数の候補があります。該当する建玉開始履歴を選んでください。");
+      return;
+    }
+    updateOptionEntryExecution(execution.id, {
+      historyCompletionStatus: "manual",
+      memo: "入力元: Saxo現在建玉 / 履歴補完: 要手入力。Saxo取引履歴から補完できませんでした。履歴を再取得するか、不足項目だけ手入力してください。",
+    });
+    setQuoteStatus("Saxo取引履歴から補完できませんでした。履歴を再取得するか、不足項目だけ手入力してください。");
   };
   const addOptionEntryExecution = (leg: OptionLeg) => {
     update({
@@ -439,13 +519,17 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
 
   useEffect(() => {
     if (!focusRequest?.anchorId) return;
-    window.setTimeout(() => {
+    const runFocus = () => {
       const target = document.getElementById(focusRequest.anchorId);
+      if (!target) return false;
       target?.scrollIntoView({ behavior: "smooth", block: "center" });
       findEditorFocusInput(target, focusRequest.anchorId)?.focus();
       setHighlightedAnchorId(focusRequest.anchorId);
-      window.setTimeout(() => setHighlightedAnchorId((current) => (current === focusRequest.anchorId ? null : current)), 4500);
-    }, 80);
+      return true;
+    };
+    const timers = [80, 250, 650].map((delay) => window.setTimeout(runFocus, delay));
+    window.setTimeout(() => setHighlightedAnchorId((current) => (current === focusRequest.anchorId ? null : current)), 4500);
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [focusRequest?.requestId, focusRequest?.anchorId]);
   const hasMultipleAssignedRecords =
     simulation.status === "assigned" && Boolean(stockAcquisition.enabled && stockSettlement.enabled);
@@ -453,9 +537,112 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const hasConfirmedBuybackClose = hasConfirmedBuybackCloseExecution(simulation);
   const hasConfirmedExpiredClose = hasConfirmedExpiredCloseExecution(simulation);
   const hasUnconfirmedCloseDraft = hasUnconfirmedCloseExecutionDraft(simulation);
+  const pendingSaxoHistoryCloseExecutions = optionCloseExecutions.filter(
+    (execution) =>
+      !execution.confirmed &&
+      execution.source === "saxo_history" &&
+      execution.confirmationStatus !== "ignored" &&
+      validateSaxoHistoryCloseExecution(simulation, execution).valid,
+  );
+  const firstPendingSaxoHistoryCloseExecution = pendingSaxoHistoryCloseExecutions[0];
+  const allCloseExecutionsConfirmed = optionCloseExecutions.length > 0 && optionCloseExecutions.every((execution) => execution.confirmed);
+  const missingSaxoHistoryCloseCandidate =
+    focusRequest?.anchorId === "option-close-executions" && focusRequest.saxoHistoryIssue === "missing-close-candidate";
+  const isSaxoApiDraft = isSaxoApiPositionDraft(simulation);
+  const saxoDraftMissingItems = getSaxoDraftMissingItems(simulation);
+  const confirmSaxoApiDraft = () => {
+    onChange({
+      ...simulation,
+      status: "open",
+      name: simulation.name.replace(/\s*\/\s*API取込下書き/g, ""),
+      fixtureMeta: {
+        source: simulation.fixtureMeta?.source ?? (workspace === "demo" ? "demo" : "live"),
+        isRealMoney: simulation.fixtureMeta?.isRealMoney ?? workspace !== "demo",
+        broker: simulation.fixtureMeta?.broker ?? "SaxoBank",
+        purpose: simulation.fixtureMeta?.purpose ?? "development-fixture",
+        createdAt: simulation.fixtureMeta?.createdAt ?? formatLocalDate(),
+        ...simulation.fixtureMeta,
+        notes: "Saxo API read-onlyの現在建玉候補から、ユーザー確認後に正式保存しました。API取得値だけで確認済み扱いにはしていません。",
+      },
+    });
+    setWorkflowNotice({
+      message: "建玉入力へ正式保存しました。ダッシュボードに建玉中として表示しています。",
+      actionLabel: "建玉開始の約定確認へ",
+      anchorId: "option-entry-executions",
+    });
+  };
+  const confirmEntryExecutionAndMaybeDraft = (executionId: string) => {
+    const nextExecutions = optionEntryExecutions.map((execution) =>
+      execution.id === executionId ? { ...execution, confirmed: true } : execution,
+    );
+    if (isSaxoApiDraft) {
+      onChange({
+        ...simulation,
+        status: "open",
+        name: simulation.name.replace(/\s*\/\s*API取込下書き/g, ""),
+        optionEntryExecutions: nextExecutions,
+        fixtureMeta: {
+          source: simulation.fixtureMeta?.source ?? (workspace === "demo" ? "demo" : "live"),
+          isRealMoney: simulation.fixtureMeta?.isRealMoney ?? workspace !== "demo",
+          broker: simulation.fixtureMeta?.broker ?? "SaxoBank",
+          purpose: simulation.fixtureMeta?.purpose ?? "development-fixture",
+          createdAt: simulation.fixtureMeta?.createdAt ?? formatLocalDate(),
+          ...simulation.fixtureMeta,
+          notes: "Saxo API read-onlyの現在建玉候補から、ユーザー確認後に正式保存しました。API取得値だけで確認済み扱いにはしていません。",
+        },
+      });
+      setWorkflowNotice({
+        message: "建玉入力へ正式保存しました。ダッシュボードに建玉中として表示しています。",
+        actionLabel: "建玉開始の約定確認へ",
+        anchorId: "option-entry-executions",
+      });
+      return;
+    }
+    update({ optionEntryExecutions: nextExecutions });
+    setQuoteStatus("建玉開始の約定確認を正式保存しました。");
+  };
 
   return (
     <section>
+      {isSaxoApiDraft ? (
+        <div className="mb-4 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-bold">Saxo API建玉候補の下書き</h3>
+                <span className="rounded bg-white px-2 py-1 text-xs font-bold text-teal-800">正式保存前 - 内容確認が必要です</span>
+              </div>
+              <p className="mt-2 text-xs leading-5">
+                これはAPI取得値から作成した下書きです。銘柄、口座、売買方向、数量、権利行使価格、満期、建て価格を確認し、必要な不足項目を入力してから正式保存してください。
+              </p>
+              <p className="mt-1 text-xs leading-5">
+                必須確認: 口座区分P/N、戦略、P/C方針、手数料、主分母、NISA等比較年率、出口ルール。
+              </p>
+              {saxoDraftMissingItems.length > 0 ? (
+                <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900">
+                  不足・要確認: {saxoDraftMissingItems.join(" / ")}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-md bg-slate-900 px-3 py-2 text-xs font-bold text-white"
+                onClick={confirmSaxoApiDraft}
+              >
+                確認して正式保存する
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700"
+                onClick={() => onDiscardDraft?.(simulation.id)}
+              >
+                下書きを破棄
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div id="simulation-editor" className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -896,19 +1083,52 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
             </div>
           ) : null}
           {entryExecutionsConfirmed && simulation.status === "open" ? (
-            <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm font-semibold leading-6 text-sky-950">
-              建玉開始の確認が完了しました。次は反対売買判断または満期管理です。
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-950">
+              <div>
+                <div className="font-semibold">建玉開始の確認が完了しました。</div>
+                <div className="mt-1 text-xs text-sky-800">次は、途中決済を検討する場合は反対売買判断へ進みます。入力欄を閉じると俯瞰画面に戻れます。</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-sky-300 bg-white px-3 py-2 text-xs font-bold text-sky-800 hover:bg-sky-100"
+                  onClick={() => onCloseDecisionAction?.("close-decision")}
+                >
+                  反対売買判断へ進む
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                  onClick={onCloseEditor}
+                >
+                  入力欄を閉じて俯瞰へ戻る
+                </button>
+              </div>
             </div>
           ) : null}
           <div className="mt-3 grid gap-3">
             {optionEntryExecutions.map((execution) => {
               const selectedLeg = shortExitLegs.find((leg) => leg.id === execution.legId) ?? shortExitLegs[0];
               const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+              const entryCandidates = findSaxoEntryCandidatesForExecution(simulation, execution, saxoHistoryCandidates);
+              const isSaxoCurrentPositionEntry = execution.saxoSourceType === "current_position";
+              const entryMissingItems = getEntryExecutionMissingItems(execution, isN);
+              const hasPEntryBookedAmount =
+                !isN &&
+                execution.brokerBookedAmountJPY !== undefined &&
+                Number.isFinite(execution.brokerBookedAmountJPY) &&
+                (execution.brokerPremiumJPY === undefined || execution.brokerTransactionCostJPY === undefined || execution.brokerExchangeRateJPY === undefined);
+              const diagnosticCandidates = getEntryDiagnosticCandidates(execution, entryCandidates, saxoHistoryCandidates);
               const usdPremium = execution.fillPriceUSD * 100 * execution.contracts;
               const referenceFxRate = execution.referenceFxRateJPY ?? execution.brokerExchangeRateJPY ?? simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
               const referenceJpy = usdPremium * referenceFxRate - (execution.commissionUSD ?? 0) * referenceFxRate;
               return (
-                <div key={execution.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div
+                  key={execution.id}
+                  className={`rounded-md border bg-slate-50 p-3 ${
+                    isSaxoCurrentPositionEntry && !execution.confirmed ? "border-teal-300 ring-2 ring-teal-100" : "border-slate-200"
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-bold text-slate-950">{selectedLeg ? getOptionLegLabel(selectedLeg) : "対象脚未選択"}</div>
@@ -916,14 +1136,122 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                         {execution.confirmed ? "確認済み" : "約定情報未確認"}
                       </div>
                     </div>
-                    <button
-                      className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-50"
-                      type="button"
-                      onClick={() => removeOptionEntryExecution(execution.id)}
-                    >
-                      削除
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                        type="button"
+                        disabled={execution.confirmed}
+                        onClick={() => complementSaxoEntryHistory(execution)}
+                      >
+                        Saxo取引履歴から補完
+                      </button>
+                      <button
+                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                        type="button"
+                        disabled={entryCandidates.length === 0 || execution.confirmed}
+                        onClick={() => setEntryCandidatePickerId(entryCandidatePickerId === execution.id ? null : execution.id)}
+                      >
+                        履歴候補を選ぶ
+                      </button>
+                      <button
+                        className="rounded-md border border-emerald-300 bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-200 disabled:text-slate-500"
+                        type="button"
+                        disabled={execution.confirmed}
+                        onClick={() => confirmEntryExecutionAndMaybeDraft(execution.id)}
+                      >
+                        確認して正式保存する
+                      </button>
+                      <button
+                        className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-50"
+                        type="button"
+                        onClick={() => (isSaxoApiDraft ? onDiscardDraft?.(simulation.id) : removeOptionEntryExecution(execution.id))}
+                      >
+                        下書きを破棄
+                      </button>
+                    </div>
                   </div>
+                  <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-700">
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                      <span className="font-semibold">入力元: {formatEntryExecutionSource(execution)}</span>
+                      <span className="font-semibold">履歴補完: {formatEntryHistoryCompletion(execution)}</span>
+                      {entryCandidates.length > 0 ? <span>候補 {entryCandidates.length}件</span> : null}
+                    </div>
+                    {isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "unmatched" ? (
+                      <p className="mt-1 text-amber-700">
+                        Saxo取引履歴から補完できませんでした。履歴を再取得するか、不足項目だけ手入力してください。
+                      </p>
+                    ) : null}
+                    {isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "multiple" ? (
+                      <p className="mt-1 text-amber-700">Saxo取引履歴に複数候補があります。「履歴候補を選ぶ」から該当履歴を選択してください。</p>
+                    ) : null}
+                    {isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "manual" ? (
+                      <p className="mt-1 text-amber-700">
+                        Saxo取引履歴から一部項目を自動補完できませんでした。Saxo画面の取引履歴に表示されている値を手入力してください。
+                      </p>
+                    ) : null}
+                    {isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "matched" ? (
+                      <p className="mt-1 text-emerald-700">Saxo現在建玉とSaxo取引履歴で補完済みです。内容を確認して正式保存してください。</p>
+                    ) : null}
+                    {isSaxoCurrentPositionEntry && entryMissingItems.length > 0 ? (
+                      <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
+                        <div className="font-bold">不足項目: {entryMissingItems.join("、")}</div>
+                        <p className="mt-1">
+                          Saxo取引履歴からこの項目を自動補完できませんでした。Saxo画面の取引履歴に表示されている値を手入力してください。
+                        </p>
+                      </div>
+                    ) : null}
+                    {hasPEntryBookedAmount ? (
+                      <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-900">
+                        Saxo口座動向の記帳額を取得済みです。費用内訳は未取得ですが、P口座の現金増減としてはこの金額を使えます。
+                      </div>
+                    ) : null}
+                    {isSaxoCurrentPositionEntry && diagnosticCandidates.length > 0 ? (
+                      <details className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1">
+                        <summary className="cursor-pointer font-bold text-slate-700">補完診断を表示</summary>
+                        <div className="mt-2 grid gap-2">
+                          {diagnosticCandidates.map((candidate) => (
+                            <div key={candidate.id} className="rounded bg-white p-2">
+                              <div className="font-bold text-slate-800">{formatSaxoEntryCandidateLabel(candidate)}</div>
+                              <div className="mt-1 text-slate-600">
+                                取得できた項目名: {candidate.rawFieldNames && candidate.rawFieldNames.length > 0 ? candidate.rawFieldNames.slice(0, 40).join(" / ") : "未取得"}
+                              </div>
+                              {(candidate.fieldDiagnostics ?? []).map((diagnostic) => (
+                                <div key={diagnostic.target} className="mt-1 text-slate-600">
+                                  {diagnostic.target}: 探した項目名 {diagnostic.searched.join(" / ")} /{" "}
+                                  {diagnostic.matched ? `一致 ${diagnostic.matched}` : diagnostic.reason ?? "一致なし"}
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ) : null}
+                  </div>
+                  {entryCandidatePickerId === execution.id ? (
+                    <div className="mt-3 rounded-md border border-teal-200 bg-white p-3">
+                      <div className="text-xs font-bold text-slate-800">Saxo取引履歴候補</div>
+                      {entryCandidates.length > 0 ? (
+                        <div className="mt-2 grid gap-2">
+                          {entryCandidates.map((candidate) => (
+                            <div key={candidate.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs">
+                              <div className="leading-5 text-slate-700">{formatSaxoEntryCandidateLabel(candidate)}</div>
+                              <button
+                                type="button"
+                                className="rounded-md border border-teal-300 bg-teal-600 px-2 py-1 font-bold text-white hover:bg-teal-700"
+                                onClick={() => applySaxoEntryHistoryCandidate(execution.id, candidate)}
+                              >
+                                この履歴で補完
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 rounded-md bg-amber-50 p-2 text-xs text-amber-900">
+                          Saxo取引履歴から補完できませんでした。履歴を再取得するか、不足項目だけ手入力してください。
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
                   <div className="mt-3 grid gap-3 xl:grid-cols-4">
                     <Select
                       label="対象脚"
@@ -1020,7 +1348,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                       options={[
                         ["manual", "手入力"],
                         ["broker_statement", "取引報告書"],
-                        ["saxo_api_estimate", "Saxo API推定"],
+                        ["saxo_api_estimate", "Saxo現在建玉 / 取引履歴候補"],
                       ]}
                     />
                     <label className="xl:col-span-3">
@@ -1370,71 +1698,91 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           </label>
         </div>
         {stockAcquisition.enabled ? (
-          <div className="mt-3 grid gap-3 xl:grid-cols-4">
-            <TextInput
-              label="取得日"
-              value={stockAcquisition.acquisitionDate}
-              type="date"
-              onChange={(acquisitionDate) => updateStockAcquisition({ acquisitionDate })}
-            />
-            <NumberInput
-              label="取得株数"
-              value={stockAcquisition.shares}
-              suffix="株"
-              min={0}
-              onChange={(shares) => updateStockAcquisition({ shares })}
-            />
-            <NumberInput
-              label="取得単価"
-              value={stockAcquisition.priceUSD}
-              suffix="USD"
-              min={0}
-              onChange={(priceUSD) => updateStockAcquisition({ priceUSD })}
-            />
-            <Select
-              label="口座分類"
-              value={stockAcquisition.accountEnvironment}
-              onChange={(accountEnvironment) => updateStockAcquisition({ accountEnvironment: accountEnvironment as TradeSimulation["accountEnvironment"] })}
-              options={[
-                ["DEMO_JPY_BASE", "DEMO / JPYベース"],
-                ["PROD_P_JPY_SETTLEMENT", "本番P口座 / JPY決済"],
-                ["PROD_N_USD_SETTLEMENT", "本番N口座 / USD決済"],
-              ]}
-            />
-            <NumberInput
-              label="取得手数料 USD"
-              value={stockAcquisition.commissionUSD ?? Number.NaN}
-              suffix="USD"
-              min={0}
-              onChange={(commissionUSD) => updateStockAcquisition({ commissionUSD })}
-            />
-            <NumberInput
-              label="取得手数料 JPY"
-              value={stockAcquisition.commissionJPY ?? Number.NaN}
-              suffix="JPY"
-              min={0}
-              onChange={(commissionJPY) => updateStockAcquisition({ commissionJPY })}
-            />
-            <Select
-              label="入力元"
-              value={stockAcquisition.source}
-              onChange={(source) => updateStockAcquisition({ source: source as NonNullable<TradeSimulation["stockAcquisition"]>["source"] })}
-              options={[
-                ["manual", "手入力"],
-                ["broker_statement", "取引報告書"],
-                ["saxo_api_estimate", "Saxo API推定"],
-              ]}
-            />
-            <label className="xl:col-span-4">
-              <span className="text-xs font-semibold text-slate-600">メモ</span>
-              <textarea
-                className="mt-1 h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-inner focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                value={stockAcquisition.memo ?? ""}
-                placeholder="P売り権利行使、Saxo履歴との照合メモなど"
-                onChange={(event) => updateStockAcquisition({ memo: event.target.value })}
+          <>
+            {stockAcquisitionComplete ? (
+              <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
+                <div className="font-bold">現物株取得は反映済みです。</div>
+                <p className="mt-1">
+                  この画面は自動保存されるため、別の保存ボタンはありません。内容が正しければ、入力欄を閉じてダッシュボードの履歴で完了表示を確認してください。
+                </p>
+              </div>
+            ) : null}
+            <div className="mt-3 grid gap-3 xl:grid-cols-4">
+              <TextInput
+                label="取得日"
+                value={stockAcquisition.acquisitionDate}
+                type="date"
+                onChange={(acquisitionDate) => updateStockAcquisition({ acquisitionDate })}
               />
-            </label>
-          </div>
+              <NumberInput
+                label="取得株数"
+                value={stockAcquisition.shares}
+                suffix="株"
+                min={0}
+                onChange={(shares) => updateStockAcquisition({ shares })}
+              />
+              <NumberInput
+                label="取得単価"
+                value={stockAcquisition.priceUSD}
+                suffix="USD"
+                min={0}
+                onChange={(priceUSD) => updateStockAcquisition({ priceUSD })}
+              />
+              <Select
+                label="口座分類"
+                value={stockAcquisition.accountEnvironment}
+                onChange={(accountEnvironment) => updateStockAcquisition({ accountEnvironment: accountEnvironment as TradeSimulation["accountEnvironment"] })}
+                options={[
+                  ["DEMO_JPY_BASE", "DEMO / JPYベース"],
+                  ["PROD_P_JPY_SETTLEMENT", "本番P口座 / JPY決済"],
+                  ["PROD_N_USD_SETTLEMENT", "本番N口座 / USD決済"],
+                ]}
+              />
+              <NumberInput
+                label="取得手数料 USD"
+                value={stockAcquisition.commissionUSD ?? Number.NaN}
+                suffix="USD"
+                min={0}
+                onChange={(commissionUSD) => updateStockAcquisition({ commissionUSD })}
+              />
+              <NumberInput
+                label="取得手数料 JPY"
+                value={stockAcquisition.commissionJPY ?? Number.NaN}
+                suffix="JPY"
+                min={0}
+                onChange={(commissionJPY) => updateStockAcquisition({ commissionJPY })}
+              />
+              <Select
+                label="入力元"
+                value={stockAcquisition.source}
+                onChange={(source) => updateStockAcquisition({ source: source as NonNullable<TradeSimulation["stockAcquisition"]>["source"] })}
+                options={[
+                  ["manual", "手入力"],
+                  ["broker_statement", "取引報告書"],
+                  ["saxo_api_estimate", "Saxo API推定"],
+                  ["saxo_history", "Saxo履歴候補"],
+                ]}
+              />
+              <label className="xl:col-span-4">
+                <span className="text-xs font-semibold text-slate-600">メモ</span>
+                <textarea
+                  className="mt-1 h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-inner focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  value={stockAcquisition.memo ?? ""}
+                  placeholder="P売り権利行使、Saxo履歴との照合メモなど"
+                  onChange={(event) => updateStockAcquisition({ memo: event.target.value })}
+                />
+              </label>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50"
+                onClick={onCloseEditor}
+              >
+                入力欄を閉じて俯瞰へ戻る
+              </button>
+            </div>
+          </>
         ) : (
           <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm leading-6 text-slate-600">
             P売りの権利行使で株を買い受けた場合だけONにします。株を売却するまでは譲渡損益として扱いません。
@@ -1536,7 +1884,14 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                 Saxoで買い決済・売り決済が実際に約定した後、注文履歴を見ながら入力します。反対売買判断の見積もり価格は自動では実績扱いしません。
               </p>
             </div>
-            {shortExitLegs.length > 0 ? (
+            {firstPendingSaxoHistoryCloseExecution ? (
+              <button
+                className="rounded-md bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
+                onClick={() => scrollToEditorAnchor(`option-close-execution-${firstPendingSaxoHistoryCloseExecution.id}`)}
+              >
+                最初の確認待ちを開く
+              </button>
+            ) : shortExitLegs.length > 0 && !missingSaxoHistoryCloseCandidate ? (
               <button
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
                 onClick={() => addOptionCloseExecution(shortExitLegs[0])}
@@ -1548,6 +1903,48 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           {simulation.status === "closed" && optionCloseExecutions.length === 0 ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">
               決済済みですが、決済実績が未入力です。Saxo注文履歴から約定価格と手数料を入力してください。
+            </div>
+          ) : null}
+          {missingSaxoHistoryCloseCandidate ? (
+            <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-950">
+              <div className="font-bold">この履歴候補に対応する決済実績候補が見つかりません。</div>
+              <p className="mt-1">履歴候補へ戻って、反映候補を作り直してください。</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-red-300 bg-white px-3 py-2 text-xs font-bold text-red-800 hover:bg-red-100"
+                  onClick={onReturnToSaxoHistory}
+                >
+                  履歴候補へ戻る
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md bg-red-700 px-3 py-2 text-xs font-bold text-white hover:bg-red-800"
+                  onClick={() => onRecreateSaxoHistoryCandidate?.(focusRequest?.sourceTradeId)}
+                >
+                  反映候補を作り直す
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {pendingSaxoHistoryCloseExecutions.length > 0 ? (
+            <div className="mt-3 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">
+              <div className="font-bold">Saxo履歴から作成された決済実績候補があります。</div>
+              <p className="mt-1">内容を確認し、不足項目を補ってから正式保存してください。</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="rounded bg-white px-2 py-1 text-xs font-bold text-teal-800">確認待ち {pendingSaxoHistoryCloseExecutions.length}件</span>
+                <button
+                  type="button"
+                  className="rounded-md border border-teal-300 bg-white px-3 py-1.5 text-xs font-bold text-teal-900 hover:bg-teal-100"
+                  onClick={() => scrollToEditorAnchor(`option-close-execution-${firstPendingSaxoHistoryCloseExecution?.id}`)}
+                >
+                  最初の確認待ちを開く
+                </button>
+              </div>
+            </div>
+          ) : allCloseExecutionsConfirmed ? (
+            <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold leading-6 text-emerald-950">
+              決済実績は確認済みです。必要に応じて内容を見直せます。
             </div>
           ) : null}
           {simulation.status === "open" && hasConfirmedBuybackClose ? (
@@ -1583,6 +1980,9 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
             {optionCloseExecutions.map((execution) => {
               const executionAnchorId = `option-close-execution-${execution.id}`;
               const result = optionCloseResults.find((item) => item.execution.id === execution.id);
+              const closeValidation = validateSaxoHistoryCloseExecution(simulation, execution);
+              const isInvalidSaxoHistoryCloseDraft = execution.source === "saxo_history" && !execution.confirmed && !closeValidation.valid;
+              const visibleResult = isInvalidSaxoHistoryCloseDraft ? undefined : result;
               const selectedLeg = shortExitLegs.find((leg) => leg.id === execution.legId) ?? shortExitLegs[0];
               const isExpiredExecution = execution.closeKind === "expired";
               const isNCloseExecution = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
@@ -1603,6 +2003,17 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                 execution.brokerTransactionCostJPY !== undefined &&
                 closeDetailCostTotal > 0 &&
                 Math.abs(Math.abs(execution.brokerTransactionCostJPY) - closeDetailCostTotal) > 50;
+              const isSaxoHistoryCloseDraft =
+                execution.source === "saxo_history" &&
+                !execution.confirmed &&
+                execution.confirmationStatus !== "ignored" &&
+                !isInvalidSaxoHistoryCloseDraft;
+              const closeMissingItems = getCloseExecutionMissingItems(execution, isNCloseExecution);
+              const hasPCloseBookedAmount =
+                !isNCloseExecution &&
+                execution.brokerBookedAmountJPY !== undefined &&
+                Number.isFinite(execution.brokerBookedAmountJPY) &&
+                (execution.brokerRealizedPnlJPY === undefined || execution.brokerTransactionCostJPY === undefined || execution.brokerExchangeRateJPY === undefined);
               return (
                 <div
                   key={execution.id}
@@ -1630,6 +2041,55 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                   {isExpiredExecution ? (
                     <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm font-semibold text-sky-950">
                       満期終了モード: 買戻し約定ではないため、約定価格USDは入力しません。受取プレミアムから建て時手数料を引いた実績として扱います。
+                    </div>
+                  ) : null}
+                  {isInvalidSaxoHistoryCloseDraft ? (
+                    <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-950">
+                      <div className="font-bold">この決済実績候補は正式保存できません。</div>
+                      <p className="mt-1">
+                        {execution.invalidReason ??
+                          closeValidation.reason ??
+                          "現在のSaxo履歴と対象建玉に一致しないため、候補を破棄するか正しい候補を選び直してください。"}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-bold text-red-800 hover:bg-red-100"
+                          onClick={() => removeOptionCloseExecution(execution.id)}
+                        >
+                          誤った下書きを破棄
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 hover:bg-slate-50"
+                          onClick={() => onRecreateSaxoHistoryCandidate?.(execution.sourceTradeId)}
+                        >
+                          正しい候補を選び直す
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {isSaxoHistoryCloseDraft ? (
+                    <div className="mt-3 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">
+                      <div className="font-bold">Saxo履歴から作成された確認待ちです。</div>
+                      <p className="mt-1">この決済実績候補の内容を確認し、不足項目を補ってから正式保存してください。</p>
+                      {closeMissingItems.length > 0 ? (
+                        <p className="mt-2 rounded bg-white px-2 py-1 text-xs font-bold text-teal-900">未入力: {closeMissingItems.join(", ")}</p>
+                      ) : (
+                        <p className="mt-2 rounded bg-white px-2 py-1 text-xs font-bold text-teal-900">未入力項目はありません。内容を確認して正式保存できます。</p>
+                      )}
+                      {hasPCloseBookedAmount ? (
+                        <p className="mt-2 rounded bg-white px-2 py-1 text-xs font-bold text-teal-900">
+                          Saxo口座動向の記帳額を取得済みです。費用内訳は未取得ですが、P口座の現金増減としてはこの金額を使えます。
+                        </p>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="mt-2 rounded-md border border-teal-300 bg-white px-3 py-1.5 text-xs font-bold text-teal-900 hover:bg-teal-100"
+                        onClick={() => scrollToEditorAnchor(executionAnchorId)}
+                      >
+                        この決済実績を確認する
+                      </button>
                     </div>
                   ) : null}
                   {isNCloseExecution ? (
@@ -1701,6 +2161,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                           ["manual", "手入力"],
                           ["broker_statement", "取引報告書"],
                           ["saxo_api_estimate", "Saxo API推定"],
+                          ["saxo_history", "Saxo履歴候補"],
                         ]}
                       />
                       <label className="xl:col-span-4">
@@ -1791,6 +2252,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                               ["manual", "手入力"],
                               ["broker_statement", "取引報告書"],
                               ["saxo_api_estimate", "Saxo API推定"],
+                              ["saxo_history", "Saxo履歴候補"],
                             ]}
                           />
                           <label className="xl:col-span-4">
@@ -1846,26 +2308,26 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                       取引費用JPYと手数料内訳JPYの合計が大きくずれています。集計には取引費用JPYを優先します。
                     </div>
                   ) : null}
-                  {result ? (
+                  {visibleResult ? (
                     <div className="mt-3 grid gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950 md:grid-cols-3">
                       <div>
                         <div className="text-xs font-semibold">実現損益</div>
                         <div className="numeric-input font-bold">
-                          {result.currency === "USD"
-                            ? `${formatUSD(result.realizedPnlUSD)} / 参考 ${formatJPY(result.realizedPnlJPY, { signed: true })}`
-                            : formatJPY(result.realizedPnlJPY, { signed: true })}
+                          {visibleResult.currency === "USD"
+                            ? `${formatUSD(visibleResult.realizedPnlUSD)} / 参考 ${formatJPY(visibleResult.realizedPnlJPY, { signed: true })}`
+                            : formatJPY(visibleResult.realizedPnlJPY, { signed: true })}
                         </div>
                       </div>
                       <div>
                         <div className="text-xs font-semibold">実績年率</div>
-                        <div className="numeric-input font-bold">{formatPct(result.annualReturnPct)}（{result.holdingDays}日）</div>
+                        <div className="numeric-input font-bold">{formatPct(visibleResult.annualReturnPct)}（{visibleResult.holdingDays}日）</div>
                       </div>
                       <div>
                         <div className="text-xs font-semibold">計算内訳</div>
                         <div className="text-xs leading-5">
-                          {!isNCloseExecution && result.basis === "saxo_broker_statement" ? (
+                          {!isNCloseExecution && visibleResult.basis === "saxo_broker_statement" ? (
                             <>
-                              Saxo実績ベース / 実現損益 {formatJPY(result.realizedPnlJPY, { signed: true })}を採用
+                              Saxo実績ベース / 実現損益 {formatJPY(visibleResult.realizedPnlJPY, { signed: true })}を採用
                               <br />
                               参考: 記帳額 {execution.brokerBookedAmountJPY === undefined ? "-" : formatJPY(execution.brokerBookedAmountJPY, { signed: true })} / 取引費用{" "}
                               {execution.brokerTransactionCostJPY === undefined ? "-" : formatJPY(execution.brokerTransactionCostJPY, { signed: true })} / 為替{" "}
@@ -1873,7 +2335,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                             </>
                           ) : (
                             <>
-                              {result.basis === "saxo_broker_statement" ? "Saxo実績ベース" : "概算"} / プレミアム {formatUSD(result.entryPremiumUSD)} - 買戻し {formatUSD(result.closeCostUSD)} - 手数料 {formatUSD(result.openCommissionUSD + result.closeCommissionUSD)}
+                              {visibleResult.basis === "saxo_broker_statement" ? "Saxo実績ベース" : "概算"} / プレミアム {formatUSD(visibleResult.entryPremiumUSD)} - 買戻し {formatUSD(visibleResult.closeCostUSD)} - 手数料 {formatUSD(visibleResult.openCommissionUSD + visibleResult.closeCommissionUSD)}
                             </>
                           )}
                         </div>
@@ -1890,21 +2352,23 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                     <span className="text-slate-600">
                       {execution.confirmed
                         ? "この決済実績は確認済みです。"
-                        : "Saxo注文履歴で約定日、価格、数量、損益を確認してから確定してください。"}
+                        : isSaxoHistoryCloseDraft
+                          ? "Saxo履歴候補から作成された決済実績です。内容を確認してから正式保存してください。"
+                          : "Saxo注文履歴で約定日、価格、数量、損益を確認してから確定してください。"}
                     </span>
                     <button
                       type="button"
                       className="rounded-md border border-emerald-300 bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-200 disabled:text-slate-500"
-                      disabled={!result || execution.confirmed}
+                      disabled={!visibleResult || execution.confirmed || isInvalidSaxoHistoryCloseDraft}
                       onClick={() => confirmOptionCloseExecution(execution.id)}
                     >
-                      決済実績を確認済みにする
+                      {isSaxoHistoryCloseDraft ? "確認して正式保存" : "決済実績を確認済みにする"}
                     </button>
                   </div>
                 </div>
               );
             })}
-            {optionCloseExecutions.length === 0 && simulation.status !== "closed" ? (
+            {optionCloseExecutions.length === 0 && simulation.status !== "closed" && !missingSaxoHistoryCloseCandidate ? (
               <p className="rounded-md bg-slate-50 p-3 text-sm leading-6 text-slate-600">
                 決済前の建玉では未入力で問題ありません。Saxoで実際に決済が約定した後に入力します。
               </p>
@@ -1925,6 +2389,32 @@ function isLikelyNextStatus(current: SimulationStatus, next: SimulationStatus): 
   if (current === "planned") return next === "open";
   if (current === "open") return ["closed", "assigned", "expired"].includes(next);
   return false;
+}
+
+function isSaxoApiPositionDraft(simulation: TradeSimulation): boolean {
+  const notes = simulation.fixtureMeta?.notes ?? "";
+  if (notes.includes("正式保存しました")) return false;
+  return (
+    simulation.id.startsWith("saxo-position-draft-") ||
+    simulation.name.includes("API取込下書き") ||
+    notes.includes("Saxo API read-onlyの現在建玉候補から作成した下書き")
+  );
+}
+
+function getSaxoDraftMissingItems(simulation: TradeSimulation): string[] {
+  const items: string[] = [];
+  const firstLeg = simulation.optionLegs[0];
+  if (!simulation.ticker) items.push("銘柄");
+  if (!simulation.accountCode) items.push("口座");
+  if (!firstLeg?.side) items.push("売買方向");
+  if (!firstLeg?.quantity) items.push("数量");
+  if (!firstLeg?.strikeUSD) items.push("権利行使価格");
+  if (!firstLeg?.expiryDate && !simulation.expiryDate) items.push("満期");
+  if (!firstLeg?.premiumUSD) items.push("建て価格");
+  if (!simulation.brokerCommissionUSD && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") items.push("手数料");
+  if (!simulation.denominatorMode) items.push("主分母");
+  if (simulation.nisaExpectedAnnualReturnPct === undefined) items.push("NISA等比較年率");
+  return items;
 }
 
 function getStatusWorkflowNotice(previousStatus: SimulationStatus, nextStatus: SimulationStatus): { message: string; actionLabel: string; anchorId: string } | null {
@@ -1958,6 +2448,140 @@ function getStatusWorkflowNotice(previousStatus: SimulationStatus, nextStatus: S
     };
   }
   return null;
+}
+
+function findSaxoEntryCandidatesForExecution(
+  simulation: TradeSimulation,
+  execution: OptionEntryExecution,
+  candidates: SaxoHistoryDiscoveryItem[],
+): SaxoHistoryDiscoveryItem[] {
+  const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
+  if (!leg) return [];
+  const scored = candidates
+    .filter((candidate) => getSaxoHistoryCandidateTarget(candidate) === "entry")
+    .filter((candidate) => isSaxoHistoryMatchingOptionLeg(simulation, leg, candidate, "entry"))
+    .map((candidate) => ({ candidate, score: scoreSaxoEntryCandidate(simulation, leg, execution, candidate) }))
+    .filter((item) => item.score >= 5)
+    .sort((a, b) => b.score - a.score);
+  const bestScore = scored[0]?.score;
+  if (bestScore === undefined) return [];
+  return scored
+    .filter((item) => item.score >= Math.max(5, bestScore - 2))
+    .slice(0, 5)
+    .map((item) => item.candidate);
+}
+
+function scoreSaxoEntryCandidate(
+  simulation: TradeSimulation,
+  leg: OptionLeg,
+  execution: OptionEntryExecution,
+  candidate: SaxoHistoryDiscoveryItem,
+): number {
+  let score = 0;
+  if (normalizeEntrySymbol(candidate.symbol ?? "") && normalizeEntrySymbol(candidate.symbol ?? "") === normalizeEntrySymbol(simulation.ticker)) score += 4;
+  if (candidate.optionType && candidate.optionType !== "unknown" && candidate.optionType === leg.type) score += 3;
+  if (candidate.strike !== undefined && Math.abs(candidate.strike - leg.strikeUSD) < 0.001) score += 3;
+  if (candidate.expiry && normalizeEntryDate(candidate.expiry) === normalizeEntryDate(leg.expiryDate)) score += 3;
+  if (candidate.quantity !== undefined && Math.abs(Math.abs(candidate.quantity) - execution.contracts) < 0.0001) score += 2;
+  if (candidate.price !== undefined && Math.abs(candidate.price - execution.fillPriceUSD) < 0.01) score += 2;
+  if (candidate.tradeDate && execution.tradeDate && normalizeEntryDate(candidate.tradeDate) === normalizeEntryDate(execution.tradeDate)) score += 1;
+  if (candidate.instrumentCode && leg.brokerSymbol && candidate.instrumentCode === leg.brokerSymbol) score += 4;
+  if ((execution.historyCandidateIds ?? []).includes(candidate.id)) score += 3;
+  return score;
+}
+
+function normalizeEntrySymbol(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9.]/g, "");
+}
+
+function normalizeEntryDate(value: string): string {
+  return value.replace(/\//g, "-").slice(0, 10);
+}
+
+function formatEntryExecutionSource(execution: OptionEntryExecution): string {
+  if (execution.saxoSourceType === "current_position") return "Saxo現在建玉";
+  if (execution.saxoSourceType === "history") return "Saxo取引履歴";
+  if (execution.source === "broker_statement") return "取引報告書";
+  if (execution.source === "saxo_api_estimate") return "Saxo API候補";
+  return "手入力";
+}
+
+function formatEntryHistoryCompletion(execution: OptionEntryExecution): string {
+  if (execution.historyCompletionStatus === "matched") return "補完済み";
+  if (execution.historyCompletionStatus === "multiple") return "要選択";
+  if (execution.historyCompletionStatus === "manual") return "要手入力";
+  if (execution.saxoSourceType === "current_position") return "未照合";
+  return "要手入力";
+}
+
+function getEntryExecutionMissingItems(execution: OptionEntryExecution, isN: boolean): string[] {
+  const items: string[] = [];
+  if (!execution.tradeDate) items.push("取引日");
+  if (!Number.isFinite(execution.fillPriceUSD) || execution.fillPriceUSD <= 0) items.push("約定価格USD");
+  if (!Number.isFinite(execution.contracts) || execution.contracts <= 0) items.push("数量");
+  if (isN) {
+    const grossPremiumUSD = execution.fillPriceUSD * 100 * execution.contracts;
+    if (!Number.isFinite(grossPremiumUSD) || grossPremiumUSD <= 0) items.push("プレミアムUSD");
+    if (execution.commissionUSD === undefined || !Number.isFinite(execution.commissionUSD)) items.push("取引費用USD");
+    return items;
+  }
+  const hasBookedAmount = execution.brokerBookedAmountJPY !== undefined && Number.isFinite(execution.brokerBookedAmountJPY);
+  if (!hasBookedAmount) {
+    items.push("記帳額JPY");
+    if (execution.brokerPremiumJPY === undefined || !Number.isFinite(execution.brokerPremiumJPY)) items.push("プレミアムJPY");
+    if (execution.brokerTransactionCostJPY === undefined || !Number.isFinite(execution.brokerTransactionCostJPY)) items.push("取引費用JPY");
+    if (execution.brokerExchangeRateJPY === undefined || !Number.isFinite(execution.brokerExchangeRateJPY)) items.push("為替レート");
+  }
+  return items;
+}
+
+function getCloseExecutionMissingItems(execution: OptionCloseExecution, isN: boolean): string[] {
+  const items: string[] = [];
+  if (!execution.closeDate) items.push("決済日");
+  if (!Number.isFinite(execution.contracts) || execution.contracts <= 0) items.push("約定数量");
+  if ((execution.closeKind ?? "buyback") === "buyback" && (execution.closePriceUSD === undefined || !Number.isFinite(execution.closePriceUSD))) items.push("約定価格USD");
+  if (isN) {
+    if (execution.commissionUSD === undefined || !Number.isFinite(execution.commissionUSD)) items.push("USD手数料");
+    if (execution.realizedPnlUSD === undefined || !Number.isFinite(execution.realizedPnlUSD)) items.push("USD実現損益");
+    return items;
+  }
+  const hasBookedAmount = execution.brokerBookedAmountJPY !== undefined && Number.isFinite(execution.brokerBookedAmountJPY);
+  const hasRealizedPnl = execution.brokerRealizedPnlJPY !== undefined && Number.isFinite(execution.brokerRealizedPnlJPY);
+  if (!hasBookedAmount) items.push("記帳額JPY");
+  if (!hasBookedAmount && !hasRealizedPnl) items.push("Saxo実現損益JPY");
+  return items;
+}
+
+function getEntryDiagnosticCandidates(
+  execution: OptionEntryExecution,
+  entryCandidates: SaxoHistoryDiscoveryItem[],
+  allCandidates: SaxoHistoryDiscoveryItem[],
+): SaxoHistoryDiscoveryItem[] {
+  const idSet = new Set(execution.historyCandidateIds ?? []);
+  const selected = allCandidates.filter((candidate) => idSet.has(candidate.id));
+  const merged = [...selected, ...entryCandidates];
+  const seen = new Set<string>();
+  return merged.filter((candidate) => {
+    if (seen.has(candidate.id)) return false;
+    seen.add(candidate.id);
+    return Boolean(candidate.rawFieldNames?.length || candidate.fieldDiagnostics?.length);
+  });
+}
+
+function formatSaxoEntryCandidateLabel(candidate: SaxoHistoryDiscoveryItem): string {
+  const parts = [
+    candidate.tradeDate ? `取引日 ${normalizeEntryDate(candidate.tradeDate)}` : "取引日 未取得",
+    candidate.symbol ? `銘柄 ${candidate.symbol}` : undefined,
+    candidate.optionType && candidate.optionType !== "unknown" ? candidate.optionType.toUpperCase() : undefined,
+    candidate.strike !== undefined ? `権利行使 ${candidate.strike}` : undefined,
+    candidate.expiry ? `満期 ${normalizeEntryDate(candidate.expiry)}` : undefined,
+    candidate.quantity !== undefined ? `数量 ${Math.abs(candidate.quantity)}` : undefined,
+    candidate.price !== undefined ? `価格 ${candidate.price}` : undefined,
+    candidate.bookedAmount !== undefined ? `記帳額 ${formatJPY(candidate.bookedAmount, { signed: true })}` : undefined,
+    candidate.premiumAmount !== undefined ? `プレミアム ${formatJPY(candidate.premiumAmount, { signed: true })}` : undefined,
+    candidate.transactionCost !== undefined ? `取引費用 ${formatJPY(candidate.transactionCost, { signed: true })}` : undefined,
+  ].filter(Boolean);
+  return parts.join(" / ");
 }
 
 function TextInput({

@@ -40,6 +40,29 @@ function createOpenSimulation(patch: Partial<TradeSimulation> = {}): TradeSimula
   };
 }
 
+function createOpenShortPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulation {
+  return {
+    ...createOpenSimulation(),
+    strategyType: "short_put",
+    optionLegs: [putLeg],
+    optionEntryExecutions: [
+      {
+        id: "entry-put",
+        legId: putLeg.id,
+        tradeDate: sampleAmznSimulation.entryDate,
+        contracts: putLeg.quantity,
+        fillPriceUSD: putLeg.premiumUSD,
+        settlementCurrency: "JPY",
+        brokerPremiumJPY: 22_260,
+        brokerTransactionCostJPY: 384,
+        source: "manual",
+        confirmed: true,
+      },
+    ],
+    ...patch,
+  };
+}
+
 describe("workflow tasks", () => {
   it("shows order review for planned positions", () => {
     expect(getPrimaryWorkflowTask(sampleAmznSimulation).label).toBe("注文内容を確認");
@@ -127,5 +150,32 @@ describe("workflow tasks", () => {
     });
 
     expect(getPrimaryWorkflowTask(sim).label).toBe("満期終了に変更");
+  });
+
+  it("asks for stock acquisition when an assigned short put has no stock acquisition", () => {
+    const sim = createOpenShortPutSimulation({
+      status: "assigned",
+      optionCloseExecutions: [],
+      stockAcquisition: undefined,
+    });
+
+    expect(getPrimaryWorkflowTask(sim).label).toBe("株式取得を記録");
+  });
+
+  it("marks assigned short put complete when stock acquisition is entered", () => {
+    const sim = createOpenShortPutSimulation({
+      status: "assigned",
+      optionCloseExecutions: [],
+      stockAcquisition: {
+        enabled: true,
+        acquisitionDate: "2026-06-12",
+        shares: 100,
+        priceUSD: 207.5,
+        accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+        source: "saxo_history",
+      },
+    });
+
+    expect(getPrimaryWorkflowTask(sim).label).toBe("入力完了");
   });
 });

@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:saxo-api": "node server/saxo-readonly-server.mjs",
+    "dev:all": "sh -c 'trap \"kill 0\" INT TERM EXIT; npm run dev:saxo-api & npm run dev'",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest --run",

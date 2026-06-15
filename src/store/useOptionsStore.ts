@@ -14,7 +14,7 @@ import type {
 } from "@/types/domain";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import { getDefaultExitOrderPlan, normalizeExitOrderPlan, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
-import { normalizeOptionCloseExecutionsForStatus } from "@/domain/optionCloseExecutions";
+import { normalizeOptionCloseExecutionsForStatus, sanitizeSaxoHistoryCloseExecutions } from "@/domain/optionCloseExecutions";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
 
 export type WorkspaceMode = "demo" | "live";
@@ -169,7 +169,7 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
   };
   const exitOrderPlan = normalizeExitOrderPlan(normalized);
   const exitOrderPlans = normalizeExitOrderPlans({ ...normalized, exitOrderPlan });
-  return {
+  return sanitizeSaxoHistoryCloseExecutions({
     ...normalized,
     optionEntryExecutions: normalized.optionEntryExecutions ?? [],
     optionCloseExecutions: normalizeOptionCloseExecutionsForStatus(normalized.optionCloseExecutions, normalized.status),
@@ -197,7 +197,7 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
               : exitOrderPlan.stopLossAmountJPY ?? 0
             : exitOrderPlan.stopLossBuybackPriceUSD ?? 0,
     },
-  };
+  });
 }
 
 function normalizeAccountInputs(value: unknown, fallback: AccountInputs): AccountInputs {
