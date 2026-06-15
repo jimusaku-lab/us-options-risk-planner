@@ -36,15 +36,15 @@
 - `npm test`: 通過（13 files / 69 tests）
 - `npm run build`: 通過
 - `GITHUB_PAGES=true npm run build`: 通過
-- Git commit: 実行予定
-- GitHub push: 実行予定
+- Git commit: 済み
+- GitHub push: 済み
 - GitHub Pages公開URL確認: 実行予定
 
 ## push情報
 
-- commit hash: 追記予定
+- 実装commit hash: `d84ab44`
 - push branch: `main`
-- push状態: 追記予定
+- push状態: 済み
 
 ## 残課題
 
