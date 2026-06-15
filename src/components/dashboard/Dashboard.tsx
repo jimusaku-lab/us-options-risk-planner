@@ -95,7 +95,7 @@ export function Dashboard({
               <th className="py-2 pr-3 text-right">権利行使価格</th>
               <th className="py-2 pr-3">満期</th>
               <th className="py-2 pr-3 text-right">プレミアム</th>
-              <th className="py-2 pr-3 text-right">使用分母</th>
+              <th className="py-2 pr-3 text-right">使用分母 / 実績分母</th>
               <th className="py-2 pr-3 text-right">年率</th>
               <th className="py-2 pr-3 text-right">警告</th>
               <th className="py-2 pr-3">次にやること</th>
