@@ -57,3 +57,61 @@
 ## 残課題
 
 - この時点ではなし。
+
+---
+
+# 2026-06-16 一般公開版 Saxo API Read-only 接続導線修正
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 対象ブランチ: `main` / `gh-pages`
+
+## 実装内容
+
+- GitHub Pages公開版からMac上のSaxoローカルAPIへ接続するため、公開版用の起動コマンドをUIに表示・コピーできるようにした。
+- 公開版用起動コマンドに `SAXO_LOCAL_UI_ALLOWED_ORIGIN=https://jimusaku-lab.github.io` と `SAXO_LOCAL_UI_RETURN_URL=https://jimusaku-lab.github.io/us-options-risk-planner/` を含めた。
+- ローカルAPIのCORSを公開版Origin対応にし、`https://jimusaku-lab.github.io` からの `GET /api/saxo/status` と `OPTIONS` preflight で `access-control-allow-origin` を返すようにした。
+- Chrome Private Network Access対策として、許可Originには `access-control-allow-private-network: true` を返すようにした。
+- Saxo APIパネルの未起動表示を改善し、API未起動、公開版Origin/CORS/PNAブロック疑い、API起動済みだがSaxo未接続、Saxo接続済みを画面メッセージで区別できるようにした。
+- 「起動できたか確認」押下時に、確認中・起動済み・未起動・公開版Origin/CORS/PNA疑いの結果が画面上に出るようにした。
+- 「詳しい設定を見る」はAPI未起動時でも必ず開閉でき、開いた後は「詳しい設定を閉じる」と表示されるようにした。
+- ローカルAPI到達後は、公開版でも黒い `Saxo接続` / `Saxo再接続` ボタンが表示される導線を維持した。
+- Read-only方針は維持し、注文系endpointは引き続き未実装。
+
+## 修正ファイル
+
+- `server/saxo-readonly-server.mjs`
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `src/features/saxo/saxoApiClient.ts`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証コマンド
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- `curl -i -H "Origin: https://jimusaku-lab.github.io" http://127.0.0.1:18787/api/saxo/status`
+  - `access-control-allow-origin: https://jimusaku-lab.github.io` を確認
+  - `access-control-allow-private-network: true` を確認
+- `curl -i -X OPTIONS -H "Origin: https://jimusaku-lab.github.io" -H "Access-Control-Request-Method: GET" -H "Access-Control-Request-Private-Network: true" http://127.0.0.1:18787/api/saxo/status`
+  - `204 No Content` を確認
+  - `access-control-allow-origin: https://jimusaku-lab.github.io` を確認
+  - `access-control-allow-private-network: true` を確認
+
+## commit / push
+
+- 実装commit hash: `41c21b9`
+- Pages deploy commit hash: `0efa6cd`
+- main push: 実施予定
+- gh-pages push: 実施予定
+
+## 公開URL確認
+
+- Pages反映後に `https://jimusaku-lab.github.io/us-options-risk-planner/` で確認する。
+
+## 残課題
+
+- main / gh-pages push後に公開URLの実表示を最終確認する。
