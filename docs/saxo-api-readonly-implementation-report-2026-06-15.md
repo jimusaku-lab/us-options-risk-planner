@@ -60,6 +60,63 @@
 
 ---
 
+# 2026-06-16 一般公開版 Saxo接続後の準備カード折りたたみと接続保持促進
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 対象ブランチ: `main` / `gh-pages`
+
+## 実装内容
+
+- Saxo接続済み状態では、Node.js、PC側補助ツール、`.env.local`、OS別起動手順を含む準備カードを主表示から外すようにした。
+- 未導入、ローカルAPI未起動、Saxo未接続、接続設定不足の状態では、従来どおり準備カードを展開表示する。
+- Saxo接続済みかつ接続保持未保存の場合、準備カードより上に `次回以降の再ログインを減らすため、接続保持を保存してください` カードを表示するようにした。
+- 接続保持カードには、保存するのはOAuth接続保持情報だけであり、Saxo ID、パスワード、2FAコード、口座情報は保存しない説明を表示した。
+- 接続保持カードの主ボタンを `このPCに接続保持を保存`、補助ボタンを `今は保存しない` にした。
+- 接続保持保存成功後は準備カードを自動で畳み、`まとめて取得` を主操作として表示するようにした。
+- 接続保持が有効な場合は、準備カードを畳んだまま小さな `準備手順を再表示` ボタンだけを表示するようにした。
+- `準備手順を再表示` を押した場合だけ、OS別手順、`.env.local`、セキュリティ注意を再展開できるようにした。
+- 再接続が必要な状態では、準備カードではなく `Saxo再接続` を主操作として出す既存導線を維持した。
+- Saxo APIはRead-onlyのままで、発注・注文変更・注文取消endpointは追加していない。
+- Saxo ID、password、2FA、OAuth token、Client Secretの入力欄や保存処理は追加していない。
+
+## 修正ファイル
+
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `docs/saxo-api-readonly-detailed-design-2026-06-08.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-iVAo1oEw.js`
+  - bundle内に `次回以降の再ログインを減らすため、接続保持を保存してください`、`このPCに接続保持を保存`、`準備手順を再表示`、`準備手順を閉じる` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: `TBD`
+- 報告書commit hash: `TBD`
+- Pages deploy commit hash: `TBD`
+- main push: 予定
+- gh-pages push: 予定
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundleを参照することを確認予定。
+- 公開bundle内に `次回以降の再ログインを減らすため、接続保持を保存してください`、`このPCに接続保持を保存`、`準備手順を再表示`、`準備手順を閉じる` が含まれることを確認予定。
+
+## 残課題
+
+- commit / push / GitHub Pages反映後に公開URL確認結果を確定する。
+
+---
+
 # 2026-06-16 一般公開版 ChatGPT/Codex相談文コピー更新
 
 ## 対象

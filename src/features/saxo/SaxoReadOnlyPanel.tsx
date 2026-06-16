@@ -165,6 +165,8 @@ export function SaxoReadOnlyPanel({
   const [localApiSetupChecks, setLocalApiSetupChecks] =
     useState<Record<SaxoLocalApiSetupStepId, boolean>>(loadLocalApiSetupChecks);
   const [startCommandCopied, setStartCommandCopied] = useState(false);
+  const [showPreparationDetails, setShowPreparationDetails] = useState(false);
+  const [dismissedPersistencePrompt, setDismissedPersistencePrompt] = useState(false);
   const mappingWorkspace = workspace === "demo" ? "demo" : "real";
   const pendingSummaryRef = useRef<HTMLDivElement | null>(null);
   const mappingRef = useRef<HTMLDivElement | null>(null);
@@ -891,7 +893,9 @@ export function SaxoReadOnlyPanel({
     try {
       const nextStatus = await enableSaxoPersistence();
       setStatus(nextStatus);
-      setMessage(nextStatus.message ?? "このMacに接続保持を保存しました");
+      setShowPreparationDetails(false);
+      setDismissedPersistencePrompt(false);
+      setMessage(nextStatus.message ?? "このPCに接続保持を保存しました");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "接続保持を有効化できませんでした。");
       await refreshStatus();
@@ -982,7 +986,20 @@ export function SaxoReadOnlyPanel({
       !configStatus?.clientIdConfigured ||
       configStatus?.environmentConfigured === false,
   );
-  const showSetupSection = Boolean(status && connectionState !== "connected" && hasSetupProblem);
+  const showSetupSection = Boolean(status && connectionState === "disconnected" && hasSetupProblem);
+  const isConnected = connectionState === "connected";
+  const persistenceEnabled = isConnected && status?.tokenPersistence?.enabled === true;
+  const canPersistConnection =
+    isConnected &&
+    status?.tokenPersistence?.supported !== false &&
+    status?.tokenPersistence?.enabled !== true;
+  const showPersistencePrompt = canPersistConnection && !dismissedPersistencePrompt;
+  const showPreparationCard = Boolean(
+    localApiDown ||
+      connectionState === "disconnected" ||
+      showSetupSection ||
+      showPreparationDetails,
+  );
 
   return (
     <section className={`rounded-lg border bg-white shadow-sm ${isLive ? "border-red-300" : "border-slate-200"}`}>
@@ -1043,23 +1060,43 @@ export function SaxoReadOnlyPanel({
               connectionState={connectionState}
               environment={formatSaxoEnvironmentStatus(status)}
               status={status}
-              isLoading={isLoading}
               pMapping={mappedSnapshots.find((item) => item.accountCode === "P")?.mapping}
               nMapping={mappedSnapshots.find((item) => item.accountCode === "N")?.mapping}
               workspace={workspace}
               lastSyncedAt={status?.lastSyncedAt}
               onOpenDiagnostics={() => setShowConnectionDetails((value) => !value)}
-              onEnablePersistence={enablePersistence}
             />
-            <SaxoApiOnboardingSection
-              checks={onboardingChecks}
-              localApiOs={localApiOs}
-              localApiSetupChecks={localApiSetupChecks}
-              onToggle={toggleOnboardingCheck}
-              onOsChange={setLocalApiOs}
-              onToggleLocalApiSetup={toggleLocalApiSetupCheck}
-              onCopyConsultationPrompt={copyFriendConsultationPrompt}
-            />
+            {showPersistencePrompt ? (
+              <SaxoPersistencePromptCard
+                isLoading={isLoading}
+                onEnablePersistence={enablePersistence}
+                onDismiss={() => setDismissedPersistencePrompt(true)}
+              />
+            ) : null}
+            {persistenceEnabled && !showPreparationCard ? (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                  onClick={() => setShowPreparationDetails(true)}
+                >
+                  準備手順を再表示
+                </button>
+              </div>
+            ) : null}
+            {showPreparationCard ? (
+              <SaxoApiOnboardingSection
+                checks={onboardingChecks}
+                localApiOs={localApiOs}
+                localApiSetupChecks={localApiSetupChecks}
+                canCollapse={isConnected}
+                onCollapse={() => setShowPreparationDetails(false)}
+                onToggle={toggleOnboardingCheck}
+                onOsChange={setLocalApiOs}
+                onToggleLocalApiSetup={toggleLocalApiSetupCheck}
+                onCopyConsultationPrompt={copyFriendConsultationPrompt}
+              />
+            ) : null}
             {localApiDown ? (
               <LocalApiDownCard
                 isLoading={isLoading}
@@ -1115,7 +1152,7 @@ export function SaxoReadOnlyPanel({
                 接続設定の確認が必要です。詳細は「設定・診断を開く」内で確認してください。
               </div>
             ) : null}
-            {!localApiDown ? (
+            {isConnected ? (
               <SaxoMainActions
                 isLoading={isLoading}
                 localApiDown={localApiDown}
@@ -1131,7 +1168,7 @@ export function SaxoReadOnlyPanel({
               />
             ) : null}
             {message ? <p className="rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">{message}</p> : null}
-            {!localApiDown ? (
+            {isConnected ? (
               <>
               <ReflectionPendingSummary
                 ref={pendingSummaryRef}
@@ -1540,6 +1577,8 @@ function SaxoApiOnboardingSection({
   checks,
   localApiOs,
   localApiSetupChecks,
+  canCollapse = false,
+  onCollapse,
   onToggle,
   onOsChange,
   onToggleLocalApiSetup,
@@ -1548,6 +1587,8 @@ function SaxoApiOnboardingSection({
   checks: Record<SaxoOnboardingStepId, boolean>;
   localApiOs: SaxoLocalApiOs;
   localApiSetupChecks: Record<SaxoLocalApiSetupStepId, boolean>;
+  canCollapse?: boolean;
+  onCollapse?: () => void;
   onToggle: (id: SaxoOnboardingStepId, checked: boolean) => void;
   onOsChange: (os: SaxoLocalApiOs) => void;
   onToggleLocalApiSetup: (id: SaxoLocalApiSetupStepId, checked: boolean) => void;
@@ -1570,6 +1611,15 @@ function SaxoApiOnboardingSection({
         <span className="rounded bg-white px-2 py-1 text-xs font-bold text-sky-800">
           GitHub Pages公開版
         </span>
+        {canCollapse ? (
+          <button
+            type="button"
+            className="rounded-md border border-sky-300 bg-white px-3 py-2 text-xs font-bold text-sky-900 hover:bg-sky-100"
+            onClick={onCollapse}
+          >
+            準備手順を閉じる
+          </button>
+        ) : null}
       </div>
       <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
         <div className="rounded-md border border-sky-200 bg-white p-3">
@@ -1727,31 +1777,23 @@ function SaxoDailySummary({
   connectionState,
   environment,
   status,
-  isLoading,
   pMapping,
   nMapping,
   workspace,
   lastSyncedAt,
   onOpenDiagnostics,
-  onEnablePersistence,
 }: {
   statusLabel: string;
   connectionState: SaxoPanelConnectionState;
   environment: string;
   status: SaxoApiStatus | null;
-  isLoading: boolean;
   pMapping?: SaxoAccountMapping;
   nMapping?: SaxoAccountMapping;
   workspace: WorkspaceMode;
   lastSyncedAt?: string;
   onOpenDiagnostics: () => void;
-  onEnablePersistence: () => void;
 }) {
   const persistence = status?.tokenPersistence;
-  const canPersistConnection =
-    connectionState === "connected" &&
-    persistence?.supported !== false &&
-    persistence?.enabled !== true;
   const persistenceEnabled = connectionState === "connected" && persistence?.enabled === true;
   const tone =
     connectionState === "local_api_down"
@@ -1774,28 +1816,54 @@ function SaxoDailySummary({
           設定・診断を開く
         </button>
       </div>
-      {canPersistConnection ? (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-200 bg-white/80 px-3 py-2 text-xs leading-5 text-emerald-950">
-          <div>
-            <div className="font-bold">Saxo接続中です。次回以降の再ログインを減らすには、このMacに接続保持を保存できます。</div>
-            <div className="mt-0.5 text-emerald-800">保存するのはOAuth接続保持情報のみです。Saxo Account ID、パスワード、2FAコードは保存しません。</div>
-          </div>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 rounded-md bg-emerald-700 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-            onClick={onEnablePersistence}
-            disabled={isLoading}
-          >
-            <Save size={14} />
-            接続をこのMacに保持
-          </button>
-        </div>
-      ) : null}
       {persistenceEnabled ? (
         <div className="mt-2 rounded-md border border-emerald-200 bg-white/80 px-3 py-2 text-xs font-bold text-emerald-950">
           接続保持: 有効 / 保存先: {persistence?.storage ?? "macOS Keychain"}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function SaxoPersistencePromptCard({
+  isLoading,
+  onEnablePersistence,
+  onDismiss,
+}: {
+  isLoading: boolean;
+  onEnablePersistence: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-emerald-300 bg-emerald-50 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-bold text-emerald-950">
+            次回以降の再ログインを減らすため、接続保持を保存してください
+          </h3>
+          <p className="mt-1 text-sm leading-6 text-emerald-900">
+            保存するのはOAuth接続保持情報だけです。Saxo ID、パスワード、2FAコード、口座情報は保存しません。
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md bg-emerald-700 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            onClick={onEnablePersistence}
+            disabled={isLoading}
+          >
+            <Save size={15} />
+            このPCに接続保持を保存
+          </button>
+          <button
+            type="button"
+            className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm font-bold text-emerald-900 hover:bg-emerald-100"
+            onClick={onDismiss}
+          >
+            今は保存しない
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
