@@ -94,12 +94,14 @@
 
 - 実装commit hash: `0f0a295`
 - Pages deploy commit hash: `d5dc122`
-- main push: 予定
-- gh-pages push: 予定
+- 報告書初回commit hash: `3411f53`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- `https://jimusaku-lab.github.io/us-options-risk-planner/`: push後に確認予定
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-DQyYGf-I.js` を参照することを確認した。
+- 公開bundle内に `追加で作成が必要な履歴候補はありません`、`対象外または確認不要`、`Stock履歴は通常の3-A/7候補として自動反映しません` が含まれることを確認した。
 
 ## 残課題
 
