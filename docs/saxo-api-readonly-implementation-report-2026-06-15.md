@@ -98,15 +98,15 @@
 
 ## commit / push
 
-- 実装commit hash: 後続commitで確定
-- Pages deploy commit hash: 後続commitで確定
-- main push: 実施予定
-- gh-pages push: 実施予定
+- 実装commit hash: `b441f44`
+- Pages deploy commit hash: `1e2ccba`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- `gh-pages` 反映後、`https://jimusaku-lab.github.io/us-options-risk-planner/` が新bundle `assets/index-B3OF-1I8.js` を参照することを確認する。
-- 公開bundle内に新しい相談文が含まれることを確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-B3OF-1I8.js` を参照することを確認した。
+- 公開bundle内に `GitHub Pages公開版の米国株オプション建玉管理アプリで、Saxo OpenAPI Read-only接続を設定したいです`、`PC側補助ツールの準備に必要なNode.js/npm、.env.local、起動コマンドの手順を、Mac/Windows別に案内してください`、`Saxo read-only local API listening on http://127.0.0.1:18787`、`口座残高や建玉の詳細スクリーンショット`、`LIVE AppKeyが「取得済みかどうか」だけ`、`Client Secretはこのアプリでは使いません` が含まれることを確認した。
 
 ## 残課題
 
