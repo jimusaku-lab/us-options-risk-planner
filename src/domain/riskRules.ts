@@ -24,7 +24,10 @@ function closeDecisionAction(simulation: TradeSimulation, leg: OptionLeg): Pick<
   };
 }
 
-export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[] {
+export function generateRiskWarnings(
+  simulation: TradeSimulation,
+  options: { stockTransferRecorded?: boolean } = {},
+): RiskWarning[] {
   const warnings: RiskWarning[] = [];
   const uncoveredCallShares = calculateUncoveredCallShares(simulation);
   const avoidPut = hasAvoidPut(simulation);
@@ -168,7 +171,12 @@ export function generateRiskWarnings(simulation: TradeSimulation): RiskWarning[]
     });
   }
 
-  if (simulation.accountEnvironment === "PROD_P_JPY_SETTLEMENT" && simulation.status === "assigned" && (simulation.stockPosition?.shares ?? 0) > 0) {
+  if (
+    !options.stockTransferRecorded &&
+    simulation.accountEnvironment === "PROD_P_JPY_SETTLEMENT" &&
+    simulation.status === "assigned" &&
+    (simulation.stockPosition?.shares ?? 0) > 0
+  ) {
     warnings.push({
       id: "p-assigned-stock-transfer-pending",
       severity: "warning",

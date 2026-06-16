@@ -55,7 +55,7 @@ import { formatJPY, formatNumber, formatUSD } from "@/lib/format";
 import { useCandidatesStore } from "@/store/useCandidatesStore";
 import { DEFAULT_BROKER_COMMISSION_USD, DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, useOptionsStore } from "@/store/useOptionsStore";
 import type { CandidateSymbol } from "@/types/candidates";
-import type { OptionCloseExecution, RiskWarning, TradeSimulation, WorkflowTask } from "@/types/domain";
+import type { OptionCloseExecution, RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } from "@/types/domain";
 import type { YearlyPerformanceIssue } from "@/domain/yearlyPerformance";
 
 export default function App() {
@@ -103,17 +103,8 @@ export default function App() {
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
-  const selectedTransferShares = selected?.stockPosition?.shares ?? selected?.stockAcquisition?.shares ?? 0;
-  const selectedStockTransferRecorded = Boolean(
-    selected &&
-      selectedTransferShares > 0 &&
-      stockTransfers.some(
-        (transfer) =>
-          transfer.sourceSimulationId === selected.id &&
-          transfer.toAccountCode === "N" &&
-          Math.abs(transfer.shares - selectedTransferShares) <= 0.0001,
-      ),
-  );
+  const selectedStockTransfer = selected ? getStockTransferForSimulation(selected, stockTransfers) : undefined;
+  const selectedStockTransferRecorded = Boolean(selectedStockTransfer);
   const selectedLinkedWheelCycle = selected
     ? wheelCycles.find((cycle) => cycle.currentPhase !== "cycle_closed" && cycle.linkedSimulationIds.includes(selected.id))
     : undefined;
@@ -921,6 +912,7 @@ export default function App() {
             <>
               <Dashboard
                 simulations={simulations}
+                stockTransfers={stockTransfers}
                 selectedId=""
                 onSelect={selectOnly}
                 onEdit={selectAndOpenEditor}
@@ -1031,7 +1023,7 @@ export default function App() {
     expectedAnnualReturnPct: selected.nisaExpectedAnnualReturnPct ?? DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT,
     taxRatePct: taxProfile.taxRatePct,
   });
-  const warnings = generateRiskWarnings(selectedWithAccount);
+  const warnings = generateRiskWarnings(selectedWithAccount, { stockTransferRecorded: selectedStockTransferRecorded });
   const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
   const checklist = generateChecklist(selectedWithAccount).map((item) => ({
     ...item,
@@ -1089,6 +1081,7 @@ export default function App() {
           <>
             <Dashboard
               simulations={simulations}
+              stockTransfers={stockTransfers}
               selectedId={selected.id}
               onSelect={selectOnly}
               onEdit={selectAndOpenEditor}
@@ -1167,6 +1160,14 @@ export default function App() {
                     }}
                     focusRequest={editorFocusRequest}
                     onCloseEditor={() => setIsEditorOpen(false)}
+                    stockTransfer={selectedStockTransfer}
+                    onStockAcquisitionCompleteClose={() => {
+                      setIsEditorOpen(false);
+                      if (selectedStockTransfer) {
+                        openWheelManagement(selected.ticker);
+                        setQuoteStatus("P→N株式移管は記録済みです。現在はN口座で株式保有中です。N口座ホイールを確認し、JSONバックアップを保存してください。");
+                      }
+                    }}
                     onReturnToSaxoHistory={returnToSaxoHistoryCandidates}
                     onRecreateSaxoHistoryCandidate={recreateSaxoHistoryCandidate}
                     onCloseDecisionAction={(anchorId) => {
@@ -1183,6 +1184,7 @@ export default function App() {
                 stockHoldingMode={assignedPutStockHoldingMode}
                 assignedPutLeg={assignedShortPutLeg}
                 denominatorFormula={assignedPutDenominatorFormula}
+                stockTransfer={selectedStockTransfer}
               />
             ) : null}
             <SummaryCards
@@ -1196,6 +1198,7 @@ export default function App() {
               historyMode={historyResultMode}
               stockHoldingMode={assignedPutStockHoldingMode}
               denominatorFormula={assignedPutDenominatorFormula}
+              stockTransfer={selectedStockTransfer}
             />
             {historyResultMode ? (
               <DenominatorTable
@@ -1262,20 +1265,24 @@ function HistoryStatusCard({
   stockHoldingMode,
   assignedPutLeg,
   denominatorFormula,
+  stockTransfer,
 }: {
   simulation: TradeSimulation;
   stockHoldingMode: boolean;
   assignedPutLeg?: TradeSimulation["optionLegs"][number];
   denominatorFormula?: string;
+  stockTransfer?: StockTransferEvent;
 }) {
   const acquisition = simulation.stockAcquisition;
   const ticker = simulation.ticker || simulation.underlyingName || "対象銘柄";
+  const isTransferredToN = Boolean(stockTransfer);
   const accountLabel =
     acquisition?.accountEnvironment === "PROD_N_USD_SETTLEMENT"
       ? "N口座 / USD"
       : acquisition?.accountEnvironment === "DEMO_JPY_BASE"
         ? "DEMO / JPY"
         : "P口座 / JPY";
+  const currentHoldingLabel = isTransferredToN ? "N口座 / USD" : accountLabel;
   const sourceText =
     stockHoldingMode && acquisition && assignedPutLeg
       ? `${acquisition.acquisitionDate} ${ticker} ${formatNumber(assignedPutLeg.strikeUSD)}P 権利行使`
@@ -1288,7 +1295,7 @@ function HistoryStatusCard({
           <p className="text-xs font-bold uppercase tracking-wide text-amber-700">現在の状態</p>
           <h2 className="mt-1 text-lg font-bold text-slate-950">
             {stockHoldingMode && acquisition
-              ? `オプション建玉はありません。${accountLabel}で${ticker} ${acquisition.shares}株を保有しています。`
+              ? `オプション建玉はありません。${currentHoldingLabel}で${ticker} ${stockTransfer?.shares ?? acquisition.shares}株を保有しています。`
               : `${getStatusLabel(simulation.status)}の履歴実績を確認しています。`}
           </h2>
         </div>
@@ -1305,7 +1312,9 @@ function HistoryStatusCard({
           <div className="font-bold text-slate-900">次にやること</div>
           <p className="mt-1">
             {stockHoldingMode
-              ? "JSONバックアップを保存。P→N移管した場合のみ移管記録へ進みます。"
+              ? isTransferredToN
+                ? "JSONバックアップを保存してください。カバードコールを始める場合はC売り候補を確認します。"
+                : "JSONバックアップを保存。P→N移管した場合のみ移管記録へ進みます。"
               : "実績入力を確認し、必要ならJSONバックアップを保存します。"}
           </p>
         </div>
@@ -1318,10 +1327,27 @@ function HistoryStatusCard({
       </div>
       {stockHoldingMode && acquisition ? (
         <div className="mt-3 rounded-md bg-white px-3 py-2 text-sm text-slate-700 ring-1 ring-amber-100">
-          現物株取得: {acquisition.shares}株 @ {formatUSD(acquisition.priceUSD)} / 取得日: {acquisition.acquisitionDate} / 口座: {accountLabel}
+          <div>取得履歴: {acquisition.acquisitionDate} {accountLabel}で{acquisition.shares}株 @ {formatUSD(acquisition.priceUSD)}を取得</div>
+          {stockTransfer ? (
+            <>
+              <div>移管履歴: {stockTransfer.transferDate} P口座からN口座へ{stockTransfer.shares}株を移管</div>
+              <div>現在保有: N口座 / USD / {stockTransfer.shares}株 / 平均取得単価 {formatUSD(stockTransfer.costBasisUSD)}</div>
+            </>
+          ) : null}
         </div>
       ) : null}
     </section>
+  );
+}
+
+function getStockTransferForSimulation(simulation: TradeSimulation, stockTransfers: StockTransferEvent[]): StockTransferEvent | undefined {
+  const shares = simulation.stockPosition?.shares ?? simulation.stockAcquisition?.shares ?? 0;
+  if (shares <= 0) return undefined;
+  return stockTransfers.find(
+    (transfer) =>
+      transfer.sourceSimulationId === simulation.id &&
+      transfer.toAccountCode === "N" &&
+      Math.abs(transfer.shares - shares) <= 0.0001,
   );
 }
 

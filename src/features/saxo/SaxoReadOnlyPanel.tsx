@@ -3458,7 +3458,8 @@ function HistoryCandidateRow({
   onUnignore: () => void;
 }) {
   const target = getSaxoHistoryCandidateTarget(item);
-  const isPriorityAssignment = target === "assignment" && hasAssignmentStockItem;
+  const isOfficialAssignment = target === "assignment" && reflectionState.status === "official";
+  const isPriorityAssignment = target === "assignment" && hasAssignmentStockItem && !isOfficialAssignment;
   const labelParts = [
     item.tradeDate ?? "日付未取得",
     item.symbol ?? "銘柄未取得",
@@ -3501,23 +3502,27 @@ function HistoryCandidateRow({
           <div className="rounded border border-teal-200 bg-teal-50 px-2 py-1 text-xs leading-5 text-teal-900">
             <div className="font-bold">{reflectionState.status === "official" ? "反映済み" : "反映候補作成済み"}</div>
             <div>
-              {reflectionState.status === "official"
-                ? "正式保存済みです。重複作成は不要です。"
+              {isOfficialAssignment
+                ? "6-A確認済み / 現物株取得反映済みです。次はP→N移管済みならN口座ホイールを確認してください。"
+                : reflectionState.status === "official"
+                  ? "正式保存済みです。重複作成は不要です。"
                 : target === "assignment"
                   ? "6-Aで現物株取得を確認してください。通常の買戻し決済としては扱いません。"
                   : `${getHistoryCandidateDestinationLabel(item)}で確認してください`}
             </div>
-            <button
-              type="button"
-              className={`mt-1 rounded border px-2 py-0.5 text-xs font-bold ${
-                target === "assignment"
-                  ? "border-red-300 bg-red-600 text-white"
-                  : "border-teal-300 bg-white text-teal-900"
-              }`}
-              onClick={onGoTarget}
-            >
-              {target === "assignment" ? "推奨: 6-Aで現物株取得を確認" : target === "close" ? "この履歴を決済実績で確認" : "この履歴を3-Aで確認"}
-            </button>
+            {!isOfficialAssignment ? (
+              <button
+                type="button"
+                className={`mt-1 rounded border px-2 py-0.5 text-xs font-bold ${
+                  target === "assignment"
+                    ? "border-red-300 bg-red-600 text-white"
+                    : "border-teal-300 bg-white text-teal-900"
+                }`}
+                onClick={onGoTarget}
+              >
+                {target === "assignment" ? "推奨: 6-Aで現物株取得を確認" : target === "close" ? "この履歴を決済実績で確認" : "この履歴を3-Aで確認"}
+              </button>
+            ) : null}
           </div>
         ) : reflectionState.status === "broken" ? (
           <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs leading-5 text-amber-950">

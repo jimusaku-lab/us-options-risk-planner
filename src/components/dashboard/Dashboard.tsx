@@ -1,4 +1,4 @@
-import type { RiskWarning, TradeSimulation, WorkflowTask } from "@/types/domain";
+import type { RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } from "@/types/domain";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { Fragment, useState } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
@@ -22,6 +22,7 @@ const endedStatuses = new Set(["closed", "assigned", "expired"]);
 
 export function Dashboard({
   simulations,
+  stockTransfers = [],
   selectedId,
   onSelect,
   onEdit,
@@ -32,6 +33,7 @@ export function Dashboard({
   onWorkflowTaskAction,
 }: {
   simulations: TradeSimulation[];
+  stockTransfers?: StockTransferEvent[];
   selectedId: string;
   onSelect: (id: string) => void;
   onEdit: (id: string) => void;
@@ -121,7 +123,8 @@ export function Dashboard({
               const primary =
                 historyPerformance?.primaryDenominator ??
                 getPrimaryDenominator(calculateDenominators(simulationWithAccount, premium));
-              const warnings = generateRiskWarnings(simulationWithAccount);
+              const stockTransfer = getStockTransferForSimulation(simulation, stockTransfers);
+              const warnings = generateRiskWarnings(simulationWithAccount, { stockTransferRecorded: Boolean(stockTransfer) });
               const workflowTasks = getWorkflowTasks(simulationWithAccount);
               const primaryTask = getPrimaryWorkflowTask(simulationWithAccount);
               const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
@@ -173,8 +176,16 @@ export function Dashboard({
                         <div>取得日: {stockAcquisitionSummary.date}</div>
                         <div>口座: {stockAcquisitionSummary.account}</div>
                         <div>入力状態: 完了</div>
+                        {stockTransfer ? (
+                          <>
+                            <div>移管履歴: {stockTransfer.transferDate} P口座からN口座へ{stockTransfer.shares}株を移管</div>
+                            <div>現在: N口座で{stockTransfer.shares}株保有</div>
+                          </>
+                        ) : null}
                         <div className="mt-1 border-t border-violet-200 pt-1 text-violet-900">
-                          今回の権利行使反映は完了です。次はJSONバックアップを保存してください。P→N移管を実行した場合のみ、移管記録へ進みます。
+                          {stockTransfer
+                            ? "P→N株式移管は記録済みです。現在はN口座で株式保有中です。JSONバックアップを保存し、カバードコールを始める場合はC売り候補を確認します。"
+                            : "今回の権利行使反映は完了です。次はJSONバックアップを保存してください。P→N移管を実行した場合のみ、移管記録へ進みます。"}
                         </div>
                       </div>
                     ) : null}
@@ -312,4 +323,15 @@ function getStockAcquisitionSummary(simulation: TradeSimulation): { shares: numb
     date: acquisition.acquisitionDate || simulation.expiryDate || "未入力",
     account: getAccountEnvironmentLabel(acquisition.accountEnvironment),
   };
+}
+
+function getStockTransferForSimulation(simulation: TradeSimulation, stockTransfers: StockTransferEvent[]): StockTransferEvent | undefined {
+  const shares = simulation.stockPosition?.shares ?? simulation.stockAcquisition?.shares ?? 0;
+  if (shares <= 0) return undefined;
+  return stockTransfers.find(
+    (transfer) =>
+      transfer.sourceSimulationId === simulation.id &&
+      transfer.toAccountCode === "N" &&
+      Math.abs(transfer.shares - shares) <= 0.0001,
+  );
 }

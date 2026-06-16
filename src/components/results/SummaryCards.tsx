@@ -1,5 +1,5 @@
 import type { CoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
-import type { DenominatorResult, RiskWarning, TaxResult, TradeSimulation } from "@/types/domain";
+import type { DenominatorResult, RiskWarning, StockTransferEvent, TaxResult, TradeSimulation } from "@/types/domain";
 import {
   calculateNetInitialPremiumJPY,
   calculateNetInitialPremiumUSD,
@@ -21,6 +21,7 @@ type SummaryCardsProps = {
   historyMode?: boolean;
   stockHoldingMode?: boolean;
   denominatorFormula?: string;
+  stockTransfer?: StockTransferEvent;
 };
 
 export function SummaryCards({
@@ -34,6 +35,7 @@ export function SummaryCards({
   historyMode = false,
   stockHoldingMode = false,
   denominatorFormula,
+  stockTransfer,
 }: SummaryCardsProps) {
   const premiumJPY = calculateNetInitialPremiumJPY(simulation);
   const premiumUSD = calculateNetInitialPremiumUSD(simulation);
@@ -45,13 +47,18 @@ export function SummaryCards({
   });
   const usedMarginUSD = calculateUsedMarginUSD(simulation);
   const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const isTransferredToN = Boolean(stockTransfer);
   const statusCardValue = stockHoldingMode
-    ? "P口座で株式取得済み"
+    ? isTransferredToN
+      ? "P→N移管済み / N口座で株式保有中"
+      : "P口座で株式取得済み"
     : primaryWarning
       ? "入力要確認"
       : "入力完了";
   const statusCardNote = stockHoldingMode
-    ? "P→N移管記録待ち。N口座へ移管した場合だけ移管記録へ進みます。"
+    ? isTransferredToN
+      ? `P→N株式移管は記録済みです。現在はN口座で${simulation.ticker} ${stockTransfer?.shares ?? simulation.stockAcquisition?.shares ?? 0}株を保有しています。JSONバックアップを保存してください。カバードコールを始める場合はC売り候補を確認します。`
+      : "P→N移管記録待ち。N口座へ移管した場合だけ移管記録へ進みます。"
     : primaryWarning
       ? primaryWarning.message
       : "必要な実績入力は完了しています。JSONバックアップを保存してください。";

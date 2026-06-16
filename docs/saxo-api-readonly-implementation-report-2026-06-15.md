@@ -109,6 +109,61 @@
 
 ---
 
+# 2026-06-16 P売り権利行使後からP→N移管済み状態までのUX表示修正
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 対象ブランチ: `main` / `gh-pages`
+
+## 実装内容
+
+- 6-A現物株取得が反映済みで、同じ建玉にP→N株式移管記録がある場合、6-Aの完了メッセージを「現在はN口座で保有」に切り替えるようにした。
+- 6-Aの `入力欄を閉じて俯瞰へ戻る` は、P→N移管済みの場合にSaxo履歴候補へ戻さず、建玉入力を閉じてN口座ホイール管理を開くようにした。
+- Saxo履歴候補で、正式保存済みのP売り権利行使行は赤い `重要: P売り権利行使候補` 表示と `推奨: 6-Aで現物株取得を確認` ボタンを出さず、緑系の `6-A確認済み / 現物株取得反映済み` 表示にした。
+- 履歴実績モードカードでは、同じ `sourceSimulationId` の `StockTransferEvent` がある場合、現在状態を `N口座 / USDで株式保有` として表示するようにした。
+- 取得履歴、移管履歴、現在保有を分けて表示するようにした。
+- 状態確認カードでは、移管済みの場合に `P→N移管済み / N口座で株式保有中` と表示し、未移管向けの `P→N移管記録待ち` を出さないようにした。
+- Dashboard履歴行の補足文も、移管済みの場合は `現在はN口座で株式保有中`、次アクションは `JSONバックアップ保存` と `C売り候補確認` に切り替えるようにした。
+- risk warningの `P口座で株式取得済み。N口座へ移管したら...` は、P→N移管済みの場合は出さないようにした。
+
+## 修正ファイル
+
+- `src/App.tsx`
+- `src/components/dashboard/Dashboard.tsx`
+- `src/components/results/SummaryCards.tsx`
+- `src/components/wizard/SimulationEditor.tsx`
+- `src/domain/riskRules.ts`
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- Pages配信bundle: `assets/index-B0_l7-a8.js`
+
+## commit / push
+
+- 実装commit hash: `TODO`
+- Pages deploy commit hash: `TODO`
+- main push: `TODO`
+- gh-pages push: `TODO`
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが `assets/index-B0_l7-a8.js` を参照することを確認予定。
+
+## 残課題
+
+- 実Saxo接続データでのクリック確認は、利用者端末のローカルAPI・接続状態に依存するため、コード経路、テスト、ビルド、Pages配信bundle更新を確認対象にする。
+
+---
+
 # 2026-06-16 P→N株式移管候補カードの記録済み反映漏れ修正
 
 ## 対象

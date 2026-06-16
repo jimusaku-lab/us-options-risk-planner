@@ -1,7 +1,7 @@
 import type { ChangeEvent } from "react";
 import { useEffect, useState } from "react";
 import { JapaneseYen, RotateCw } from "lucide-react";
-import type { DenominatorMode, ExitBrokerOrderType, ExitOrderPlan, ExitOrderPlanMode, ExitStopLossType, OptionCloseExecution, OptionEntryExecution, OptionLeg, PutIntent, SimulationStatus, StrategyType, TradeSimulation } from "@/types/domain";
+import type { DenominatorMode, ExitBrokerOrderType, ExitOrderPlan, ExitOrderPlanMode, ExitStopLossType, OptionCloseExecution, OptionEntryExecution, OptionLeg, PutIntent, SimulationStatus, StockTransferEvent, StrategyType, TradeSimulation } from "@/types/domain";
 import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, type WorkspaceMode } from "@/store/useOptionsStore";
 import { calculateDte, getShortOptionLegs } from "@/domain/calculations";
 import { calculateProfitTakeBuybackPriceUSD, getDefaultExitOrderPlanForLeg, getExitOrderPlanForLeg, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
@@ -31,12 +31,14 @@ type SimulationEditorProps = {
   onDiscardDraft?: (simulationId: string) => void;
   onCloseDecisionAction?: (anchorId: string) => void;
   onCloseEditor?: () => void;
+  onStockAcquisitionCompleteClose?: () => void;
   onReturnToSaxoHistory?: () => void;
   onRecreateSaxoHistoryCandidate?: (sourceTradeId?: string) => void;
+  stockTransfer?: StockTransferEvent;
   focusRequest?: { anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string } | null;
 };
 
-export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, focusRequest }: SimulationEditorProps) {
+export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onStockAcquisitionCompleteClose, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
   const [quoteStatus, setQuoteStatus] = useState<string>("");
   const [workflowNotice, setWorkflowNotice] = useState<{ message: string; actionLabel: string; anchorId: string } | null>(null);
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
@@ -1703,7 +1705,9 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
                 <div className="font-bold">現物株取得は反映済みです。</div>
                 <p className="mt-1">
-                  この画面は自動保存されるため、別の保存ボタンはありません。内容が正しければ、入力欄を閉じてダッシュボードの履歴で完了表示を確認してください。
+                  {stockTransfer
+                    ? `P→N株式移管は記録済みです。現在はN口座で${stockTransfer.shares}株を保有しています。内容が正しければ、入力欄を閉じてN口座ホイールを確認してください。`
+                    : "この画面は自動保存されるため、別の保存ボタンはありません。内容が正しければ、入力欄を閉じてダッシュボードの履歴で完了表示を確認してください。"}
                 </p>
               </div>
             ) : null}
@@ -1777,7 +1781,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               <button
                 type="button"
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50"
-                onClick={onCloseEditor}
+                onClick={stockAcquisitionComplete ? onStockAcquisitionCompleteClose ?? onCloseEditor : onCloseEditor}
               >
                 入力欄を閉じて俯瞰へ戻る
               </button>
