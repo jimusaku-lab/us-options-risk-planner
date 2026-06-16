@@ -18,6 +18,7 @@ const LOCAL_UI_RETURN_URL =
   process.env.SAXO_LOCAL_UI_RETURN_URL ??
   process.env.SAXO_LOCAL_UI_ORIGIN ??
   "http://127.0.0.1:5173/";
+const PUBLIC_GITHUB_PAGES_ORIGIN = "https://jimusaku-lab.github.io";
 const EXPECTED_REDIRECT_URI = `http://${HOST}:${PORT}/api/saxo/auth/callback`;
 const KEYCHAIN_SERVICE = "us-options-risk-planner-saxo-readonly";
 const KEYCHAIN_STORAGE_LABEL = "macOS Keychain";
@@ -1768,16 +1769,23 @@ function isForbiddenOrderPath(path, method = "GET") {
 
 function setCorsHeaders(request, response) {
   const origin = request.headers.origin;
-  if (
-    origin === LOCAL_UI_ALLOWED_ORIGIN ||
-    origin === `http://${HOST}:5173` ||
-    origin === "http://localhost:5173"
-  ) {
+  if (origin && isAllowedCorsOrigin(origin)) {
     response.setHeader("access-control-allow-origin", origin);
     response.setHeader("vary", "origin");
+    response.setHeader("access-control-allow-private-network", "true");
   }
   response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
   response.setHeader("access-control-allow-headers", "content-type");
+  response.setHeader("access-control-max-age", "600");
+}
+
+function isAllowedCorsOrigin(origin) {
+  return (
+    origin === LOCAL_UI_ALLOWED_ORIGIN ||
+    origin === `http://${HOST}:5173` ||
+    origin === "http://localhost:5173" ||
+    origin === PUBLIC_GITHUB_PAGES_ORIGIN
+  );
 }
 
 function sendJson(response, status, payload) {

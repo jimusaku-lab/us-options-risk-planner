@@ -10,6 +10,7 @@ import type {
 } from "@/features/saxo/saxoAccountSync";
 
 const SAXO_LOCAL_API_BASE = import.meta.env.VITE_SAXO_LOCAL_API_BASE ?? "http://127.0.0.1:18787";
+const PUBLIC_GITHUB_PAGES_ORIGIN = "https://jimusaku-lab.github.io";
 
 export type SaxoAccountsResponse = {
   environment: "sim" | "live";
@@ -121,10 +122,8 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const timeoutId = window.setTimeout(() => controller.abort(), 5000);
   try {
     response = await fetch(`${SAXO_LOCAL_API_BASE}${url}`, { ...init, signal: controller.signal });
-  } catch {
-    throw new Error(
-      "SaxoローカルAPIが起動していません。別ターミナルで `npm run dev:saxo-api` または `npm run dev:all` を起動してください。",
-    );
+  } catch (error) {
+    throw new Error(createLocalApiFetchFailureMessage(error));
   } finally {
     window.clearTimeout(timeoutId);
   }
@@ -137,4 +136,14 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return payload as T;
+}
+
+function createLocalApiFetchFailureMessage(error: unknown): string {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "SaxoローカルAPIの応答がタイムアウトしました。ローカルAPIが起動中か、127.0.0.1:18787 に接続できるか確認してください。";
+  }
+  if (typeof window !== "undefined" && window.location.origin === PUBLIC_GITHUB_PAGES_ORIGIN) {
+    return "SaxoローカルAPIに到達できません。API未起動、公開版Origin許可不足、またはChromeのCORS/Private Network Accessブロックの可能性があります。公開版用の起動コマンドでローカルAPIを起動してください。";
+  }
+  return "SaxoローカルAPIが起動していません。別ターミナルで `npm run dev:saxo-api` または `npm run dev:all` を起動してください。";
 }

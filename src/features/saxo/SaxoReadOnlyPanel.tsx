@@ -69,13 +69,12 @@ const SAXO_ONBOARDING_STEPS = [
   { id: "readonly_connected", label: "Read-only接続できた" },
 ] as const;
 type SaxoOnboardingStepId = (typeof SAXO_ONBOARDING_STEPS)[number]["id"];
-const SAXO_LOCAL_API_START_COMMAND = [
-  "cd /path/to/us-options-risk-planner",
-  "npm run dev:saxo-api",
-].join("\n");
-const SAXO_LOCAL_API_ONLY_COMMAND = "npm run dev:saxo-api";
+const SAXO_PUBLIC_REPO_PATH = "/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo";
+const SAXO_PUBLIC_UI_ALLOWED_ORIGIN = "https://jimusaku-lab.github.io";
+const SAXO_PUBLIC_UI_RETURN_URL = "https://jimusaku-lab.github.io/us-options-risk-planner/";
 
 type SaxoPanelConnectionState = NonNullable<SaxoApiStatus["connectionState"]> | "disconnected" | "local_api_down";
+type LocalApiReachability = "unknown" | "checking" | "down" | "cors_or_pna_blocked" | "up";
 type LinkedSimulationResolution =
   | { status: "linked"; simulation: TradeSimulation; simulationId: string }
   | { status: "broken"; reason: string; simulationId?: string }
@@ -146,6 +145,7 @@ export function SaxoReadOnlyPanel({
   const [message, setMessage] = useState("");
   const [apiErrorMessage, setApiErrorMessage] = useState("");
   const [localApiDown, setLocalApiDown] = useState(false);
+  const [localApiReachability, setLocalApiReachability] = useState<LocalApiReachability>("unknown");
   const [setupClientId, setSetupClientId] = useState("");
   const [setupEnvironment, setSetupEnvironment] = useState<"sim" | "live">("sim");
   const [isLoading, setIsLoading] = useState(false);
@@ -425,6 +425,7 @@ export function SaxoReadOnlyPanel({
       const nextStatus = await fetchSaxoStatus();
       setStatus(nextStatus);
       setLocalApiDown(false);
+      setLocalApiReachability("up");
       setApiErrorMessage("");
       try {
         const nextConfigStatus = await fetchSaxoConfigStatus();
@@ -439,6 +440,8 @@ export function SaxoReadOnlyPanel({
       setStatus(null);
       setConfigStatus(null);
       setLocalApiDown(true);
+      const reachability = classifyLocalApiFetchFailure(error);
+      setLocalApiReachability(reachability);
       const nextMessage = error instanceof Error ? error.message : "SaxoローカルAPIへ接続できません。";
       setApiErrorMessage(nextMessage);
       setMessage(nextMessage);
@@ -447,11 +450,13 @@ export function SaxoReadOnlyPanel({
 
   async function refreshLocalApiStartupStatus() {
     setIsLoading(true);
+    setLocalApiReachability("checking");
     setMessage("SaxoローカルAPIの起動状態を確認しています...");
     try {
       const nextStatus = await fetchSaxoStatus();
       setStatus(nextStatus);
       setLocalApiDown(false);
+      setLocalApiReachability("up");
       setApiErrorMessage("");
       try {
         const nextConfigStatus = await fetchSaxoConfigStatus();
@@ -470,9 +475,11 @@ export function SaxoReadOnlyPanel({
       setStatus(null);
       setConfigStatus(null);
       setLocalApiDown(true);
+      const reachability = classifyLocalApiFetchFailure(error);
+      setLocalApiReachability(reachability);
       const nextMessage = error instanceof Error ? error.message : "SaxoローカルAPIへ接続できません。";
       setApiErrorMessage(nextMessage);
-      setMessage("まだ起動していません。コピーしたコマンドをターミナルで実行してください。");
+      setMessage(createLocalApiStartupResultMessage(reachability));
     } finally {
       setIsLoading(false);
     }
@@ -488,6 +495,7 @@ export function SaxoReadOnlyPanel({
       const nextStatus = await fetchSaxoStatus();
       setStatus(nextStatus);
       setLocalApiDown(false);
+      setLocalApiReachability("up");
       if (!nextStatus.oauthConfigured) {
         setMessage("LIVE AppKey（Client ID）が未設定です。設定・診断内の接続セットアップで、Saxo Developer PortalのLIVE AppKeyを保存してください。");
         return;
@@ -500,6 +508,8 @@ export function SaxoReadOnlyPanel({
     } catch (error) {
       setStatus(null);
       setLocalApiDown(true);
+      const reachability = classifyLocalApiFetchFailure(error);
+      setLocalApiReachability(reachability);
       setMessage(
         error instanceof Error
           ? error.message
@@ -537,7 +547,7 @@ export function SaxoReadOnlyPanel({
 
   async function copyLocalApiStartCommand() {
     try {
-      await navigator.clipboard.writeText(SAXO_LOCAL_API_START_COMMAND);
+      await navigator.clipboard.writeText(getSaxoLocalApiStartCommand());
       setMessage("起動コマンドをコピーしました。Macのターミナルに貼り付けてEnterを押してください。");
     } catch {
       setMessage("起動コマンドをコピーできませんでした。画面上のコマンドを手動でコピーしてください。");
@@ -884,7 +894,7 @@ export function SaxoReadOnlyPanel({
   const connectionState: SaxoPanelConnectionState = localApiDown ? "local_api_down" : (status?.connectionState ?? (status?.connected ? "connected" : "disconnected"));
   const statusLabel =
     connectionState === "local_api_down"
-        ? "API未起動: 起動コマンドをコピーしてターミナルで実行"
+        ? formatLocalApiHeaderStatus(localApiReachability)
       : connectionState === "connected"
       ? `Saxo接続中 ${status?.environment.toUpperCase() ?? "SIM"} / 発注機能なし`
       : connectionState === "reconnect_required"
@@ -976,9 +986,11 @@ export function SaxoReadOnlyPanel({
             {localApiDown ? (
               <LocalApiDownCard
                 isLoading={isLoading}
+                reachability={localApiReachability}
+                diagnosticsOpen={showConnectionDetails}
                 onRefreshStatus={refreshLocalApiStartupStatus}
                 onCopyCommand={copyLocalApiStartCommand}
-                onOpenDiagnostics={() => setShowConnectionDetails(true)}
+                onToggleDiagnostics={() => setShowConnectionDetails((value) => !value)}
               />
             ) : connectionState !== "connected" ? (
               <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
@@ -1012,6 +1024,7 @@ export function SaxoReadOnlyPanel({
                 onEnablePersistence={enablePersistence}
                 onDisablePersistence={disablePersistence}
                 onDisconnect={disconnect}
+                localApiOnlyCommand={getSaxoLocalApiOnlyCommand()}
               />
             ) : null}
             {!showConnectionDetails && showSetupSection ? (
@@ -1582,16 +1595,83 @@ function SaxoDailySummary({
   );
 }
 
+function isPublicGithubPagesRuntime(): boolean {
+  return typeof window !== "undefined" && window.location.origin === SAXO_PUBLIC_UI_ALLOWED_ORIGIN;
+}
+
+function getSaxoLocalApiStartCommand(): string {
+  if (isPublicGithubPagesRuntime()) {
+    return [
+      `cd "${SAXO_PUBLIC_REPO_PATH}"`,
+      `SAXO_LOCAL_UI_ALLOWED_ORIGIN=${SAXO_PUBLIC_UI_ALLOWED_ORIGIN} \\`,
+      `SAXO_LOCAL_UI_RETURN_URL=${SAXO_PUBLIC_UI_RETURN_URL} \\`,
+      "npm run dev:saxo-api",
+    ].join("\n");
+  }
+  return [
+    `cd "${SAXO_PUBLIC_REPO_PATH}"`,
+    "npm run dev:all",
+  ].join("\n");
+}
+
+function getSaxoLocalApiOnlyCommand(): string {
+  if (isPublicGithubPagesRuntime()) {
+    return [
+      `cd "${SAXO_PUBLIC_REPO_PATH}"`,
+      `SAXO_LOCAL_UI_ALLOWED_ORIGIN=${SAXO_PUBLIC_UI_ALLOWED_ORIGIN} \\`,
+      `SAXO_LOCAL_UI_RETURN_URL=${SAXO_PUBLIC_UI_RETURN_URL} \\`,
+      "npm run dev:saxo-api",
+    ].join("\n");
+  }
+  return [
+    `cd "${SAXO_PUBLIC_REPO_PATH}"`,
+    "npm run dev:saxo-api",
+  ].join("\n");
+}
+
+function classifyLocalApiFetchFailure(error: unknown): LocalApiReachability {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("Origin許可不足") || message.includes("CORS") || message.includes("Private Network Access")) {
+    return isPublicGithubPagesRuntime() ? "cors_or_pna_blocked" : "down";
+  }
+  return "down";
+}
+
+function formatLocalApiHeaderStatus(reachability: LocalApiReachability): string {
+  if (reachability === "checking") return "API確認中";
+  if (reachability === "cors_or_pna_blocked") return "API接続不可: 公開版Origin/CORS設定を確認";
+  return "API未起動: 起動コマンドをコピーしてターミナルで実行";
+}
+
+function createLocalApiStartupResultMessage(reachability: LocalApiReachability): string {
+  if (reachability === "cors_or_pna_blocked") {
+    return "公開版Origin許可不足、またはChromeのCORS/Private Network Accessブロック疑いです。公開版用の起動コマンドでローカルAPIを起動してください。";
+  }
+  return "まだ起動していません。コピーしたコマンドをターミナルで実行してください。";
+}
+
+function formatLocalApiCauseMessage(reachability: LocalApiReachability): string {
+  if (reachability === "checking") return "確認中です。少し待ってください。";
+  if (reachability === "cors_or_pna_blocked") {
+    return "ローカルAPIは起動していても、公開版Origin許可またはPrivate Network Accessでブロックされている可能性があります。推奨コマンドで起動し直してください。";
+  }
+  return "SaxoローカルAPIが起動していない、またはこの画面から到達できません。まず推奨コマンドをコピーしてターミナルで実行してください。";
+}
+
 function LocalApiDownCard({
   isLoading,
+  reachability,
+  diagnosticsOpen,
   onRefreshStatus,
   onCopyCommand,
-  onOpenDiagnostics,
+  onToggleDiagnostics,
 }: {
   isLoading: boolean;
+  reachability: LocalApiReachability;
+  diagnosticsOpen: boolean;
   onRefreshStatus: () => void;
   onCopyCommand: () => void;
-  onOpenDiagnostics: () => void;
+  onToggleDiagnostics: () => void;
 }) {
   return (
     <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
@@ -1616,10 +1696,13 @@ function LocalApiDownCard({
             <RefreshCw size={15} />
             起動できたか確認
           </button>
-          <button className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-bold text-amber-900" onClick={onOpenDiagnostics}>
-            詳しい設定を見る
+          <button className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-bold text-amber-900" onClick={onToggleDiagnostics}>
+            {diagnosticsOpen ? "詳しい設定を閉じる" : "詳しい設定を見る"}
           </button>
         </div>
+      </div>
+      <div className="mt-3 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-950">
+        {formatLocalApiCauseMessage(reachability)}
       </div>
       <ol className="mt-3 grid gap-2 text-sm text-amber-950 md:grid-cols-3">
         <li className="rounded-md border border-amber-200 bg-white p-3">
@@ -1638,7 +1721,7 @@ function LocalApiDownCard({
       <div className="mt-3 grid gap-3 text-xs">
         <div>
           <div className="font-bold text-amber-950">推奨コマンド</div>
-          <pre className="mt-1 overflow-x-auto rounded bg-white p-2 text-slate-800">{SAXO_LOCAL_API_START_COMMAND}</pre>
+          <pre className="mt-1 overflow-x-auto rounded bg-white p-2 text-slate-800">{getSaxoLocalApiStartCommand()}</pre>
         </div>
       </div>
     </div>
@@ -1663,6 +1746,7 @@ function SaxoDiagnostics({
   onEnablePersistence,
   onDisablePersistence,
   onDisconnect,
+  localApiOnlyCommand,
 }: {
   status: SaxoApiStatus | null;
   configStatus: SaxoConfigStatus | null;
@@ -1681,6 +1765,7 @@ function SaxoDiagnostics({
   onEnablePersistence: () => void;
   onDisablePersistence: () => void;
   onDisconnect: () => void;
+  localApiOnlyCommand: string;
 }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1707,7 +1792,7 @@ function SaxoDiagnostics({
         <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700">
           <div className="font-bold text-slate-900">詳細起動コマンド</div>
           <p className="mt-1">フロントエンドが既に起動済みで、SaxoローカルAPIだけを起動する場合:</p>
-          <pre className="mt-1 overflow-x-auto rounded bg-slate-50 p-2 text-slate-800">{SAXO_LOCAL_API_ONLY_COMMAND}</pre>
+          <pre className="mt-1 overflow-x-auto rounded bg-slate-50 p-2 text-slate-800">{localApiOnlyCommand}</pre>
         </div>
       ) : null}
       {showSetupSection ? (
