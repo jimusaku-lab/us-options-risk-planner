@@ -119,3 +119,68 @@
 ## 残課題
 
 - Chrome画面上でボタンを押す最終目視は、ChromeのAppleScript JavaScript実行が無効だったため自動化できなかった。公開URLは新bundleへ切り替わり、CORS/preflightはMac上のcurlで通過確認済み。
+
+---
+
+# 2026-06-16 一般公開版 Saxo API Read-only オンボーディングUX再設計
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 対象ブランチ: `main` / `gh-pages`
+
+## 実装内容
+
+- 公開版Saxo APIパネルから作者PC固有の `/Users/motomichi/...` パスを削除した。
+- OS選択UIを追加し、`Mac` / `Windows` / `まだ分からない` を利用者が切り替えられるようにした。
+- ローカルAPI補助サーバの導入状態チェックを追加した。
+  - 公開版リポジトリをダウンロード/clone済み
+  - Node.js/npm導入済み
+  - `.env.local` 作成済み
+  - ローカルAPI起動済み
+- 未導入状態では、いきなり起動コマンドを出さず、Node.js LTS、公開版リポジトリ、`.env.local`、OS別起動の順に案内する構成にした。
+- Mac向けの主表示は1行コマンドにし、複数行バックスラッシュ形式は詳細表示へ移した。
+- Windows向けにはPowerShell形式だけを表示し、Mac形式の `SAXO_LOCAL_UI_ALLOWED_ORIGIN=... npm run ...` を出さないようにした。
+- `>` 継続入力で止まった場合の `Control + C` 案内と、成功ログ `Saxo read-only local API listening on http://127.0.0.1:18787` の確認案内を追加した。
+- `起動できたか確認` の結果を、API未起動、CORS/PNA疑い、LIVE AppKey未設定、Saxo未接続、接続済みなどの次アクションへ変換して表示するようにした。
+- API未起動時は取得・反映系カードを標準表示から隠し、主操作を導入/起動手順へ絞った。
+- `.env.local` はGitHub Pagesへ保存しない、GitHubへpushしない、`.gitignore`対象であることをUIとガイドに明記した。
+- Client Secret、Saxo ID、password、2FA、OAuth tokenの入力欄や保存処理は追加していない。
+- Saxo APIはRead-onlyのままで、発注・注文変更・注文取消endpointは追加していない。
+
+## 修正ファイル
+
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `docs/saxo-api-readonly-detailed-design-2026-06-08.md`
+- `docs/友人向けSaxo API接続準備ガイド.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-8WmtP93z.js`
+  - bundle内に `PowerShell`、`$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN`、`導入手順を見る`、`起動コマンドをコピー`、`Control + C` が含まれることを確認した。
+  - bundle内に `/Users/motomichi`、`SAXO_PUBLIC_REPO_PATH`、作者PC固定パスが含まれないことを確認した。
+
+## commit / push
+
+- 実装commit hash: `754c993`
+- Pages deploy commit hash: `23c04d3`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-8WmtP93z.js` を参照することを確認した。
+- 公開bundle内に `/Users/motomichi` が含まれないことを確認した。
+- 公開bundle内に `PowerShell`、`$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN`、`導入手順を見る`、`起動コマンドをコピー`、`Control + C` が含まれることを確認した。
+- 公開URLの通常表示では作者PC固有パスを出さず、Windows選択時にはPowerShell手順を表示できる構成であることを確認した。
+
+## 残課題
+
+- この時点ではなし。
