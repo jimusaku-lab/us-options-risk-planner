@@ -104,14 +104,18 @@
 ## commit / push
 
 - 実装commit hash: `41c21b9`
+- 報告書commit hash: `2c9a6f9`
 - Pages deploy commit hash: `0efa6cd`
-- main push: 実施予定
-- gh-pages push: 実施予定
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- Pages反映後に `https://jimusaku-lab.github.io/us-options-risk-planner/` で確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BXf4p-6U.js` を参照することを確認した。
+- 公開bundle内に `SAXO_LOCAL_UI_ALLOWED_ORIGIN=https://jimusaku-lab.github.io`、`SAXO_LOCAL_UI_RETURN_URL=https://jimusaku-lab.github.io/us-options-risk-planner/`、`詳しい設定を閉じる` が含まれることを確認した。
+- in-app browserで公開URLを開き、Saxo APIパネルのヘッダー、起動手順、推奨コマンド、詳細トグル文言が表示されることを確認した。
+- Chromeでも公開URLを新規タブで開いた。Chrome側は `Apple Events からの JavaScript を許可` が無効のためDOM自動検査はできなかったが、公開HTML/bundleとMac上のCORS curl検証で反映を確認した。
 
 ## 残課題
 
-- main / gh-pages push後に公開URLの実表示を最終確認する。
+- Chrome画面上でボタンを押す最終目視は、ChromeのAppleScript JavaScript実行が無効だったため自動化できなかった。公開URLは新bundleへ切り替わり、CORS/preflightはMac上のcurlで通過確認済み。
