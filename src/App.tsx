@@ -392,6 +392,87 @@ export default function App() {
           : "Saxo現在建玉から下書きを作成しました。Saxo取引履歴から補完できませんでした。履歴を再取得するか、不足項目だけ手入力してください。",
     );
   };
+  const getSaxoStockTransferShares = (position: SaxoApiPositionSnapshot) => {
+    const value = position.shareQuantity ?? position.quantity;
+    return value !== undefined && Number.isFinite(value) ? Math.abs(value) : 0;
+  };
+  const getSaxoStockTransferAveragePrice = (position: SaxoApiPositionSnapshot) => {
+    const value = position.averageOpenPrice ?? position.currentStockPrice ?? position.currentPrice;
+    return value !== undefined && Number.isFinite(value) ? value : undefined;
+  };
+  const normalizeStockTransferTicker = (value?: string) => {
+    if (!value) return "";
+    const normalized = value.trim().toUpperCase();
+    const saxoOptionMatch = normalized.match(/^([A-Z.]+)\//);
+    if (saxoOptionMatch?.[1]) return saxoOptionMatch[1];
+    return normalizeTicker(normalized);
+  };
+  const findPnStockTransferSourceSimulation = (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => {
+    const latestState = useOptionsStore.getState();
+    const latestSimulations = latestState.simulations;
+    if (sourceSimulationId) {
+      const byId = latestSimulations.find((simulation) => simulation.id === sourceSimulationId);
+      if (byId) return byId;
+    }
+    const shares = getSaxoStockTransferShares(position);
+    const averagePrice = getSaxoStockTransferAveragePrice(position);
+    const positionTicker = normalizeStockTransferTicker(position.symbol ?? position.underlyingName ?? position.instrumentCode);
+    const matches = latestSimulations.filter((simulation) => {
+      const acquisition = simulation.stockAcquisition;
+      if (simulation.status !== "assigned") return false;
+      if (simulation.accountEnvironment !== "PROD_P_JPY_SETTLEMENT") return false;
+      if (!acquisition?.enabled) return false;
+      if (acquisition.accountEnvironment !== "PROD_P_JPY_SETTLEMENT") return false;
+      if (!Number.isFinite(acquisition.shares) || Math.abs(acquisition.shares - shares) > 0.0001) return false;
+      if (averagePrice !== undefined && Math.abs(acquisition.priceUSD - averagePrice) > 0.05) return false;
+      const simulationTicker = normalizeStockTransferTicker(simulation.ticker);
+      if (positionTicker && simulationTicker && positionTicker !== simulationTicker) return false;
+      return true;
+    });
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const createStockTransferFromSaxoPosition = (position: SaxoApiPositionSnapshot, sourceSimulationId?: string): boolean => {
+    if (position.kind !== "stock" || position.accountAssignment !== "N") {
+      setQuoteStatus("このSaxo建玉はN口座現物株ではないため、P→N株式移管として記録できません。");
+      return false;
+    }
+    const sourceSimulation = findPnStockTransferSourceSimulation(position, sourceSimulationId);
+    if (!sourceSimulation?.stockAcquisition?.enabled) {
+      setQuoteStatus("対応するP口座の権利行使済み建玉が見つかりません。6-A現物株取得を確認してから移管記録を作成してください。");
+      return false;
+    }
+    const shares = getSaxoStockTransferShares(position);
+    const averagePrice = getSaxoStockTransferAveragePrice(position) ?? sourceSimulation.stockAcquisition.priceUSD;
+    const existingTransfer = useOptionsStore
+      .getState()
+      .stockTransfers.some((transfer) =>
+        transfer.sourceSimulationId === sourceSimulation.id &&
+        transfer.toAccountCode === "N" &&
+        Math.abs(transfer.shares - shares) <= 0.0001,
+      );
+    selectSimulation(sourceSimulation.id);
+    setActiveView("positions");
+    if (existingTransfer) {
+      setIsEditorOpen(false);
+      setQuoteStatus("このP→N株式移管はすでに記録済みです。N口座ホイールで株式保有を確認してください。");
+      return false;
+    }
+    const sourceForTransfer: TradeSimulation = {
+      ...sourceSimulation,
+      stockPosition: {
+        shares,
+        averageCostUSD: averagePrice,
+        denominatorPriceMode: sourceSimulation.stockPosition?.denominatorPriceMode ?? "average_cost",
+        customDenominatorPriceUSD: sourceSimulation.stockPosition?.customDenominatorPriceUSD,
+        canSellAtStrike: sourceSimulation.stockPosition?.canSellAtStrike,
+      },
+    };
+    upsertSimulation(sourceForTransfer);
+    createStockTransferFromSimulation(sourceForTransfer);
+    setIsEditorOpen(false);
+    setQuoteStatus("P口座で権利行使取得した株式をN口座へ移管記録しました。売却損益・為替損益・オプション損益には混ぜていません。");
+    return true;
+  };
   const selectAndOpenEditor = (id: string) => {
     selectSimulation(id);
     setIsEditorOpen(true);
@@ -827,6 +908,7 @@ export default function App() {
                 onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
                 onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
                 onCreatePositionDraft={createSimulationFromSaxoPosition}
+                onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
                 onOpenLinkedSimulation={openSimulationEditorAt}
                 onOpenHistoryTarget={openSelectedSimulationHistoryTarget}
               />
@@ -991,6 +1073,7 @@ export default function App() {
               onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
               onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
               onCreatePositionDraft={createSimulationFromSaxoPosition}
+              onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
               onOpenLinkedSimulation={openSimulationEditorAt}
               onOpenHistoryTarget={openSelectedSimulationHistoryTarget}
             />

@@ -107,6 +107,7 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft,
   onCreateAssignmentDraft,
   onCreatePositionDraft,
+  onCreateStockTransferFromPosition,
   onOpenLinkedSimulation,
   onOpenHistoryTarget,
 }: {
@@ -119,6 +120,7 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string } | void;
   onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string } | void;
   onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
+  onCreateStockTransferFromPosition?: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
   onOpenLinkedSimulation?: (simulationId: string, anchorId?: string) => void;
   onOpenHistoryTarget?: (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record", sourceTradeId?: string) => void;
 }) {
@@ -320,11 +322,12 @@ export function SaxoReadOnlyPanel({
       mappedSnapshots,
       accountInputs,
       positionRows,
+      simulations,
       orders: mappedOrders,
       historyEndpoints,
       historyReflectionStates,
     }),
-    [accountInputs, historyEndpoints, historyReflectionStates, mappedOrders, mappedSnapshots, positionRows],
+    [accountInputs, historyEndpoints, historyReflectionStates, mappedOrders, mappedSnapshots, positionRows, simulations],
   );
 
   function createHistoryDraft(item: SaxoHistoryDiscoveryItem, openAfterCreate = false): boolean {
@@ -1509,6 +1512,23 @@ export function SaxoReadOnlyPanel({
                   setDraftedPositionIds((current) => current.filter((id) => id !== position.id));
                   setMessage("Saxo建玉候補の下書き表示を破棄しました。正式建玉や口座残高は変更していません。");
                 }}
+                onCreateStockTransfer={(position, sourceSimulationId) => {
+                  if (!onCreateStockTransferFromPosition) {
+                    setMessage("P→N株式移管の記録処理が未接続です。手入力で移管記録を確認してください。");
+                    return false;
+                  }
+                  const result = onCreateStockTransferFromPosition(position, sourceSimulationId);
+                  if (result === false) return false;
+                  setPositionActionNotices((current) => ({
+                    ...current,
+                    [position.id]: "P→N株式移管を記録しました。N口座ホイールで株式保有として確認してください。",
+                  }));
+                  return true;
+                }}
+                onOpenSimulationAt={(simulationId, anchorId) => {
+                  onOpenLinkedSimulation?.(simulationId, anchorId);
+                  setMessage("対応するP口座の権利行使済み建玉を開きました。");
+                }}
               />
               <div ref={ordersRef} />
               <OrdersPreview
@@ -2674,6 +2694,8 @@ function PositionsPreview({
   onCreateDraft,
   onCreateDraftFromBroken,
   onDiscardDraft,
+  onCreateStockTransfer,
+  onOpenSimulationAt,
 }: {
   rows: SaxoPositionReconciliationRow[];
   positions: SaxoApiPositionSnapshot[];
@@ -2698,11 +2720,15 @@ function PositionsPreview({
   onCreateDraft: (position: SaxoApiPositionSnapshot) => void;
   onCreateDraftFromBroken: (position: SaxoApiPositionSnapshot) => void;
   onDiscardDraft: (position: SaxoApiPositionSnapshot) => void;
+  onCreateStockTransfer: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
+  onOpenSimulationAt: (simulationId: string, anchorId?: string) => void;
 }) {
   const assignedP = positions.filter((position) => position.accountAssignment === "P").length;
   const assignedN = positions.filter((position) => position.accountAssignment === "N").length;
   const unassigned = positions.filter((position) => position.accountAssignment === "unassigned").length;
   const ignored = positions.filter((position) => position.accountAssignment === "ignored").length;
+  const stockTransferRows = rows.filter((row) => isNAccountStockPosition(row.position));
+  const regularRows = rows.filter((row) => !isNAccountStockPosition(row.position));
   const draft = draftPosition ? createSaxoPositionDraftSummary(draftPosition, simulations) : null;
   return (
     <div className="rounded-md border border-slate-200 p-3">
@@ -2719,17 +2745,33 @@ function PositionsPreview({
         <StatChip label="P口座" value={`${assignedP}件`} />
         <StatChip label="N口座" value={`${assignedN}件`} />
         <StatChip label="未割当" value={`${unassigned}件`} />
-        <StatChip label="使わない" value={`${ignored}件`} />
+        <StatChip label="P→N移管候補" value={`${stockTransferRows.length}件`} />
       </div>
+      {ignored > 0 ? <p className="mt-2 text-xs text-slate-500">使わない口座: {ignored}件</p> : null}
       <p className="mt-2 text-xs text-slate-500">最終取得: {fetchedAt ? new Date(fetchedAt).toLocaleString("ja-JP") : "未取得"}</p>
       {unassigned > 0 ? (
         <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
           未割当口座の建玉は照合対象外です。P/N/使わないをユーザー確認で割り当ててから再確認してください。
         </p>
       ) : null}
+      {stockTransferRows.length > 0 ? (
+        <NStockTransferCandidates
+          rows={stockTransferRows}
+          simulations={simulations}
+          expandedPositionId={expandedPositionId}
+          highlightedPositionId={highlightedPositionId}
+          actionNoticeByPositionId={positionActionNotices}
+          onToggleDetails={onToggleDetails}
+          onIgnore={onIgnore}
+          onCreateStockTransfer={onCreateStockTransfer}
+          onOpenSimulationAt={onOpenSimulationAt}
+        />
+      ) : null}
       <div className="mt-3 overflow-x-auto">
-        {rows.length === 0 ? (
-          <p className="text-sm text-slate-500">Saxo接続後に現在建玉を取得してください。</p>
+        {regularRows.length === 0 ? (
+          <p className="text-sm text-slate-500">
+            {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : "通常のオプション建玉候補はありません。N口座の現物株候補は上の専用カードで確認してください。"}
+          </p>
         ) : (
           <table className="min-w-full text-sm">
             <thead>
@@ -2744,7 +2786,7 @@ function PositionsPreview({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {regularRows.map((row) => (
                 <PositionRow
                   key={row.id}
                   row={row}
@@ -2804,6 +2846,148 @@ function PositionsPreview({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function NStockTransferCandidates({
+  rows,
+  simulations,
+  expandedPositionId,
+  highlightedPositionId,
+  actionNoticeByPositionId,
+  onToggleDetails,
+  onIgnore,
+  onCreateStockTransfer,
+  onOpenSimulationAt,
+}: {
+  rows: SaxoPositionReconciliationRow[];
+  simulations: TradeSimulation[];
+  expandedPositionId: string;
+  highlightedPositionId: string;
+  actionNoticeByPositionId: Record<string, string>;
+  onToggleDetails: (id: string) => void;
+  onIgnore: (position: SaxoApiPositionSnapshot) => void;
+  onCreateStockTransfer: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
+  onOpenSimulationAt: (simulationId: string, anchorId?: string) => void;
+}) {
+  return (
+    <div className="mt-3 rounded-md border border-teal-300 bg-teal-50 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-bold text-teal-950">N口座の現物株候補</h4>
+          <p className="mt-1 text-xs leading-5 text-teal-900">
+            SaxoではN口座に現物株が確認されました。P口座で権利行使取得した株式のN口座移管候補として確認します。
+            これは新規オプション建玉ではありません。3-Aには進みません。
+          </p>
+        </div>
+        <span className="rounded bg-white px-2 py-1 text-xs font-bold text-teal-800">P→N移管候補 {rows.length}件</span>
+      </div>
+      <div className="mt-3 grid gap-3">
+        {rows.map((row) => {
+          const position = row.position;
+          if (!position) return null;
+          const matches = findPnTransferSourceSimulations(position, simulations);
+          const primaryMatch = matches.length === 1 ? matches[0] : undefined;
+          const expanded = expandedPositionId === position.id;
+          const highlighted = highlightedPositionId === position.id;
+          const notice = actionNoticeByPositionId[position.id];
+          return (
+            <div key={row.id} className={`rounded-md border bg-white p-3 ${highlighted ? "border-teal-500 ring-2 ring-teal-200" : "border-teal-200"}`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-bold text-slate-950">
+                    {formatNStockTransferCandidateLabel(position, primaryMatch)}
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    SaxoではN口座に{formatMaybeValue(getSaxoStockShares(position))}株があります。
+                    {hasAutoAssignmentCorrelation(position) ? " AutoAssignmentがあるため、P売り権利行使由来の移管候補として扱います。" : " 既存のP口座取得株と照合して移管候補として確認します。"}
+                  </p>
+                </div>
+                <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">P→N移管確認候補</span>
+              </div>
+              <div className="mt-2 grid gap-2 text-xs sm:grid-cols-4">
+                <StatChip label="口座" value="N口座 / USD" />
+                <StatChip label="株数" value={`${formatMaybeValue(getSaxoStockShares(position))}株`} />
+                <StatChip label="平均取得単価" value={formatMaybeValue(getSaxoStockAveragePrice(position), "USD")} />
+                <StatChip label="取得元候補" value={primaryMatch ? primaryMatch.name : matches.length > 1 ? `${matches.length}件あり` : "未照合"} />
+              </div>
+              {primaryMatch ? (
+                <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-900">
+                  <div className="font-bold">対応するP口座の権利行使済み建玉候補があります</div>
+                  <div>
+                    {primaryMatch.ticker} / {primaryMatch.stockAcquisition?.shares ?? primaryMatch.stockPosition?.shares ?? 0}株 @ {formatMaybeValue(primaryMatch.stockAcquisition?.priceUSD ?? primaryMatch.stockPosition?.averageCostUSD, "USD")}
+                  </div>
+                </div>
+              ) : matches.length > 1 ? (
+                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                  一致候補が複数あります。対応するP口座の権利行使済み建玉を確認してから、今回は手入力で移管記録を確認してください。
+                </div>
+              ) : (
+                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                  N口座に現物株がありますが、既存のP口座取得株と一致しません。株数・取得単価・権利行使済み建玉を確認してください。
+                </div>
+              )}
+              {notice ? (
+                <p className="mt-2 rounded bg-teal-100 px-2 py-1 text-xs font-semibold text-teal-900">{notice}</p>
+              ) : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                {primaryMatch ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md bg-teal-700 px-3 py-2 text-sm font-bold text-white hover:bg-teal-800"
+                    onClick={() => onCreateStockTransfer(position, primaryMatch.id)}
+                  >
+                    <RefreshCw size={15} />
+                    P→N株式移管を記録
+                  </button>
+                ) : null}
+                {primaryMatch ? (
+                  <button
+                    type="button"
+                    className="rounded-md border border-teal-300 bg-white px-3 py-2 text-sm font-bold text-teal-900"
+                    onClick={() => onOpenSimulationAt(primaryMatch.id, "stock-acquisition-record")}
+                  >
+                    対応するP口座の権利行使済み建玉を開く
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700"
+                  onClick={() => onToggleDetails(position.id)}
+                >
+                  <Eye size={15} />
+                  {expanded ? "詳細を閉じる" : "詳細を見る"}
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700"
+                  onClick={() => onIgnore(position)}
+                >
+                  <Ban size={15} />
+                  今回は無視
+                </button>
+              </div>
+              {expanded ? (
+                <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
+                  <div className="font-bold text-slate-900">Saxo現在建玉から取得できた情報</div>
+                  <dl className="mt-2 grid gap-1 sm:grid-cols-2">
+                    <DraftRow label="AssetType" value={position.assetType ?? "未取得"} />
+                    <DraftRow label="Account Key" value={maskSaxoIdentifier(position.accountKey)} />
+                    <DraftRow label="Position ID" value={maskSaxoIdentifier(position.positionId)} />
+                    <DraftRow label="Correlation" value={hasAutoAssignmentCorrelation(position) ? "AutoAssignment" : "未取得"} />
+                    <DraftRow label="symbol" value={position.symbol ?? "未取得"} />
+                    <DraftRow label="current price" value={formatMaybeValue(position.currentStockPrice ?? position.currentPrice, position.currency)} />
+                  </dl>
+                  <p className="mt-2">
+                    symbolが未取得でも、AutoAssignment、株数、平均取得単価、既存P口座の権利行使済み株式取得記録から候補提示します。未取得項目は0扱いしません。
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -3685,6 +3869,72 @@ function formatPositionLabel(position: SaxoApiPositionSnapshot): string {
   return `${position.symbol ?? "未取得"} / ${position.assetType ?? "種別未取得"}`;
 }
 
+function getSaxoStockShares(position: SaxoApiPositionSnapshot): number {
+  const value = position.shareQuantity ?? position.quantity;
+  return value !== undefined && Number.isFinite(value) ? Math.abs(value) : 0;
+}
+
+function getSaxoStockAveragePrice(position: SaxoApiPositionSnapshot): number | undefined {
+  const value = position.averageOpenPrice ?? position.currentStockPrice ?? position.currentPrice;
+  return value !== undefined && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeStockTicker(value?: string): string {
+  if (!value) return "";
+  const normalized = value.trim().toUpperCase();
+  const saxoOptionMatch = normalized.match(/^([A-Z.]+)\//);
+  if (saxoOptionMatch?.[1]) return saxoOptionMatch[1];
+  return normalized.replace(/[^A-Z.]/g, "");
+}
+
+function isNAccountStockPosition(position?: SaxoApiPositionSnapshot): boolean {
+  return Boolean(position && position.kind === "stock" && position.accountAssignment === "N" && getSaxoStockShares(position) > 0);
+}
+
+function hasAutoAssignmentCorrelation(position: SaxoApiPositionSnapshot): boolean {
+  try {
+    return JSON.stringify(position.raw ?? {}).toLowerCase().includes("autoassignment");
+  } catch {
+    return false;
+  }
+}
+
+function findPnTransferSourceSimulations(position: SaxoApiPositionSnapshot, simulations: TradeSimulation[]): TradeSimulation[] {
+  const shares = getSaxoStockShares(position);
+  const averagePrice = getSaxoStockAveragePrice(position);
+  const positionTicker = normalizeStockTicker(position.symbol ?? position.underlyingName ?? position.instrumentCode);
+  if (shares <= 0) return [];
+  return simulations
+    .filter((simulation) => {
+      const acquisition = simulation.stockAcquisition;
+      if (simulation.status !== "assigned") return false;
+      if (simulation.accountEnvironment !== "PROD_P_JPY_SETTLEMENT") return false;
+      if (!acquisition?.enabled) return false;
+      if (acquisition.accountEnvironment !== "PROD_P_JPY_SETTLEMENT") return false;
+      if (!Number.isFinite(acquisition.shares) || Math.abs(acquisition.shares - shares) > 0.0001) return false;
+      if (averagePrice !== undefined && Number.isFinite(acquisition.priceUSD) && Math.abs(acquisition.priceUSD - averagePrice) > 0.05) {
+        return false;
+      }
+      const simulationTicker = normalizeStockTicker(simulation.ticker);
+      if (positionTicker && simulationTicker && positionTicker !== simulationTicker) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const aDate = a.stockAcquisition?.acquisitionDate ?? "";
+      const bDate = b.stockAcquisition?.acquisitionDate ?? "";
+      return bDate.localeCompare(aDate);
+    });
+}
+
+function formatNStockTransferCandidateLabel(position: SaxoApiPositionSnapshot, primaryMatch?: TradeSimulation): string {
+  const ticker = normalizeStockTicker(position.symbol) || primaryMatch?.ticker || position.underlyingName || "銘柄未取得";
+  const shares = getSaxoStockShares(position);
+  const averagePrice = getSaxoStockAveragePrice(position);
+  return `${ticker} ${formatMaybeValue(shares)}株 @ ${formatMaybeValue(averagePrice, "USD")} / N口座`;
+}
+
 function formatOrderLabel(order: SaxoApiOrderSnapshot): string {
   const option = order.optionType === "call" ? "C" : order.optionType === "put" ? "P" : "?";
   if (order.strike || order.expiry) {
@@ -3905,6 +4155,7 @@ function createReflectionSummary({
   mappedSnapshots,
   accountInputs,
   positionRows,
+  simulations,
   orders,
   historyEndpoints,
   historyReflectionStates,
@@ -3912,6 +4163,7 @@ function createReflectionSummary({
   mappedSnapshots: Array<{ accountCode: SaxoAccountCode; mapping?: SaxoAccountMapping; snapshot?: SaxoApiAccountSnapshot }>;
   accountInputs: AccountInputs;
   positionRows: SaxoPositionReconciliationRow[];
+  simulations: TradeSimulation[];
   orders: SaxoApiOrderSnapshot[];
   historyEndpoints: SaxoHistoryDiscoveryEndpoint[];
   historyReflectionStates: Record<string, HistoryReflectionState>;
@@ -3939,9 +4191,14 @@ function createReflectionSummary({
       target: "snapshot" as const,
     };
   });
-  const newPositions = positionRows.filter((row) => row.status === "app_missing").length;
-  const matchedPositions = positionRows.filter((row) => row.status === "matched").length;
-  const unknownPositions = positionRows.filter((row) => row.status === "unknown" || row.status === "quantity_diff" || row.status === "price_diff").length;
+  const stockTransferCandidateRows = positionRows.filter((row) => isNAccountStockPosition(row.position));
+  const regularPositionRows = positionRows.filter((row) => !isNAccountStockPosition(row.position));
+  const stockTransferCandidates = stockTransferCandidateRows.filter((row) =>
+    row.position ? findPnTransferSourceSimulations(row.position, simulations).length > 0 : false,
+  ).length;
+  const newPositions = regularPositionRows.filter((row) => row.status === "app_missing").length;
+  const matchedPositions = regularPositionRows.filter((row) => row.status === "matched").length;
+  const unknownPositions = regularPositionRows.filter((row) => row.status === "unknown" || row.status === "quantity_diff" || row.status === "price_diff").length;
   const exitOrders = orders.filter((order) => order.isExitCandidate).length;
   const historyItems = historyEndpoints.flatMap((endpoint) => endpoint.items ?? []);
   const entryCandidates = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "entry").length;
@@ -3956,13 +4213,18 @@ function createReflectionSummary({
   const brokenHistoryCount = historyItems.filter((item) => historyReflectionStates[item.id]?.status === "broken").length;
   const allHistoryReflected = actionableHistoryItems.length > 0 && reflectedHistoryCount === actionableHistoryItems.length;
   const anyHistoryReflected = reflectedHistoryCount > 0;
-  const positionActionable = newPositions > 0 || matchedPositions > 0 || unknownPositions > 0;
+  const positionActionable = newPositions > 0 || matchedPositions > 0 || unknownPositions > 0 || stockTransferCandidateRows.length > 0;
   const orderActionable = orders.length > 0;
   const historyActionable = historyItems.length > 0;
   return {
     accountLines,
     positionLine: {
-      detail: positionRows.length === 0 ? "未取得" : `新規${newPositions}件 / 既存候補${matchedPositions}件 / 要確認${unknownPositions}件`,
+      detail:
+        positionRows.length === 0
+          ? "未取得"
+          : stockTransferCandidateRows.length > 0
+            ? `P→N移管候補${stockTransferCandidates}件${regularPositionRows.length > 0 ? ` / 通常建玉候補${regularPositionRows.length}件` : ""}`
+            : `新規${newPositions}件 / 既存候補${matchedPositions}件 / 要確認${unknownPositions}件`,
       actionable: positionActionable,
     },
     orderLine: {
