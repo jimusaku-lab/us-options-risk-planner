@@ -58,6 +58,53 @@
 
 - この時点ではなし。
 
+# P→N株式移管記録後の完了導線修正 報告 2026-06-16
+
+## 対象
+
+- 公開版: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.9 移管記録後の完了導線`
+
+## 修正内容
+
+Saxo N口座Stock候補から `P→N株式移管を記録` を押した後、候補カードを `P→N株式移管を記録済み` 状態へ切り替えるようにした。
+
+- 同じP口座権利行使済み建玉・同じ株数の `StockTransferEvent` が存在する場合、再度 `P→N株式移管を記録` を押せない表示に変更
+- 主ボタンを `N口座ホイールを確認` に変更
+- 補助ボタンとして `JSONバックアップを保存` を表示
+- 完了メッセージを「N口座ホイールを確認し、確認後にJSONバックアップを保存する」導線へ変更
+- `N口座ホイールを確認` でアプリ本体の `ホイール管理` セクションへスクロールし、折りたたみ時は自動で開く
+- 対象銘柄のホイールカードを一時的にハイライトする
+
+## 修正ファイル
+
+- `src/App.tsx`
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `src/components/wheel/WheelPanel.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+
+## commit / push
+
+- 実装commit hash: `a3d2c6c`
+- Pages deploy commit hash: `f01b84b`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-DUGBWaba.js` を参照することを確認した。
+
+## 残課題
+
+- 実Saxo接続データでのクリック確認は、ユーザーのローカルAPI接続状態に依存するため、今回はコード導線、テスト、ビルド、GitHub Pages配信更新までを確認した。
+
 ---
 
 # 2026-06-16 一般公開版 Saxo接続後の準備カード折りたたみと接続保持促進
