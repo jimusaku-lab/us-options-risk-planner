@@ -96,7 +96,7 @@
 
 ## 公開URL確認
 
-- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BSHdVQ34.js` を参照することを確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BSHdVQ34.js` を参照することを確認した。
 
 ---
 
