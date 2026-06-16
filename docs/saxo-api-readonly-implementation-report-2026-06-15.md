@@ -58,6 +58,45 @@
 
 - この時点ではなし。
 
+# 履歴実績モードのサマリーカード文言改善 報告 2026-06-16
+
+## 対象
+
+- 公開版: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.16`
+
+## 修正内容
+
+- 履歴実績モードのサマリーカード群の上に `終了済みプット売りの実績` の小見出しを追加した。
+- 履歴実績モードではカード名を次のように変更した。
+  - `確定プレミアム` → `この履歴の確定オプション収入`
+  - `実績分母` → `この履歴の年率分母`
+  - `年率` → `この履歴のオプション年率`
+- 年率カードの注記に、`確定損益 ÷ 分母 × 365 ÷ 日数` の計算式を表示するようにした。
+- P→N移管済みでN口座株式保有中の場合、現在のN口座株式損益ではなく終了済みP口座プット売りの実績であることを注記した。
+- 現在保有状態カードと、終了済みプット売り実績カード群を視覚的に分けるため、履歴実績モードのサマリーカード群を専用枠で囲んだ。
+
+## 修正ファイル
+
+- `src/components/results/SummaryCards.tsx`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+
+## commit / push
+
+- 実装commit hash: 後続commit後に確定
+- main push: 後続pushで実施
+- gh-pages push: 後続deployで実施
+
+## 公開URL確認
+
+- 後続deploy後に `https://jimusaku-lab.github.io/us-options-risk-planner/` の参照bundleを確認する。
+
 # Saxo再取得時の反映済み権利行使履歴表示修正 報告 2026-06-16
 
 ## 対象

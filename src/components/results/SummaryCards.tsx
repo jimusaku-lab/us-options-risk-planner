@@ -62,14 +62,24 @@ export function SummaryCards({
     : primaryWarning
       ? primaryWarning.message
       : "必要な実績入力は完了しています。JSONバックアップを保存してください。";
+  const historyDenominatorValue =
+    primaryDenominator.currency === "USD" ? formatUSD(primaryDenominator.amountUSD ?? 0) : formatJPY(primaryDenominator.amountJPY);
+  const historyAnnualFormula = `${formatJPY(taxResult.grossProfitJPY)} ÷ ${formatJPY(primaryDenominator.amountJPY)} × 365 ÷ ${Math.max(
+    1,
+    simulation.dte,
+  )}日。左が税前、右が税引後。`;
+  const historyModeNotice =
+    "現在のN口座株式の損益ではありません。現物株の現在時価や移管後の損益は、この年率計算に含めていません。";
 
   const cards = [
     {
-      title: historyMode ? "確定プレミアム" : "受取プレミアム",
+      title: historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
       value: isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
       note: isN
         ? `N口座のUSD主計算。参考JPY ${formatJPY(premiumJPY)}。`
-        : "P口座JPY決済。手数料・税金は別カードで控除します。",
+        : historyMode
+          ? "終了済みのP口座プット売りで確定したオプション収入です。"
+          : "P口座JPY決済。手数料・税金は別カードで控除します。",
     },
     ...(!historyMode && coveredCallAssignmentPreview
       ? [
@@ -84,8 +94,8 @@ export function SummaryCards({
         ]
       : []),
     {
-      title: historyMode ? "実績分母" : "使用分母",
-      value: primaryDenominator.currency === "USD" ? formatUSD(primaryDenominator.amountUSD ?? 0) : formatJPY(primaryDenominator.amountJPY),
+      title: historyMode ? "この履歴の年率分母" : "使用分母",
+      value: historyDenominatorValue,
       note: [
         primaryDenominator.currency === "USD"
           ? `${primaryDenominator.label}。参考JPY ${formatJPY(primaryDenominator.amountJPY)}。`
@@ -94,9 +104,9 @@ export function SummaryCards({
       ].filter(Boolean).join(" / "),
     },
     {
-      title: "年率",
+      title: historyMode ? "この履歴のオプション年率" : "年率",
       value: `${formatPct(primaryDenominator.annualReturnPct)} / ${formatPct(taxResult.netAnnualReturnPct)}`,
-      note: `税前 / 税引後。${simulation.dte}日換算。`,
+      note: historyMode ? historyAnnualFormula : `税前 / 税引後。${simulation.dte}日換算。`,
     },
     ...(!historyMode
       ? [
@@ -122,24 +132,39 @@ export function SummaryCards({
   ];
 
   return (
-    <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {cards.map((card) => (
-        <div key={card.title} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs font-semibold text-slate-500">{card.title}</div>
-          <div className="mt-2 text-2xl font-bold tracking-normal text-slate-950">{card.value}</div>
-          <p className="mt-2 text-sm leading-6 text-slate-600">{card.note}</p>
-          {!historyMode && "warning" in card && card.warning?.actionAnchorId ? (
-            <button
-              className="mt-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
-              onClick={() => {
-                if ("warning" in card && card.warning) onWarningAction?.(card.warning);
-              }}
-            >
-              {card.warning.actionLabel ?? "反対売買判断へ"}
-            </button>
+    <section className={historyMode ? "rounded-lg border border-amber-200 bg-amber-50/70 p-3" : ""}>
+      {historyMode ? (
+        <div className="mb-3">
+          <h3 className="text-sm font-bold text-amber-950">終了済みプット売りの実績</h3>
+          <p className="mt-1 text-xs leading-5 text-amber-900">
+            下のカードは、この履歴のオプション実績です。現在保有中のN口座株式とは分けて確認します。
+          </p>
+          {stockHoldingMode && isTransferredToN ? (
+            <p className="mt-2 rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-semibold leading-5 text-amber-950">
+              {historyModeNotice}
+            </p>
           ) : null}
         </div>
-      ))}
+      ) : null}
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {cards.map((card) => (
+          <div key={card.title} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="text-xs font-semibold text-slate-500">{card.title}</div>
+            <div className="mt-2 text-2xl font-bold tracking-normal text-slate-950">{card.value}</div>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{card.note}</p>
+            {!historyMode && "warning" in card && card.warning?.actionAnchorId ? (
+              <button
+                className="mt-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                onClick={() => {
+                  if ("warning" in card && card.warning) onWarningAction?.(card.warning);
+                }}
+              >
+                {card.warning.actionLabel ?? "反対売買判断へ"}
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
