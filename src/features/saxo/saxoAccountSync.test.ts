@@ -388,6 +388,7 @@ describe("Saxo read-only account sync", () => {
       getSaxoHistoryCandidateTarget({
         id: "open-sell",
         kind: "trade",
+        assetType: "StockOption",
         buySell: "sell",
         openClose: "open",
       }),
@@ -396,6 +397,7 @@ describe("Saxo read-only account sync", () => {
       getSaxoHistoryCandidateTarget({
         id: "close-buy",
         kind: "trade",
+        assetType: "StockOption",
         buySell: "buy",
         openClose: "close",
       }),
@@ -404,6 +406,7 @@ describe("Saxo read-only account sync", () => {
       getSaxoHistoryCandidateTarget({
         id: "open-buy",
         kind: "trade",
+        assetType: "StockOption",
         buySell: "buy",
         openClose: "open",
       }),
@@ -412,7 +415,32 @@ describe("Saxo read-only account sync", () => {
       getSaxoHistoryCandidateTarget({
         id: "unknown-buy",
         kind: "trade",
+        assetType: "StockOption",
         buySell: "buy",
+      }),
+    ).toBe("unknown");
+    expect(
+      getSaxoHistoryCandidateTarget({
+        id: "stock-transfer-sell",
+        kind: "trade",
+        assetType: "Stock",
+        symbol: "NVDA",
+        buySell: "sell",
+        openClose: "open",
+        quantity: 100,
+        price: 207.5,
+      }),
+    ).toBe("unknown");
+    expect(
+      getSaxoHistoryCandidateTarget({
+        id: "stock-transfer-buy",
+        kind: "trade",
+        assetType: "Stock",
+        symbol: "NVDA",
+        buySell: "buy",
+        openClose: "close",
+        quantity: 100,
+        price: 207.5,
       }),
     ).toBe("unknown");
   });
@@ -728,6 +756,7 @@ describe("Saxo read-only account sync", () => {
       {
         id: "entry-2075",
         kind: "trade",
+        assetType: "StockOption",
         symbol: "NVDA",
         optionType: "put",
         strike: 207.5,
@@ -741,6 +770,7 @@ describe("Saxo read-only account sync", () => {
       {
         id: "close-200",
         kind: "trade",
+        assetType: "StockOption",
         symbol: "NVDA",
         optionType: "put",
         strike: 200,

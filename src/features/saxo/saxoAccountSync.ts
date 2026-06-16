@@ -656,12 +656,18 @@ export type SaxoHistoryCandidateTarget = "entry" | "close" | "assignment" | "unk
 
 export function getSaxoHistoryCandidateTarget(item: SaxoHistoryDiscoveryItem): SaxoHistoryCandidateTarget {
   if (isSaxoHistoryPutAssignmentOptionCandidate(item)) return "assignment";
+  if (!isSaxoOptionHistoryItem(item)) return "unknown";
   if (item.kind === "closed_position") return "close";
   if (item.openClose === "close") return "close";
   if (item.openClose === "open") return "entry";
   if (item.buySell === "sell") return "entry";
   if (item.buySell === "buy" && (item.profitLoss !== undefined || item.profitLossBase !== undefined)) return "close";
   return "unknown";
+}
+
+function isSaxoOptionHistoryItem(item: SaxoHistoryDiscoveryItem): boolean {
+  const assetType = (item.assetType ?? "").toLowerCase();
+  return assetType.includes("option") || Boolean(resolveSaxoHistoryOptionContract(item));
 }
 
 export function isSaxoHistoryPutAssignmentOptionCandidate(item: SaxoHistoryDiscoveryItem): boolean {

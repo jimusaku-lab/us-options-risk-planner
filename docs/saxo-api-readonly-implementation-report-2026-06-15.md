@@ -58,6 +58,53 @@
 
 - この時点ではなし。
 
+---
+
+# 2026-06-16 一般公開版 Saxo履歴候補のStock履歴一括作成除外
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.17`
+
+## 実装内容
+
+- `getSaxoHistoryCandidateTarget` で通常の `entry` / `close` に分類する対象を `StockOption` 履歴に限定した。
+- `Stock` の売買履歴は、通常の `3-A. 建玉開始の約定確認` や `7. 決済実績` の一括作成対象にしないようにした。
+- Saxo履歴候補カードで、追加作成が必要な候補が0件の場合は `不足している反映候補をまとめて作成` を出さず、`追加で作成が必要な履歴候補はありません。` と表示するようにした。
+- 反映待ちサマリーは、履歴が存在するだけでは反映待ち扱いにせず、実際に作成可能な `none` / `broken` の通常候補がある場合だけ反映待ちにした。
+- 表示件数を `反映済み`、`対象外または確認不要`、`追加で作成が必要` に分け、Stock履歴などの対象外候補が未作成件数へ混ざらないようにした。
+
+## 修正ファイル
+
+- `src/features/saxo/saxoAccountSync.ts`
+- `src/features/saxo/saxoAccountSync.test.ts`
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+
+## commit / push
+
+- 実装commit hash: `TBD`
+- Pages deploy commit hash: `TBD`
+- main push: 予定
+- gh-pages push: 予定
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/`: push後に確認予定
+
+## 残課題
+
+- 実Saxo接続での `まとめて取得` 再実行目視はユーザーのローカル接続状態と保存データに依存するため、今回はStock履歴分類、反映待ち判定、テスト、ビルド、公開bundle更新までを確認する。
+
 # 履歴実績モードのサマリーカード文言改善 報告 2026-06-16
 
 ## 対象

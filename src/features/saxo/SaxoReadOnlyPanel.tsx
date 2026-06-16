@@ -3219,6 +3219,7 @@ function HistoryDiscoveryPreview({
     return state.status === "none" || state.status === "broken";
   });
   const hasCreatableItems = creatableItems.length > 0;
+  const reflectedHistoryCount = actionableHistoryItems.filter(isActualReflection).length;
   const entryReflectedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "entry" && isActualReflection(item)).length;
   const closeReflectedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "close" && isActualReflection(item)).length;
   const assignmentReflectedCount = historyItems.filter(isPendingAssignmentReflection).length;
@@ -3242,7 +3243,7 @@ function HistoryDiscoveryPreview({
   const statusLabel = !fetchedAt
     ? "未取得"
     : historyItems.length > 0 && actionableHistoryItems.length === 0
-      ? "要確認"
+      ? "対象外または確認不要"
       : brokenCount > 0
         ? "復旧が必要"
       : historyItems.length > 0 && !hasCreatableItems
@@ -3251,9 +3252,9 @@ function HistoryDiscoveryPreview({
   const statusClass =
     statusLabel === "未取得"
       ? "bg-slate-100 text-slate-700"
-      : statusLabel === "反映候補作成済み"
+      : statusLabel === "反映候補作成済み" || statusLabel === "対象外または確認不要"
         ? "bg-teal-100 text-teal-800"
-        : statusLabel === "要確認" || statusLabel === "復旧が必要"
+        : statusLabel === "復旧が必要"
           ? "bg-amber-100 text-amber-800"
         : "bg-blue-100 text-blue-800";
 
@@ -3296,7 +3297,7 @@ function HistoryDiscoveryPreview({
               <p>
                 履歴候補があります。必要な候補を確認し、反映候補を作成してください。
                 {brokenCount > 0 ? ` 復旧が必要な候補が${brokenCount}件あります。` : ""}
-                {unknownCount > 0 ? ` 要確認の履歴候補が${unknownCount}件あります。分類不能な候補は自動反映しません。` : ""}
+                {unknownCount > 0 ? ` 対象外または確認不要の履歴候補が${unknownCount}件あります。Stock履歴は通常の3-A/7候補として自動反映しません。` : ""}
                 {ignoredCount > 0 ? ` 無視済みの履歴候補が${ignoredCount}件あります。` : ""}
               </p>
             </div>
@@ -3313,14 +3314,22 @@ function HistoryDiscoveryPreview({
             <p className="text-sm leading-6 text-slate-700">
               履歴候補から反映候補を作成済みです。建玉開始の履歴は3-A、通常決済の履歴は7、P売り権利行使の履歴は6-A 現物株の取得記録で確認してください。
             </p>
+            {!hasCreatableItems ? (
+              <div className="rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-bold text-teal-900">
+                追加で作成が必要な履歴候補はありません。
+              </div>
+            ) : null}
             <div className="grid gap-2 text-xs font-semibold text-slate-700 sm:grid-cols-2">
+              <div className="rounded bg-white px-3 py-2">反映済み: {reflectedHistoryCount}件</div>
+              <div className="rounded bg-white px-3 py-2">対象外または確認不要: {unknownCount}件</div>
+              <div className="rounded bg-white px-3 py-2 sm:col-span-2">追加で作成が必要: {creatableItems.length}件</div>
               <div className="rounded bg-white px-3 py-2">建玉開始の確認待ち: {entryReflectedCount}件</div>
               <div className="rounded bg-white px-3 py-2">決済実績の確認待ち: {closeReflectedCount}件</div>
               <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認待ち: {assignmentReflectedCount}件</div>
               {assignmentCompletedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認済み: {assignmentCompletedCount}件</div> : null}
               {brokenCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">復旧が必要: {brokenCount}件（候補実体が見つかりません）</div> : null}
               {ignoredCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">無視済み: {ignoredCount}件（復旧対象から除外）</div> : null}
-              {unknownCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">要確認: {unknownCount}件（自動反映なし）</div> : null}
+              {unknownCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">対象外または確認不要: {unknownCount}件（Stock履歴など。通常の3-A/7には自動反映しません）</div> : null}
             </div>
             <div className="flex flex-wrap gap-2">
               {entryReflectedCount > 0 ? (
@@ -3344,8 +3353,11 @@ function HistoryDiscoveryPreview({
             </div>
           </div>
         ) : historyItems.length > 0 ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
-            履歴候補は取得済みですが、建玉開始か決済かを判定できない候補だけです。Saxo画面で売買区分と新規/決済区分を確認し、必要な場合は手入力してください。
+          <div className="rounded-md border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">
+            <div className="font-bold">追加で作成が必要な履歴候補はありません。</div>
+            <div className="mt-1">
+              取得済みの履歴は、Stock履歴など通常の3-A建玉開始確認・7決済実績へ流さない対象外または確認不要の候補です。必要な場合だけSaxo画面を確認し、手入力で補足してください。
+            </div>
           </div>
         ) : (
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -4357,11 +4369,16 @@ function createReflectionSummary({
     return state?.status === "candidate" || state?.status === "official";
   }).length;
   const brokenHistoryCount = historyItems.filter((item) => historyReflectionStates[item.id]?.status === "broken").length;
+  const creatableHistoryItems = actionableHistoryItems.filter((item) => {
+    const state = historyReflectionStates[item.id] ?? { status: "none" as const };
+    return state.status === "none" || state.status === "broken";
+  });
+  const createNeededHistoryCount = creatableHistoryItems.length;
   const allHistoryReflected = actionableHistoryItems.length > 0 && reflectedHistoryCount === actionableHistoryItems.length;
   const anyHistoryReflected = reflectedHistoryCount > 0;
   const positionActionable = newPositions > 0 || matchedPositions > 0 || unknownPositions > 0 || stockTransferCandidateRows.length > 0;
   const orderActionable = orders.length > 0;
-  const historyActionable = historyItems.length > 0;
+  const historyActionable = createNeededHistoryCount > 0;
   return {
     accountLines,
     positionLine: {
@@ -4382,14 +4399,20 @@ function createReflectionSummary({
         historyItems.length === 0
           ? "未取得または0件"
           : brokenHistoryCount > 0
-            ? `復旧が必要${brokenHistoryCount}件 / 作成済み${reflectedHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 要確認${unknownHistoryCandidates}件` : ""}`
+            ? `復旧が必要${brokenHistoryCount}件 / 作成済み${reflectedHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
           : allHistoryReflected
-            ? `確認済み: 建玉${entryCandidates}件 / 決済${closeCandidates}件 / 権利行使${assignmentCandidates}件${unknownHistoryCandidates > 0 ? ` / 要確認${unknownHistoryCandidates}件` : ""}`
+            ? `反映済み${reflectedHistoryCount}件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要0件`
             : anyHistoryReflected
-              ? `作成済み${reflectedHistoryCount}件 / 未作成${actionableHistoryItems.length - reflectedHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 要確認${unknownHistoryCandidates}件` : ""}`
-              : `建玉${entryCandidates}件 / 決済${closeCandidates}件 / 権利行使${assignmentCandidates}件${unknownHistoryCandidates > 0 ? ` / 要確認${unknownHistoryCandidates}件` : ""}`,
+              ? `反映済み${reflectedHistoryCount}件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要${createNeededHistoryCount}件`
+              : createNeededHistoryCount > 0
+                ? `建玉${entryCandidates}件 / 決済${closeCandidates}件 / 権利行使${assignmentCandidates}件 / 追加で作成が必要${createNeededHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
+                : `反映済み0件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要0件`,
       actionable: historyActionable,
-      actionLabel: brokenHistoryCount > 0 ? "復旧が必要な候補を確認" : allHistoryReflected ? "履歴候補は確認済み" : anyHistoryReflected ? "作成済み候補を確認" : "履歴候補を確認",
+      actionLabel: historyActionable
+        ? brokenHistoryCount > 0
+          ? "復旧が必要な候補を確認"
+          : "履歴候補を確認"
+        : "履歴候補は確認済み",
     },
     hasPending: accountLines.some((line) => line.actionable) || positionActionable || orderActionable || historyActionable,
   };
