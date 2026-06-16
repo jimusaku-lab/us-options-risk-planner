@@ -100,15 +100,16 @@
 
 ## commit / push
 
-- 実装commit hash: 後続commitで確定
-- Pages deploy commit hash: 後続commitで確定
-- main push: 実施予定
-- gh-pages push: 実施予定
+- 実装commit hash: `17a230d`
+- Pages deploy commit hash: `6769b95`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- `gh-pages` 反映後、`https://jimusaku-lab.github.io/us-options-risk-planner/` が新bundle `assets/index-OLICrsd0.js` を参照することを確認する。
-- 公開bundle内に旧表現が残らず、説明順序とPC側補助ツール表現へ置き換わっていることを確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-OLICrsd0.js` を参照することを確認した。
+- 公開bundle内に `ローカルAPI補助サーバの準備`、`公開版リポジトリ`、`jimusaku-lab/us-options-risk-planner`、`ダウンロードまたはclone`、`ローカル版アプリ`、`/Users/motomichi` が含まれないことを確認した。
+- 公開bundle内に `Saxo接続用のPC側補助ツールを準備`、`アプリ本体は、今まで通りGitHub Pagesの公開版を使います`、`GitHub Pagesは静的Webアプリのため`、`Saxo ID、パスワード、2FA、OAuth token、口座情報はGitHub Pagesや作者側には保存されません`、`PowerShell` が含まれることを確認した。
 
 ## 残課題
 
