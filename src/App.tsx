@@ -1084,8 +1084,11 @@ export default function App() {
               onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
               onCreatePositionDraft={createSimulationFromSaxoPosition}
               onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
+              stockTransfers={stockTransfers}
               onOpenLinkedSimulation={openSimulationEditorAt}
               onOpenHistoryTarget={openSelectedSimulationHistoryTarget}
+              onOpenWheelManagement={openWheelManagement}
+              onDownloadJson={downloadJson}
             />
             {isCandidatesOpen ? (
               <CandidatePanel

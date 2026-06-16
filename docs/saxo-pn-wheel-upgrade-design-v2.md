@@ -3254,3 +3254,40 @@ P→N株式移管を記録しました。
 ```
 
 この状態では、ユーザーに再度Saxo候補を操作させない。
+
+### 18.10 2026-06-16 実画面で判明した再発不具合
+
+ローカル実画面で、`P→N株式移管を記録` を押しても候補カードが変わらず、ユーザーには「反応しない」ように見える状態を確認した。
+
+実際には、画面上部のステータスには次の文言が出ていた。
+
+```text
+このP→N株式移管はすでに記録済みです。N口座ホイールで株式保有を確認してください。
+```
+
+したがって、クリック処理そのものが完全に死んでいるのではなく、記録済み状態を候補カードへ反映できていない。
+
+根本原因は、`App.tsx` にある2つの描画ルートで `SaxoReadOnlyPanel` へのpropsが揃っていないこと。
+
+- 建玉未選択時の `SaxoReadOnlyPanel` には `stockTransfers`, `onOpenWheelManagement`, `onDownloadJson` が渡っている
+- 建玉選択中の `SaxoReadOnlyPanel` には上記propsが渡っていない
+- そのため、選択中画面では `stockTransfers` が空配列扱いになり、既存の `StockTransferEvent` を検出できない
+- 結果として、カードは `P→N株式移管を記録済み` に切り替わらず、`P→N株式移管を記録` ボタンが残る
+
+修正条件:
+
+- `App.tsx` の建玉未選択時・建玉選択中の両方で、`SaxoReadOnlyPanel` に同じP→N移管関連propsを渡す
+  - `stockTransfers={stockTransfers}`
+  - `onOpenWheelManagement={openWheelManagement}`
+  - `onDownloadJson={downloadJson}`
+- 既に同じ `sourceSimulationId`、N口座、同一株数の `StockTransferEvent` がある場合、候補カードは初期表示から `P→N株式移管を記録済み` と表示する
+- 記録済み状態では `P→N株式移管を記録` ボタンを出さず、`N口座ホイールを確認` と `JSONバックアップを保存` を出す
+- 画面上部ステータスだけに成功・重複メッセージを出して終わらせない
+- `N口座ホイールを確認` を押すと、選択中画面でも `ホイール管理` へスクロールし、対象銘柄をハイライトする
+
+公開版への反映条件:
+
+- ローカル版で同じ修正を確認した後、公開版にも同じ修正を反映する
+- `npm test` と公開版ビルドを通す
+- GitHub Pagesへpushする
+- 公開URLで、建玉選択中でも記録済みカードへ切り替わることを確認する
