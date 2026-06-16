@@ -90,12 +90,14 @@
 ## commit / push
 
 - 実装commit hash: `e625954`
-- main push: この後push
-- gh-pages push: この後deploy
+- 報告書更新commit hash: `b864b73`
+- Pages deploy commit hash: `e65007e`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- 後続deploy後に `https://jimusaku-lab.github.io/us-options-risk-planner/` の参照bundleを確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-DZBpHZ6j.js` を参照することを確認した。
 
 # Saxo再取得時の反映済み権利行使履歴表示修正 報告 2026-06-16
 
