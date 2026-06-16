@@ -1,7 +1,7 @@
 import type { AccountEnvironment, TradeSimulation } from "@/types/domain";
 import { calculateOptionCloseExecutionResults } from "./optionCloseExecutions";
 import { calculateStockSettlementTaxResult } from "./tax";
-import { getShortCallLegs, getShortPutLegs } from "./calculations";
+import { calculateNetInitialPremiumJPY, getShortCallLegs, getShortPutLegs } from "./calculations";
 
 const endedStatuses = new Set(["closed", "assigned", "expired"]);
 const months = Array.from({ length: 12 }, (_, index) => index + 1);
@@ -131,6 +131,28 @@ function hasConfirmedExpiredExecution(simulation: TradeSimulation): boolean {
   return (simulation.optionCloseExecutions ?? []).some(
     (execution) => execution.confirmed && execution.closeKind === "expired",
   );
+}
+
+function hasConfirmedAssignedShortPutPremium(simulation: TradeSimulation): boolean {
+  const acquisition = simulation.stockAcquisition;
+  return (
+    simulation.status === "assigned" &&
+    !isNAccount(simulation.accountEnvironment) &&
+    getShortPutLegs(simulation).length > 0 &&
+    Boolean(
+      acquisition?.enabled &&
+        acquisition.confirmationStatus !== "ignored" &&
+        acquisition.confirmationStatus !== "invalid" &&
+        Number.isFinite(acquisition.shares) &&
+        acquisition.shares > 0 &&
+        Number.isFinite(acquisition.priceUSD) &&
+        acquisition.priceUSD > 0,
+    )
+  );
+}
+
+function getAssignedShortPutPremiumDate(simulation: TradeSimulation): string {
+  return simulation.stockAcquisition?.acquisitionDate || simulation.expiryDate || simulation.entryDate;
 }
 
 function collectIssues(simulations: TradeSimulation[]): YearlyPerformanceIssue[] {
@@ -291,6 +313,10 @@ export function calculateYearlyPerformanceSummary(
       const settlementYear = parseYear(simulation.stockSettlement.settlementDate);
       if (settlementYear) availableYearSet.add(settlementYear);
     }
+    if (hasConfirmedAssignedShortPutPremium(simulation)) {
+      const assignmentYear = parseYear(getAssignedShortPutPremiumDate(simulation));
+      if (assignmentYear) availableYearSet.add(assignmentYear);
+    }
 
     if (!endedStatuses.has(simulation.status)) return;
 
@@ -315,6 +341,15 @@ export function calculateYearlyPerformanceSummary(
           });
         }
       });
+
+    if (hasConfirmedAssignedShortPutPremium(simulation)) {
+      addEvent({
+        simulation,
+        date: getAssignedShortPutPremiumDate(simulation),
+        kind: "option",
+        amountJPY: calculateNetInitialPremiumJPY(simulation),
+      });
+    }
 
     const stockTax = calculateStockSettlementTaxResult(simulation);
     if (simulation.stockSettlement?.enabled && stockTax.enabled) {

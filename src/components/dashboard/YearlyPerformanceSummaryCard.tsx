@@ -50,7 +50,8 @@ export function YearlyPerformanceSummaryCard({
             </select>
           </div>
           <p className="mt-1 text-sm text-slate-600">
-            確認済みの決済実績と入力済みの株式譲渡だけを集計します。N口座USD損益はJPY確定損益に混ぜません。
+            確認済みの反対売買決済、満期終了、P売り権利行使で確定したオプション損益を集計します。
+            株式取得後の現物株時価は混ぜず、株式譲渡損益は売却・譲渡記録が入力された時点で別集計します。
           </p>
         </div>
         {detailsMode === "toggle" ? (

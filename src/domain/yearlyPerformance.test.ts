@@ -43,6 +43,70 @@ function closedPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulat
   };
 }
 
+function assignedPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulation {
+  return {
+    ...sampleAmznSimulation,
+    id: "assigned-2075p",
+    status: "assigned",
+    ticker: "NVDA",
+    name: "NVDA 207.5P assigned",
+    accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+    accountCode: "P",
+    accountCurrency: "JPY",
+    entryDate: "2026-06-02",
+    expiryDate: "2026-06-12",
+    dte: 10,
+    currentPriceUSD: 1_000,
+    fxRateJPY: 160.16,
+    brokerCommissionUSD: 0,
+    brokerCommissionJPY: 0,
+    stockPosition: {
+      shares: 100,
+      averageCostUSD: 207.5,
+      denominatorPriceMode: "current_price",
+    },
+    optionLegs: [
+      {
+        ...putLeg,
+        id: "put-2075",
+        type: "put",
+        side: "sell",
+        strikeUSD: 207.5,
+        premiumUSD: 1.21,
+        quantity: 1,
+        expiryDate: "2026-06-12",
+      },
+    ],
+    optionEntryExecutions: [
+      {
+        id: "entry-2075",
+        legId: "put-2075",
+        tradeDate: "2026-06-02",
+        contracts: 1,
+        fillPriceUSD: 1.21,
+        settlementCurrency: "JPY",
+        brokerBookedAmountJPY: 18_792,
+        brokerPremiumJPY: 18_792,
+        brokerTransactionCostJPY: 0,
+        source: "broker_statement",
+        confirmed: true,
+      },
+    ],
+    optionCloseExecutions: [],
+    stockAcquisition: {
+      enabled: true,
+      acquisitionDate: "2026-06-12",
+      shares: 100,
+      priceUSD: 207.5,
+      accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+      source: "saxo_history",
+      confirmationStatus: "confirmed",
+    },
+    stockSettlement: undefined,
+    ...patch,
+  };
+}
+
 describe("yearly performance summary", () => {
   it("does not aggregate open positions", () => {
     const summary = calculateYearlyPerformanceSummary([
@@ -182,5 +246,41 @@ describe("yearly performance summary", () => {
     expect(summary.monthly[0].cumulativeJPY).toBe(10_000);
     expect(summary.monthly[1].totalJPY).toBe(-3_000);
     expect(summary.monthly[1].cumulativeJPY).toBe(7_000);
+  });
+
+  it("aggregates confirmed assigned short put premium without mixing stock market value", () => {
+    const summary = calculateYearlyPerformanceSummary([
+      closedPutSimulation({
+        id: "closed-200p",
+        ticker: "NVDA",
+        accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+        accountCode: "P",
+        accountCurrency: "JPY",
+        optionCloseExecutions: [
+          {
+            id: "close-200p",
+            legId: "put-test",
+            closeKind: "buyback",
+            confirmed: true,
+            closeDate: "2026-06-02",
+            contracts: 1,
+            closePriceUSD: 0.13,
+            commissionUSD: 0,
+            settlementCurrency: "JPY",
+            brokerRealizedPnlJPY: 15_491,
+            source: "manual",
+          },
+        ],
+      }),
+      assignedPutSimulation(),
+    ], 2026);
+
+    expect(summary.optionPnlJPY).toBe(34_283);
+    expect(summary.realizedPnlJPY).toBe(34_283);
+    expect(summary.stockPnlJPY).toBe(0);
+    expect(summary.stockSettlementCount).toBe(0);
+    expect(summary.optionCount).toBe(2);
+    expect(summary.monthly[5].optionJPY).toBe(34_283);
+    expect(summary.tickerSummaries.find((item) => item.ticker === "NVDA")?.optionJPY).toBe(34_283);
   });
 });
