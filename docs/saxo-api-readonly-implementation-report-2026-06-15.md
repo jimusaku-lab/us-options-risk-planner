@@ -100,15 +100,16 @@
 
 ## commit / push
 
-- 実装commit hash: 後続commitで確定
-- Pages deploy commit hash: 後続commitで確定
-- main push: 実施予定
-- gh-pages push: 実施予定
+- 実装commit hash: `536b877`
+- Pages deploy commit hash: `8411086`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- `gh-pages` 反映後、`https://jimusaku-lab.github.io/us-options-risk-planner/` が新bundle `assets/index-C9H6MPWh.js` を参照することを確認する。
-- 公開bundle内に旧表現が残らず、`ローカルAPI補助ツール` 表現へ置き換わっていることを確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-C9H6MPWh.js` を参照することを確認した。
+- 公開bundle内に `公開版リポジトリ`、`jimusaku-lab/us-options-risk-planner`、`ダウンロードまたはclone`、`ローカル版アプリ`、`/Users/motomichi` が含まれないことを確認した。
+- 公開bundle内に `ローカルAPI補助ツール`、`アプリ本体はGitHub Pagesの公開版を使います`、`PowerShell` が含まれることを確認した。
 
 ## 残課題
 
