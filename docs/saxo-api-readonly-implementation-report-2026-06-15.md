@@ -58,6 +58,53 @@
 
 - この時点ではなし。
 
+---
+
+# 2026-06-16 P→N株式移管候補カードの記録済み反映漏れ修正
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 対象ブランチ: `main` / `gh-pages`
+
+## 実装内容
+
+- `App.tsx` の建玉選択中ルートで表示する `SaxoReadOnlyPanel` に、未選択時ルートと同じ `stockTransfers`、`onOpenWheelManagement`、`onDownloadJson` を渡すようにした。
+- これにより、建玉選択中のSaxo反映待ち確認でも既存の `StockTransferEvent` を検出でき、P→N株式移管候補カードが初期表示から `P→N株式移管を記録済み` になる。
+- 記録済み状態では `P→N株式移管を記録` を再表示せず、既存の `N口座ホイールを確認`、`JSONバックアップを保存`、`移管記録済み` の導線を使える。
+- 二重反映防止ロジックは既存の `sourceSimulationId`、`toAccountCode=N`、株数一致による検出を維持している。
+
+## 修正ファイル
+
+- `src/App.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- Pages配信bundle: `assets/index-BKyBNbCb.js`
+
+## commit / push
+
+- 実装commit hash: `f7377de`
+- Pages deploy commit hash: `4f1c977`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが `assets/index-BKyBNbCb.js` を参照することを確認した。
+- 公開版にも建玉選択中ルートの `stockTransfers` / `onOpenWheelManagement` / `onDownloadJson` 受け渡しが反映済み。
+
+## 残課題
+
+- 実Saxoデータを使った公開URL上のクリック確認は、利用者端末のローカルAPI・接続状態に依存するため未実施。コード経路、テスト、ビルド、Pages配信bundle更新は確認済み。
+
 # P→N株式移管記録後の完了導線修正 報告 2026-06-16
 
 ## 対象
