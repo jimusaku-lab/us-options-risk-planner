@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
-import { Ban, Cable, CheckCircle2, Clipboard, Eye, FilePlus2, Link2, LogOut, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { Ban, Cable, CheckCircle2, Clipboard, Download, Eye, FilePlus2, Link2, LogOut, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import {
   disableSaxoPersistence,
   enableSaxoPersistence,
@@ -49,7 +49,7 @@ import {
   type SaxoPositionReconciliationRow,
 } from "@/features/saxo/saxoAccountSync";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
-import type { AccountState, SaxoAccountCode, TradeSimulation } from "@/types/domain";
+import type { AccountState, SaxoAccountCode, StockTransferEvent, TradeSimulation } from "@/types/domain";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 
 const SAXO_MAPPING_STORAGE_KEY = "us-options-saxo-account-mappings-v1";
@@ -108,8 +108,11 @@ export function SaxoReadOnlyPanel({
   onCreateAssignmentDraft,
   onCreatePositionDraft,
   onCreateStockTransferFromPosition,
+  stockTransfers = [],
   onOpenLinkedSimulation,
   onOpenHistoryTarget,
+  onOpenWheelManagement,
+  onDownloadJson,
 }: {
   workspace: WorkspaceMode;
   accountInputs: AccountInputs;
@@ -121,8 +124,11 @@ export function SaxoReadOnlyPanel({
   onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string } | void;
   onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
   onCreateStockTransferFromPosition?: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
+  stockTransfers?: StockTransferEvent[];
   onOpenLinkedSimulation?: (simulationId: string, anchorId?: string) => void;
   onOpenHistoryTarget?: (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record", sourceTradeId?: string) => void;
+  onOpenWheelManagement?: (ticker?: string) => void;
+  onDownloadJson?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [showConnectionDetails, setShowConnectionDetails] = useState(false);
@@ -1336,6 +1342,7 @@ export function SaxoReadOnlyPanel({
                 draftPosition={draftPosition}
                 draftedPositionIds={draftedPositionIds}
                 simulations={simulations}
+                stockTransfers={stockTransfers}
                 historyItems={historyEndpoints.flatMap((endpoint) => endpoint.items ?? [])}
                 resolveLinkedSimulation={resolveLinkedSimulation}
                 positionActionErrors={positionActionErrors}
@@ -1521,10 +1528,12 @@ export function SaxoReadOnlyPanel({
                   if (result === false) return false;
                   setPositionActionNotices((current) => ({
                     ...current,
-                    [position.id]: "P→N株式移管を記録しました。N口座ホイールで株式保有として確認してください。",
+                    [position.id]: "P→N株式移管を記録しました。次は「N口座ホイールを確認」で、N株式保有になっていることを確認してください。確認後、JSONバックアップを保存してください。",
                   }));
                   return true;
                 }}
+                onOpenWheelManagement={onOpenWheelManagement}
+                onDownloadJson={onDownloadJson}
                 onOpenSimulationAt={(simulationId, anchorId) => {
                   onOpenLinkedSimulation?.(simulationId, anchorId);
                   setMessage("対応するP口座の権利行使済み建玉を開きました。");
@@ -2680,6 +2689,7 @@ function PositionsPreview({
   draftPosition,
   draftedPositionIds,
   simulations,
+  stockTransfers,
   historyItems,
   resolveLinkedSimulation,
   positionActionErrors,
@@ -2695,6 +2705,8 @@ function PositionsPreview({
   onCreateDraftFromBroken,
   onDiscardDraft,
   onCreateStockTransfer,
+  onOpenWheelManagement,
+  onDownloadJson,
   onOpenSimulationAt,
 }: {
   rows: SaxoPositionReconciliationRow[];
@@ -2706,6 +2718,7 @@ function PositionsPreview({
   draftPosition: SaxoApiPositionSnapshot | null;
   draftedPositionIds: string[];
   simulations: TradeSimulation[];
+  stockTransfers: StockTransferEvent[];
   historyItems: SaxoHistoryDiscoveryItem[];
   resolveLinkedSimulation: (row: SaxoPositionReconciliationRow) => LinkedSimulationResolution;
   positionActionErrors: Record<string, string>;
@@ -2721,6 +2734,8 @@ function PositionsPreview({
   onCreateDraftFromBroken: (position: SaxoApiPositionSnapshot) => void;
   onDiscardDraft: (position: SaxoApiPositionSnapshot) => void;
   onCreateStockTransfer: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
+  onOpenWheelManagement?: (ticker?: string) => void;
+  onDownloadJson?: () => void;
   onOpenSimulationAt: (simulationId: string, anchorId?: string) => void;
 }) {
   const assignedP = positions.filter((position) => position.accountAssignment === "P").length;
@@ -2758,12 +2773,15 @@ function PositionsPreview({
         <NStockTransferCandidates
           rows={stockTransferRows}
           simulations={simulations}
+          stockTransfers={stockTransfers}
           expandedPositionId={expandedPositionId}
           highlightedPositionId={highlightedPositionId}
           actionNoticeByPositionId={positionActionNotices}
           onToggleDetails={onToggleDetails}
           onIgnore={onIgnore}
           onCreateStockTransfer={onCreateStockTransfer}
+          onOpenWheelManagement={onOpenWheelManagement}
+          onDownloadJson={onDownloadJson}
           onOpenSimulationAt={onOpenSimulationAt}
         />
       ) : null}
@@ -2853,22 +2871,28 @@ function PositionsPreview({
 function NStockTransferCandidates({
   rows,
   simulations,
+  stockTransfers,
   expandedPositionId,
   highlightedPositionId,
   actionNoticeByPositionId,
   onToggleDetails,
   onIgnore,
   onCreateStockTransfer,
+  onOpenWheelManagement,
+  onDownloadJson,
   onOpenSimulationAt,
 }: {
   rows: SaxoPositionReconciliationRow[];
   simulations: TradeSimulation[];
+  stockTransfers: StockTransferEvent[];
   expandedPositionId: string;
   highlightedPositionId: string;
   actionNoticeByPositionId: Record<string, string>;
   onToggleDetails: (id: string) => void;
   onIgnore: (position: SaxoApiPositionSnapshot) => void;
   onCreateStockTransfer: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
+  onOpenWheelManagement?: (ticker?: string) => void;
+  onDownloadJson?: () => void;
   onOpenSimulationAt: (simulationId: string, anchorId?: string) => void;
 }) {
   return (
@@ -2892,8 +2916,19 @@ function NStockTransferCandidates({
           const expanded = expandedPositionId === position.id;
           const highlighted = highlightedPositionId === position.id;
           const notice = actionNoticeByPositionId[position.id];
+          const transferShares = getSaxoStockShares(position);
+          const recordedTransfer = primaryMatch
+            ? stockTransfers.find(
+                (transfer) =>
+                  transfer.sourceSimulationId === primaryMatch.id &&
+                  transfer.toAccountCode === "N" &&
+                  Math.abs(transfer.shares - transferShares) <= 0.0001,
+              )
+            : undefined;
+          const wheelTicker = recordedTransfer?.ticker ?? primaryMatch?.ticker ?? normalizeStockTicker(position.symbol ?? position.underlyingName ?? position.instrumentCode);
+          const completedMessage = `P→N株式移管を記録しました。次は「N口座ホイールを確認」で、${wheelTicker || "対象銘柄"} ${formatMaybeValue(transferShares)}株がN株式保有になっていることを確認してください。確認後、JSONバックアップを保存してください。`;
           return (
-            <div key={row.id} className={`rounded-md border bg-white p-3 ${highlighted ? "border-teal-500 ring-2 ring-teal-200" : "border-teal-200"}`}>
+            <div key={row.id} className={`rounded-md border bg-white p-3 ${highlighted || recordedTransfer ? "border-teal-500 ring-2 ring-teal-200" : "border-teal-200"}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-bold text-slate-950">
@@ -2904,7 +2939,9 @@ function NStockTransferCandidates({
                     {hasAutoAssignmentCorrelation(position) ? " AutoAssignmentがあるため、P売り権利行使由来の移管候補として扱います。" : " 既存のP口座取得株と照合して移管候補として確認します。"}
                   </p>
                 </div>
-                <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">P→N移管確認候補</span>
+                <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">
+                  {recordedTransfer ? "P→N株式移管を記録済み" : "P→N移管確認候補"}
+                </span>
               </div>
               <div className="mt-2 grid gap-2 text-xs sm:grid-cols-4">
                 <StatChip label="口座" value="N口座 / USD" />
@@ -2928,11 +2965,41 @@ function NStockTransferCandidates({
                   N口座に現物株がありますが、既存のP口座取得株と一致しません。株数・取得単価・権利行使済み建玉を確認してください。
                 </div>
               )}
-              {notice ? (
+              {recordedTransfer ? (
+                <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-950">
+                  <div className="font-bold">P→N株式移管を記録済み</div>
+                  <p>{notice ?? completedMessage}</p>
+                  <p className="mt-1">
+                    移管履歴: P口座からN口座へ{recordedTransfer.shares}株を移管 / 平均取得単価 {formatUSD(recordedTransfer.costBasisUSD)}
+                  </p>
+                </div>
+              ) : notice ? (
                 <p className="mt-2 rounded bg-teal-100 px-2 py-1 text-xs font-semibold text-teal-900">{notice}</p>
               ) : null}
               <div className="mt-3 flex flex-wrap gap-2">
-                {primaryMatch ? (
+                {recordedTransfer ? (
+                  <>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-md bg-teal-700 px-3 py-2 text-sm font-bold text-white hover:bg-teal-800"
+                      onClick={() => onOpenWheelManagement?.(wheelTicker)}
+                    >
+                      <RefreshCw size={15} />
+                      N口座ホイールを確認
+                    </button>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700"
+                      onClick={onDownloadJson}
+                    >
+                      <Download size={15} />
+                      JSONバックアップを保存
+                    </button>
+                    <span className="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-800">
+                      移管記録済み
+                    </span>
+                  </>
+                ) : primaryMatch ? (
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 rounded-md bg-teal-700 px-3 py-2 text-sm font-bold text-white hover:bg-teal-800"

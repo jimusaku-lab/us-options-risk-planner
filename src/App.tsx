@@ -73,6 +73,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<"positions" | "performance">("positions");
   const [saxoOrderCandidates, setSaxoOrderCandidates] = useState<SaxoApiOrderSnapshot[]>([]);
   const [saxoHistoryCandidates, setSaxoHistoryCandidates] = useState<SaxoHistoryDiscoveryItem[]>([]);
+  const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
   const {
     activeWorkspace,
     accountInputs,
@@ -226,6 +227,11 @@ export default function App() {
   const createAndOpenEditor = () => {
     createSimulationFromTemplate();
     setIsEditorOpen(true);
+  };
+  const openWheelManagement = (ticker?: string) => {
+    setActiveView("positions");
+    setIsEditorOpen(false);
+    setWheelFocusRequest({ ticker: ticker ? normalizeTicker(ticker) : undefined, requestId: Date.now() + Math.random() });
   };
   const createCandidateSimulation = (candidate: CandidateSymbol, strategyType: "covered_call" | "short_put") => {
     const simulation = createSimulationFromCandidate({
@@ -470,7 +476,8 @@ export default function App() {
     upsertSimulation(sourceForTransfer);
     createStockTransferFromSimulation(sourceForTransfer);
     setIsEditorOpen(false);
-    setQuoteStatus("P口座で権利行使取得した株式をN口座へ移管記録しました。売却損益・為替損益・オプション損益には混ぜていません。");
+    openWheelManagement(sourceForTransfer.ticker);
+    setQuoteStatus("P→N株式移管を記録しました。次は「N口座ホイールを確認」で、N株式保有になっていることを確認してください。確認後、JSONバックアップを保存してください。");
     return true;
   };
   const selectAndOpenEditor = (id: string) => {
@@ -909,8 +916,11 @@ export default function App() {
                 onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
                 onCreatePositionDraft={createSimulationFromSaxoPosition}
                 onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
+                stockTransfers={stockTransfers}
                 onOpenLinkedSimulation={openSimulationEditorAt}
                 onOpenHistoryTarget={openSelectedSimulationHistoryTarget}
+                onOpenWheelManagement={openWheelManagement}
+                onDownloadJson={downloadJson}
               />
               {isCandidatesOpen ? (
                 <CandidatePanel
@@ -947,7 +957,7 @@ export default function App() {
                 </button>
               </section>
               {activeWorkspace === "live" ? (
-                <WheelPanel cycles={wheelCycles} events={wheelEvents} stockTransfers={stockTransfers} />
+                <WheelPanel cycles={wheelCycles} events={wheelEvents} stockTransfers={stockTransfers} focusRequest={wheelFocusRequest} />
               ) : (
                 <DemoWheelNotice />
               )}
@@ -1204,6 +1214,7 @@ export default function App() {
                 cycles={wheelCycles}
                 events={wheelEvents}
                 stockTransfers={stockTransfers}
+                focusRequest={wheelFocusRequest}
                 onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
                 onCreateTransferFromSelected={
                   selected.accountEnvironment === "PROD_P_JPY_SETTLEMENT" && selected.status === "assigned"

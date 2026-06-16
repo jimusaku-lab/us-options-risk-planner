@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { StockTransferEvent, WheelCycle, WheelEvent, WheelPhase } from "@/types/domain";
 import { formatJPY, formatUSD } from "@/lib/format";
@@ -22,19 +22,34 @@ export function WheelPanel({
   cycles,
   events = [],
   stockTransfers = [],
+  focusRequest,
   onCreateFromSelected,
   onCreateTransferFromSelected,
 }: {
   cycles: WheelCycle[];
   events?: WheelEvent[];
   stockTransfers?: StockTransferEvent[];
+  focusRequest?: { ticker?: string; requestId: number } | null;
   onCreateFromSelected?: () => void;
   onCreateTransferFromSelected?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [highlightedTicker, setHighlightedTicker] = useState("");
+  const sectionRef = useRef<HTMLElement | null>(null);
   const hasCycles = cycles.length > 0;
+  useEffect(() => {
+    if (!focusRequest) return;
+    setIsOpen(true);
+    const ticker = focusRequest.ticker?.toUpperCase() ?? "";
+    setHighlightedTicker(ticker);
+    window.setTimeout(() => {
+      sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+    const timer = window.setTimeout(() => setHighlightedTicker(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [focusRequest]);
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+    <section id="wheel-management" ref={sectionRef} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-bold text-slate-950">ホイール管理 {cycles.length}件</h2>
@@ -83,6 +98,7 @@ export function WheelPanel({
               cycle={cycle}
               events={events.filter((event) => event.wheelCycleId === cycle.id)}
               stockTransfers={stockTransfers.filter((transfer) => transfer.destinationWheelCycleId === cycle.id)}
+              highlighted={Boolean(highlightedTicker) && cycle.ticker.toUpperCase() === highlightedTicker}
             />
           ))}
         </div>
@@ -95,17 +111,19 @@ function WheelCycleCard({
   cycle,
   events,
   stockTransfers,
+  highlighted,
 }: {
   cycle: WheelCycle;
   events: WheelEvent[];
   stockTransfers: StockTransferEvent[];
+  highlighted?: boolean;
 }) {
   const fx = cycle.referenceFxRateJPY ?? 0;
   const isNWheelActive = cycle.currentPhase.startsWith("n_");
   const cameFromPTransfer = stockTransfers.length > 0 || cycle.linkedSimulationIds.some((id) => id.includes("transfer"));
   const route = !isNWheelActive || cameFromPTransfer ? pRoute : nRoute;
   return (
-    <div className="rounded-md border border-slate-200 p-3 text-sm">
+    <div className={`rounded-md border p-3 text-sm ${highlighted ? "border-teal-500 bg-teal-50 ring-2 ring-teal-200" : "border-slate-200"}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="font-bold text-slate-950">
