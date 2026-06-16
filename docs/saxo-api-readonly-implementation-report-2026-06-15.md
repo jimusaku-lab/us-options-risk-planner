@@ -89,9 +89,9 @@
 
 ## commit / push
 
-- 実装commit hash: 後続commit後に確定
-- main push: 後続pushで実施
-- gh-pages push: 後続deployで実施
+- 実装commit hash: `e625954`
+- main push: この後push
+- gh-pages push: この後deploy
 
 ## 公開URL確認
 
