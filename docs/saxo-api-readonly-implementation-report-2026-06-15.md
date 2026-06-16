@@ -89,12 +89,14 @@
 ## commit / push
 
 - 実装commit hash: `5c09b6e`
-- main push: この後push
-- gh-pages push: この後deploy
+- 報告書更新commit hash: `e8a52a9`
+- Pages deploy commit hash: `dafbe1a`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- 後続deploy後に `https://jimusaku-lab.github.io/us-options-risk-planner/` の参照bundleを確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BSHdVQ34.js` を参照することを確認する。
 
 ---
 
