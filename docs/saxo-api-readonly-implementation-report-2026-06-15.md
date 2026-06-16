@@ -60,6 +60,55 @@
 
 ---
 
+# 2026-06-16 ホイール管理上部のP→N株式移管ボタン表示条件修正
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 対象ブランチ: `main` / `gh-pages`
+
+## 実装内容
+
+- ホイール管理上部で、既にP→N株式移管が記録済み、または対象ホイールがN口座側の株式保有以降へ進んでいる場合に、緑色の `P→N株式移管を記録` ボタンを出さないようにした。
+- 選択中建玉について、同じ `sourceSimulationId`、`toAccountCode=N`、同一株数の `StockTransferEvent` がある場合は、上部に `P→N株式移管は記録済み` を表示する。
+- 対象ホイールの `currentPhase` が `n_stock_holding` / `n_covered_call` / `n_called_away` の場合は、移管記録ボタンを表示しない。
+- `P→N移管待ち 済` と `P→N株式移管を記録` が同時表示される状態を禁止した。
+- 次の主導線として `次: C売り候補を確認` を表示する。
+- store側の `createStockTransferFromSimulation` でも、同じ `sourceSimulationId`、N口座、同一株数の重複作成を拒否する。
+
+## 修正ファイル
+
+- `src/App.tsx`
+- `src/components/wheel/WheelPanel.tsx`
+- `src/store/useOptionsStore.ts`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- Pages配信bundle: `assets/index-VqB-zPEO.js`
+
+## commit / push
+
+- 実装commit hash: `TODO`
+- Pages deploy commit hash: `TODO`
+- main push: `TODO`
+- gh-pages push: `TODO`
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが `assets/index-VqB-zPEO.js` を参照することを確認予定。
+
+## 残課題
+
+- 実Saxo接続データでのクリック確認は、利用者端末のローカルAPI・接続状態に依存するため、コード経路、テスト、ビルド、Pages配信bundle更新を確認対象にする。
+
+---
+
 # 2026-06-16 P→N株式移管候補カードの記録済み反映漏れ修正
 
 ## 対象

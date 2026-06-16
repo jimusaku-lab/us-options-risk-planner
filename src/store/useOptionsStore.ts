@@ -663,6 +663,13 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       const normalized = normalizeSimulation(simulation, state.activeWorkspace);
       const shares = normalized.stockPosition?.shares ?? 0;
       if (normalized.accountEnvironment !== "PROD_P_JPY_SETTLEMENT" || shares <= 0) return {};
+      const existingTransfer = state.stockTransfersByWorkspace[state.activeWorkspace].some(
+        (transfer) =>
+          transfer.sourceSimulationId === normalized.id &&
+          transfer.toAccountCode === "N" &&
+          Math.abs(transfer.shares - shares) <= 0.0001,
+      );
+      if (existingTransfer) return {};
       const id = `stock-transfer-${state.activeWorkspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const transfer: StockTransferEvent = {
         id,

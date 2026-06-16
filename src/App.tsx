@@ -103,6 +103,31 @@ export default function App() {
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
+  const selectedTransferShares = selected?.stockPosition?.shares ?? selected?.stockAcquisition?.shares ?? 0;
+  const selectedStockTransferRecorded = Boolean(
+    selected &&
+      selectedTransferShares > 0 &&
+      stockTransfers.some(
+        (transfer) =>
+          transfer.sourceSimulationId === selected.id &&
+          transfer.toAccountCode === "N" &&
+          Math.abs(transfer.shares - selectedTransferShares) <= 0.0001,
+      ),
+  );
+  const selectedLinkedWheelCycle = selected
+    ? wheelCycles.find((cycle) => cycle.currentPhase !== "cycle_closed" && cycle.linkedSimulationIds.includes(selected.id))
+    : undefined;
+  const selectedWheelAlreadyAdvanced = Boolean(
+    selectedLinkedWheelCycle &&
+      ["n_stock_holding", "n_covered_call", "n_called_away"].includes(selectedLinkedWheelCycle.currentPhase),
+  );
+  const canCreateStockTransferFromSelected = Boolean(
+    selected &&
+      selected.accountEnvironment === "PROD_P_JPY_SETTLEMENT" &&
+      selected.status === "assigned" &&
+      !selectedStockTransferRecorded &&
+      !selectedWheelAlreadyAdvanced,
+  );
   const pendingCashEffects = calculatePendingAccountCashEffects(simulations, accountInputs);
   const yearlyPerformanceSummary = calculateYearlyPerformanceSummary(simulations, performanceYear);
   const canUseExternalQuotes = true;
@@ -1219,11 +1244,8 @@ export default function App() {
                 stockTransfers={stockTransfers}
                 focusRequest={wheelFocusRequest}
                 onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
-                onCreateTransferFromSelected={
-                  selected.accountEnvironment === "PROD_P_JPY_SETTLEMENT" && selected.status === "assigned"
-                    ? () => createStockTransferFromSimulation(selected)
-                    : undefined
-                }
+                selectedTransferRecorded={selectedStockTransferRecorded}
+                onCreateTransferFromSelected={canCreateStockTransferFromSelected ? () => createStockTransferFromSimulation(selected) : undefined}
               />
             ) : (
               <DemoWheelNotice />

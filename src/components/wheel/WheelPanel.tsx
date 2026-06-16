@@ -25,6 +25,7 @@ export function WheelPanel({
   focusRequest,
   onCreateFromSelected,
   onCreateTransferFromSelected,
+  selectedTransferRecorded,
 }: {
   cycles: WheelCycle[];
   events?: WheelEvent[];
@@ -32,6 +33,7 @@ export function WheelPanel({
   focusRequest?: { ticker?: string; requestId: number } | null;
   onCreateFromSelected?: () => void;
   onCreateTransferFromSelected?: () => void;
+  selectedTransferRecorded?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedTicker, setHighlightedTicker] = useState("");
@@ -60,7 +62,12 @@ export function WheelPanel({
           ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          {onCreateTransferFromSelected ? (
+          {selectedTransferRecorded ? (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
+              P→N株式移管は記録済み
+              <span className="ml-2 text-xs font-bold text-emerald-700">次: C売り候補を確認</span>
+            </div>
+          ) : onCreateTransferFromSelected ? (
             <button
               className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100"
               onClick={onCreateTransferFromSelected}
