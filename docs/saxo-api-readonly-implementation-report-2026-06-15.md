@@ -58,6 +58,44 @@
 
 - この時点ではなし。
 
+# Saxo再取得時の反映済み権利行使履歴表示修正 報告 2026-06-16
+
+## 対象
+
+- 公開版: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.15`
+
+## 修正内容
+
+- Saxo履歴候補のassignment判定に、6-A必須項目完了、`stockAcquisition.confirmationStatus === "confirmed"`、同じ `sourceSimulationId` の `StockTransferEvent` の有無を含めた。
+- `assignmentImportantCount` は未処理またはbrokenの権利行使履歴だけを赤い重要候補として数えるようにし、6-A反映済み・P→N移管済みの履歴を除外した。
+- `reflectionState.status === "candidate"` でも6-A必須項目が完了していれば、`6-A確認済み / 現物株取得反映済み` と表示し、`推奨: 6-Aで現物株取得を確認` ボタンを出さないようにした。
+- P→N移管済みの場合は、履歴候補行を `P→N移管済み / N口座で株式保有中` と表示し、赤い反映待ち候補として扱わないようにした。
+- 6-Aの `入力欄を閉じて俯瞰へ戻る` で必須項目が完了している場合、`stockAcquisition.confirmationStatus` を `confirmed` へ昇格するようにした。
+
+## 修正ファイル
+
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `src/components/wizard/SimulationEditor.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+
+## commit / push
+
+- 実装commit hash: 後続commit後に確定
+- main push: 後続pushで実施
+- gh-pages push: 後続deployで実施
+
+## 公開URL確認
+
+- 後続deploy後に `https://jimusaku-lab.github.io/us-options-risk-planner/` の参照bundleを確認する。
+
 ---
 
 # 2026-06-16 ホイール管理上部のP→N株式移管ボタン表示条件修正

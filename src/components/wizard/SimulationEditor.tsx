@@ -70,7 +70,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     commissionJPY: 0,
   };
   const stockSettlement = simulation.stockSettlement ?? defaultStockSettlement;
-  const defaultStockAcquisition = {
+  const defaultStockAcquisition: NonNullable<TradeSimulation["stockAcquisition"]> = {
     enabled: false,
     acquisitionDate: defaultEventDate,
     shares: (putLeg?.quantity ?? 1) * 100,
@@ -119,6 +119,12 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
         ...patch,
       },
     });
+  };
+  const closeAfterStockAcquisitionReview = () => {
+    if (stockAcquisitionComplete && stockAcquisition.confirmationStatus !== "confirmed") {
+      updateStockAcquisition({ confirmationStatus: "confirmed" });
+    }
+    (stockAcquisitionComplete ? onStockAcquisitionCompleteClose ?? onCloseEditor : onCloseEditor)?.();
   };
   const updateStrategy = (strategyType: StrategyType) => {
     const nextNeedsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
@@ -1781,7 +1787,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               <button
                 type="button"
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50"
-                onClick={stockAcquisitionComplete ? onStockAcquisitionCompleteClose ?? onCloseEditor : onCloseEditor}
+                onClick={closeAfterStockAcquisitionReview}
               >
                 入力欄を閉じて俯瞰へ戻る
               </button>

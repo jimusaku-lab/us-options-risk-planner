@@ -92,8 +92,8 @@ type LinkedSimulationResolution =
 
 type HistoryReflectionState =
   | { status: "none" }
-  | { status: "candidate"; simulationId: string; recordId: string; target: "entry" | "close" | "assignment" }
-  | { status: "official"; simulationId: string; recordId: string; target: "entry" | "close" | "assignment" }
+  | { status: "candidate"; simulationId: string; recordId: string; target: "entry" | "close" | "assignment"; assignmentCompleted?: boolean; assignmentTransferred?: boolean }
+  | { status: "official"; simulationId: string; recordId: string; target: "entry" | "close" | "assignment"; assignmentCompleted?: boolean; assignmentTransferred?: boolean }
   | { status: "ignored" }
   | { status: "broken"; target: "entry" | "close" | "assignment" | "unknown"; reason: string };
 
@@ -290,8 +290,8 @@ export function SaxoReadOnlyPanel({
     [mappedPositions, simulations],
   );
   const historyReflectionStates = useMemo(
-    () => createHistoryReflectionStates(historyEndpoints, simulations, reflectedHistoryIds, ignoredHistoryIds),
-    [historyEndpoints, ignoredHistoryIds, simulations, reflectedHistoryIds],
+    () => createHistoryReflectionStates(historyEndpoints, simulations, reflectedHistoryIds, ignoredHistoryIds, stockTransfers),
+    [historyEndpoints, ignoredHistoryIds, simulations, reflectedHistoryIds, stockTransfers],
   );
 
   function resolveLinkedSimulation(row: SaxoPositionReconciliationRow): LinkedSimulationResolution {
@@ -3210,6 +3210,10 @@ function HistoryDiscoveryPreview({
     const state = reflectionStates[item.id];
     return state?.status === "candidate" || state?.status === "official";
   };
+  const isPendingAssignmentReflection = (item: SaxoHistoryDiscoveryItem) => {
+    const state = reflectionStates[item.id];
+    return getSaxoHistoryCandidateTarget(item) === "assignment" && isActualReflection(item) && !isCompletedAssignmentReflection(state);
+  };
   const creatableItems = actionableHistoryItems.filter((item) => {
     const state = reflectionStates[item.id] ?? { status: "none" as const };
     return state.status === "none" || state.status === "broken";
@@ -3217,12 +3221,21 @@ function HistoryDiscoveryPreview({
   const hasCreatableItems = creatableItems.length > 0;
   const entryReflectedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "entry" && isActualReflection(item)).length;
   const closeReflectedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "close" && isActualReflection(item)).length;
-  const assignmentReflectedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "assignment" && isActualReflection(item)).length;
+  const assignmentReflectedCount = historyItems.filter(isPendingAssignmentReflection).length;
+  const assignmentCompletedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "assignment" && isCompletedAssignmentReflection(reflectionStates[item.id])).length;
   const assignmentImportantCount = historyItems.filter(
-    (item) => getSaxoHistoryCandidateTarget(item) === "assignment" && findSaxoAssignmentStockAcquisitionItem(item, historyItems),
+    (item) => {
+      const state = reflectionStates[item.id] ?? { status: "none" as const };
+      return (
+        getSaxoHistoryCandidateTarget(item) === "assignment" &&
+        findSaxoAssignmentStockAcquisitionItem(item, historyItems) &&
+        !isCompletedAssignmentReflection(state) &&
+        (state.status === "none" || state.status === "broken")
+      );
+    },
   ).length;
   const firstReflectedCloseItem = historyItems.find((item) => getSaxoHistoryCandidateTarget(item) === "close" && isActualReflection(item));
-  const firstReflectedAssignmentItem = historyItems.find((item) => getSaxoHistoryCandidateTarget(item) === "assignment" && isActualReflection(item));
+  const firstReflectedAssignmentItem = historyItems.find(isPendingAssignmentReflection);
   const brokenCount = historyItems.filter((item) => reflectionStates[item.id]?.status === "broken").length;
   const ignoredCount = historyItems.filter((item) => reflectionStates[item.id]?.status === "ignored").length;
   const unknownCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "unknown").length;
@@ -3304,6 +3317,7 @@ function HistoryDiscoveryPreview({
               <div className="rounded bg-white px-3 py-2">建玉開始の確認待ち: {entryReflectedCount}件</div>
               <div className="rounded bg-white px-3 py-2">決済実績の確認待ち: {closeReflectedCount}件</div>
               <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認待ち: {assignmentReflectedCount}件</div>
+              {assignmentCompletedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認済み: {assignmentCompletedCount}件</div> : null}
               {brokenCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">復旧が必要: {brokenCount}件（候補実体が見つかりません）</div> : null}
               {ignoredCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">無視済み: {ignoredCount}件（復旧対象から除外）</div> : null}
               {unknownCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">要確認: {unknownCount}件（自動反映なし）</div> : null}
@@ -3458,8 +3472,13 @@ function HistoryCandidateRow({
   onUnignore: () => void;
 }) {
   const target = getSaxoHistoryCandidateTarget(item);
-  const isOfficialAssignment = target === "assignment" && reflectionState.status === "official";
-  const isPriorityAssignment = target === "assignment" && hasAssignmentStockItem && !isOfficialAssignment;
+  const isAssignmentCompleted = target === "assignment" && isCompletedAssignmentReflection(reflectionState);
+  const isAssignmentTransferred = target === "assignment" && isTransferredAssignmentReflection(reflectionState);
+  const isPriorityAssignment =
+    target === "assignment" &&
+    hasAssignmentStockItem &&
+    !isAssignmentCompleted &&
+    (reflectionState.status === "none" || reflectionState.status === "broken");
   const labelParts = [
     item.tradeDate ?? "日付未取得",
     item.symbol ?? "銘柄未取得",
@@ -3502,15 +3521,17 @@ function HistoryCandidateRow({
           <div className="rounded border border-teal-200 bg-teal-50 px-2 py-1 text-xs leading-5 text-teal-900">
             <div className="font-bold">{reflectionState.status === "official" ? "反映済み" : "反映候補作成済み"}</div>
             <div>
-              {isOfficialAssignment
-                ? "6-A確認済み / 現物株取得反映済みです。次はP→N移管済みならN口座ホイールを確認してください。"
+              {isAssignmentTransferred
+                ? "P→N移管済み / N口座で株式保有中です。赤い反映待ち候補としては扱いません。"
+                : isAssignmentCompleted
+                  ? "6-A確認済み / 現物株取得反映済みです。追加の6-A確認は不要です。"
                 : reflectionState.status === "official"
                   ? "正式保存済みです。重複作成は不要です。"
                 : target === "assignment"
                   ? "6-Aで現物株取得を確認してください。通常の買戻し決済としては扱いません。"
                   : `${getHistoryCandidateDestinationLabel(item)}で確認してください`}
             </div>
-            {!isOfficialAssignment ? (
+            {!isAssignmentCompleted ? (
               <button
                 type="button"
                 className={`mt-1 rounded border px-2 py-0.5 text-xs font-bold ${
@@ -4119,6 +4140,7 @@ function createHistoryReflectionStates(
   simulations: TradeSimulation[],
   reflectedHistoryIds: string[],
   ignoredHistoryIds: string[],
+  stockTransfers: StockTransferEvent[],
 ): Record<string, HistoryReflectionState> {
   const states: Record<string, HistoryReflectionState> = {};
   const items = endpoints.flatMap((endpoint) => endpoint.items ?? []);
@@ -4198,6 +4220,7 @@ function createHistoryReflectionStates(
         })
       : undefined;
     if (assignmentRecord?.stockAcquisition) {
+      const assignmentWorkflow = getAssignmentWorkflowState(assignmentRecord, stockTransfers);
       if (assignmentRecord.stockAcquisition.confirmationStatus === "ignored") {
         states[item.id] = { status: "none" };
       } else if (assignmentRecord.stockAcquisition.confirmationStatus === "invalid") {
@@ -4208,10 +4231,12 @@ function createHistoryReflectionStates(
         };
       } else {
         states[item.id] = {
-          status: assignmentRecord.stockAcquisition.confirmationStatus === "confirmed" ? "official" : "candidate",
+          status: assignmentWorkflow.completed ? "official" : "candidate",
           simulationId: assignmentRecord.id,
           recordId: assignmentRecord.stockAcquisition.sourceCandidateId ?? assignmentRecord.stockAcquisition.sourceTradeId ?? assignmentRecord.id,
           target,
+          assignmentCompleted: assignmentWorkflow.completed,
+          assignmentTransferred: assignmentWorkflow.transferred,
         };
       }
       continue;
@@ -4221,6 +4246,55 @@ function createHistoryReflectionStates(
       : { status: "none" };
   }
   return states;
+}
+
+function getAssignmentWorkflowState(
+  simulation: TradeSimulation,
+  stockTransfers: StockTransferEvent[],
+): { completed: boolean; transferred: boolean } {
+  const acquisition = simulation.stockAcquisition;
+  const transferred = Boolean(findStockTransferForSimulation(simulation, stockTransfers));
+  const completed =
+    transferred ||
+    acquisition?.confirmationStatus === "confirmed" ||
+    isStockAcquisitionRequiredFieldsComplete(simulation);
+  return { completed, transferred };
+}
+
+function isStockAcquisitionRequiredFieldsComplete(simulation: TradeSimulation): boolean {
+  const acquisition = simulation.stockAcquisition;
+  return Boolean(
+    simulation.status === "assigned" &&
+      acquisition?.enabled &&
+      Number.isFinite(acquisition.shares) &&
+      acquisition.shares > 0 &&
+      Number.isFinite(acquisition.priceUSD) &&
+      acquisition.priceUSD > 0,
+  );
+}
+
+function findStockTransferForSimulation(
+  simulation: TradeSimulation,
+  stockTransfers: StockTransferEvent[],
+): StockTransferEvent | undefined {
+  const shares = simulation.stockPosition?.shares ?? simulation.stockAcquisition?.shares ?? 0;
+  if (shares <= 0) return undefined;
+  return stockTransfers.find(
+    (transfer) =>
+      transfer.sourceSimulationId === simulation.id &&
+      transfer.toAccountCode === "N" &&
+      Math.abs(transfer.shares - shares) <= 0.0001,
+  );
+}
+
+function isCompletedAssignmentReflection(state: HistoryReflectionState | undefined): boolean {
+  if (!state || (state.status !== "candidate" && state.status !== "official")) return false;
+  return state.target === "assignment" && (state.assignmentCompleted === true || state.status === "official");
+}
+
+function isTransferredAssignmentReflection(state: HistoryReflectionState | undefined): boolean {
+  if (!state || (state.status !== "candidate" && state.status !== "official")) return false;
+  return state.target === "assignment" && state.assignmentTransferred === true;
 }
 
 function createReflectionSummary({

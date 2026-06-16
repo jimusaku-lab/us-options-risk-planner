@@ -3491,3 +3491,68 @@ P→N株式移管を記録しました。
 - `npm test` と公開版ビルドを通す
 - GitHub Pagesへpushする
 - 公開URLで、建玉選択中でも記録済みカードへ切り替わることを確認する
+
+### 18.15 2026-06-16 Saxo再取得時に反映済み履歴が反映待ちへ戻る問題
+
+ローカル版で、6-A現物株取得とP→N株式移管がすでに反映済みの状態にもかかわらず、Saxoの `まとめて取得` を再実行すると、履歴候補画面に再び `重要: P売り権利行使候補`、`推奨: 6-Aへ進む`、`権利行使・株式取得の確認待ち` のような表示が出る。
+
+公開版でも同じロジックを使うため、このままでは公開版利用者にも同じ混乱が起きる。表示分類として誤りである。
+
+Saxo履歴APIは、過去の同じ約定履歴を再取得のたびに返す。したがって、再取得された履歴が「未処理」かどうかは、Saxo側の履歴有無だけで判定してはいけない。アプリ内の保存済み記録を優先し、次の順で完了判定を行う。
+
+判定優先順位:
+
+1. 同じ履歴キーが `ignored` の場合は無視済み
+2. 同じ履歴キーに紐づく6-A `stockAcquisition.confirmationStatus === "confirmed"` がある場合は完了
+3. `confirmationStatus` が未設定または `pending` でも、6-Aの必須項目がすべて埋まっている場合は「入力補助反映済み」とし、赤い未処理扱いにしない
+4. 同じ `sourceSimulationId` の `StockTransferEvent` が存在する場合は、P売り権利行使からN口座株式保有までの一連の処理は完了
+5. 上記に該当しない場合だけ、6-A確認待ちまたは候補作成待ちとして表示する
+
+現状コードで確認した問題点:
+
+- `assignmentImportantCount` が、`findSaxoAssignmentStockAcquisitionItem(item, historyItems)` の有無だけで件数を数えている
+- そのため、6-A反映済み・P→N移管済みの履歴でも `重要: P売り権利行使候補` に再カウントされる
+- `isPriorityAssignment` が `!isOfficialAssignment` だけを条件にしているため、`candidate` 状態の権利行使履歴が赤い重要カードのまま残る
+- `reflectionState.status === "candidate"` の権利行使履歴でも `推奨: 6-Aで現物株取得を確認` ボタンが出続ける
+- 6-Aの `入力欄を閉じて俯瞰へ戻る` は、必須項目が埋まっていることを確認しているが、`stockAcquisition.confirmationStatus = "confirmed"` へ昇格していない
+
+修正方針:
+
+- `isCompletedAssignmentWorkflow(item)` のような判定を追加する
+  - 6-A必須項目が完了している
+  - または `stockAcquisition.confirmationStatus === "confirmed"`
+  - または対応する `StockTransferEvent` が存在する
+- `assignmentImportantCount` は、完了済み・反映済み・無視済みの履歴を除外して数える
+- `isPriorityAssignment` は、`reflectionState.status === "none"` または `broken` の未処理時だけ `true` にする
+- `reflectionState.status === "candidate"` かつ6-A必須項目が完了している場合は、赤ではなく緑の `6-A確認済み / 現物株取得反映済み` と表示する
+- `reflectionState.status === "candidate"` の権利行使履歴に、常に `推奨: 6-Aで現物株取得を確認` を出さない
+- 6-Aで必須項目が完了している状態で `入力欄を閉じて俯瞰へ戻る` を押したら、`stockAcquisition.confirmationStatus` を `confirmed` に更新する
+- P→N移管済みの場合は、履歴候補画面へ戻さず、N口座ホイール確認またはダッシュボードへ戻す
+
+完了後の期待表示:
+
+```text
+履歴候補
+確認済みの履歴だけです。追加で反映が必要な候補はありません。
+
+2026-06-12 / NVDA/12M26P207.5:XCBF / 買 / 価格0
+6-A確認済み / P→N移管済み / N口座で株式保有中
+```
+
+出してはいけない表示:
+
+```text
+重要: P売り権利行使候補
+推奨アクション: 6-Aへ進む
+権利行使・株式取得の確認待ち
+推奨: 6-Aで現物株取得を確認
+```
+
+公開版の検証条件:
+
+- 公開版からローカルAPI補助サーバを使ってSaxo履歴を再取得する
+- 2026-06-12 NVDA 207.5P の価格0買い履歴と、同日NVDA株100株買い履歴が再取得される
+- アプリ側には6-A現物株取得記録が存在する
+- アプリ側にはP→N株式移管記録が存在する
+- `まとめて取得` を何度押しても、赤い重要候補や6-A確認待ちは復活しない
+- 修正後はGitHub Pagesへpushし、公開URLで確認する
