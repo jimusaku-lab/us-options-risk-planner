@@ -60,6 +60,62 @@
 
 ---
 
+# 2026-06-16 一般公開版 Saxo接続準備画面の説明順序修正
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 対象ブランチ: `main` / `gh-pages`
+
+## 実装内容
+
+- Saxo API接続準備画面の説明順序を変更した。
+- 最初に、アプリ本体はGitHub Pagesの公開版を使い続けること、PCに置くのはSaxo通信を担当する補助ツールだけであることを表示するようにした。
+- `なぜ必要か` として、GitHub Pagesが静的Webアプリであり、OAuth tokenの安全な保持、macOS Keychain/Windows側保存領域の利用、Saxo API中継サーバの役割を担えないことを明記した。
+- `セキュリティ上の意味` として、Saxo ID、パスワード、2FA、OAuth token、口座情報がGitHub Pagesや作者側に保存されないことを明記した。
+- 旧見出し `ローカルAPI補助サーバの準備` を `Saxo接続用のPC側補助ツールを準備` に変更した。
+- Mac / Windows選択、Node.js、`.env.local`、起動コマンドは、役割説明・必要理由・セキュリティ説明の後に表示される順序へ整理した。
+- 通常導線から `公開版リポジトリをclone`、`jimusaku-lab/us-options-risk-planner`、`ローカル版アプリ` に見える表現が出ないことを確認した。
+- Saxo APIはRead-onlyのままで、発注・注文変更・注文取消endpointは追加していない。
+- OAuth token、Saxo ID、password、2FA、Client Secretの保存・入力欄は追加していない。
+
+## 修正ファイル
+
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `docs/saxo-api-readonly-detailed-design-2026-06-08.md`
+- `docs/友人向けSaxo API接続準備ガイド.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-OLICrsd0.js`
+  - bundle内に `ローカルAPI補助サーバの準備`、`公開版リポジトリ`、`jimusaku-lab/us-options-risk-planner`、`ダウンロードまたはclone`、`ローカル版アプリ`、`/Users/motomichi` が含まれないことを確認した。
+  - bundle内に `Saxo接続用のPC側補助ツールを準備`、`アプリ本体は、今まで通りGitHub Pagesの公開版を使います`、`GitHub Pagesは静的Webアプリのため`、`Saxo ID、パスワード、2FA、OAuth token、口座情報はGitHub Pagesや作者側には保存されません`、`PowerShell` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: 後続commitで確定
+- Pages deploy commit hash: 後続commitで確定
+- main push: 実施予定
+- gh-pages push: 実施予定
+
+## 公開URL確認
+
+- `gh-pages` 反映後、`https://jimusaku-lab.github.io/us-options-risk-planner/` が新bundle `assets/index-OLICrsd0.js` を参照することを確認する。
+- 公開bundle内に旧表現が残らず、説明順序とPC側補助ツール表現へ置き換わっていることを確認する。
+
+## 残課題
+
+- この時点ではなし。
+
+---
+
 # 2026-06-16 一般公開版 Saxo API Read-only オンボーディング文言修正
 
 ## 対象

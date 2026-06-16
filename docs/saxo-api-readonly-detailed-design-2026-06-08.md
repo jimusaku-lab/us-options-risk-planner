@@ -7191,6 +7191,19 @@ GitHub Pages公開版でSaxo API Read-onlyを使うには、静的サイトだ�
 - `.env.local`、Client ID、OAuth token、口座データはGitHub Pagesへ保存しない。
 - 発注機能は引き続き持たせない。
 
+### 表示順序
+
+公開版Saxo接続準備画面では、いきなりNode.jsや起動コマンドを出さない。
+初回ユーザーが目的を理解できるよう、次の順序で表示する。
+
+1. アプリ本体はGitHub Pagesの公開版を使い続けること。
+2. PCに置く必要があるのは、Saxo通信を担当するローカルAPI補助ツールだけであること。
+3. GitHub Pagesは静的Webアプリのため、OAuth tokenの安全な保持、macOS Keychain/Windows側保存領域の利用、Saxo API中継サーバの役割を担えないこと。
+4. この分離により、Saxo ID、password、2FA、OAuth token、口座情報がGitHub Pagesや作者側に保存されないこと。
+5. その後にMac / Windows選択、Node.js、`.env.local`、起動コマンドへ進むこと。
+
+UI見出しは `Saxo接続用のPC側補助ツールを準備` とする。
+
 ### OS選択
 
 公開版Saxo APIパネル内に、ローカルAPI起動環境を選ぶUIを置く。

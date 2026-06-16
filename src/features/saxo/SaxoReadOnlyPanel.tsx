@@ -1525,38 +1525,38 @@ function SaxoApiOnboardingSection({
         <div>
           <h3 className="text-sm font-bold text-sky-950">Saxo API接続準備</h3>
           <p className="mt-1 text-sm leading-6 text-sky-900">
-            Developer Portal account、OpenAPI application、LIVE AppKey、Redirect URI、ローカルAPI起動の関係を順番に確認します。
             アプリ本体はGitHub Pagesの公開版を使います。Saxo API接続を使う場合だけ、PCにローカルAPI補助ツールを準備します。
-            ローカルAPI補助ツールはSaxoとの通信だけを担当します。
-          </p>
-          <p className="mt-1 text-xs font-semibold text-sky-800">
-            Redirect URI: <code className="rounded bg-white px-1 py-0.5">http://127.0.0.1:18787/api/saxo/auth/callback</code>
+            この補助ツールはSaxoとの通信だけを担当します。
           </p>
         </div>
         <span className="rounded bg-white px-2 py-1 text-xs font-bold text-sky-800">
-          {completed}/{SAXO_ONBOARDING_STEPS.length} 完了
+          GitHub Pages公開版
         </span>
       </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-2">
-        {SAXO_ONBOARDING_STEPS.map((step) => (
-          <label
-            key={step.id}
-            className="flex items-center gap-2 rounded-md bg-white px-3 py-2 text-sm font-semibold text-slate-800 ring-1 ring-sky-100"
-          >
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-slate-300 text-sky-700"
-              checked={Boolean(checks[step.id])}
-              onChange={(event) => onToggle(step.id, event.target.checked)}
-            />
-            <span>{step.label}</span>
-          </label>
-        ))}
+      <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
+        <div className="rounded-md border border-sky-200 bg-white p-3">
+          <div className="font-bold text-slate-950">公開版と補助ツールの役割</div>
+          <p className="mt-1 leading-6 text-slate-700">
+            アプリ本体は、今まで通りGitHub Pagesの公開版を使います。Saxo API接続を使う場合だけ、Saxoとの通信を担当する補助ツールをあなたのPC上で起動します。
+          </p>
+        </div>
+        <div className="rounded-md border border-sky-200 bg-white p-3">
+          <div className="font-bold text-slate-950">なぜ必要か</div>
+          <p className="mt-1 leading-6 text-slate-700">
+            GitHub Pagesは静的Webアプリのため、SaxoのOAuth tokenを安全に保存したり、macOS Keychain/Windows側の保存領域を使ったり、Saxo APIの中継サーバになることはできません。
+          </p>
+        </div>
+        <div className="rounded-md border border-sky-200 bg-white p-3">
+          <div className="font-bold text-slate-950">セキュリティ上の意味</div>
+          <p className="mt-1 leading-6 text-slate-700">
+            この仕組みにより、Saxo ID、パスワード、2FA、OAuth token、口座情報はGitHub Pagesや作者側には保存されません。
+          </p>
+        </div>
       </div>
       <div className="mt-3 rounded-md border border-sky-200 bg-white p-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h4 className="text-sm font-bold text-slate-950">ローカルAPI補助ツールの準備</h4>
+            <h4 className="text-sm font-bold text-slate-950">Saxo接続用のPC側補助ツールを準備</h4>
             <p className="mt-1 text-xs leading-5 text-slate-700">
               初回は、Node.js LTS、ローカルAPI補助ツール、`.env.local` の準備が必要です。準備が終わるまでは起動コマンドを実行しても成功しません。
               アプリ本体の更新はGitHub Pages側で反映され、補助ツールはSaxo API接続に必要な通信だけを担当します。
@@ -1618,6 +1618,9 @@ function SaxoApiOnboardingSection({
             起動準備は完了扱いです。下のSaxoローカルAPIカードでOS別の起動コマンドをコピーできます。
           </div>
         )}
+        <p className="mt-3 text-xs font-semibold text-sky-800">
+          Redirect URI: <code className="rounded bg-sky-50 px-1 py-0.5">http://127.0.0.1:18787/api/saxo/auth/callback</code>
+        </p>
         <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700">
           <div className="font-bold text-slate-900">.env.local について</div>
           <p className="mt-1">
@@ -1634,6 +1637,35 @@ function SaxoApiOnboardingSection({
           <li>Client Secretはこのアプリでは使いません。入力欄も作りません。</li>
           <li>ローカル設定へ入れるのはLIVE AppKey（Client ID）だけです。</li>
         </ul>
+      </div>
+      <div className="mt-3 rounded-md border border-sky-200 bg-white p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h4 className="text-sm font-bold text-slate-950">Developer Portal側の準備</h4>
+            <p className="mt-1 text-xs leading-5 text-slate-600">
+              PC側補助ツールを起動する前後で、LIVE AppKeyとRedirect URIを確認します。
+            </p>
+          </div>
+          <span className="rounded bg-sky-50 px-2 py-1 text-xs font-bold text-sky-800">
+            {completed}/{SAXO_ONBOARDING_STEPS.length} 完了
+          </span>
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {SAXO_ONBOARDING_STEPS.map((step) => (
+            <label
+              key={step.id}
+              className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800 ring-1 ring-slate-100"
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-sky-700"
+                checked={Boolean(checks[step.id])}
+                onChange={(event) => onToggle(step.id, event.target.checked)}
+              />
+              <span>{step.label}</span>
+            </label>
+          ))}
+        </div>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button

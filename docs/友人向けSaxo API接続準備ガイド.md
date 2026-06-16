@@ -84,6 +84,13 @@ GitHub Pages自体はSaxoへ接続しません。Saxoとの通信は、自分の
 更新も今まで通りGitHub Pages側で反映されます。
 PCに置く必要があるのは、Saxoと通信するためのローカルAPI補助ツールだけです。
 
+なぜ補助ツールが必要か:
+
+- GitHub Pagesは静的Webアプリであり、SaxoのOAuth tokenを安全に保存する場所にはできません。
+- macOS KeychainやWindows側の保存領域は、利用者本人のPC上の補助ツールから使います。
+- GitHub PagesはSaxo APIの中継サーバにはなりません。
+- この仕組みにより、Saxo ID、パスワード、2FAコード、OAuth token、口座情報はGitHub Pagesや作者側には保存されません。
+
 ローカルAPI補助ツールのフォルダで、次を実行します。
 
 ```bash
