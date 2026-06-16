@@ -98,6 +98,51 @@ SAXO_LOCAL_API_PORT=18787
 
 `.env.local` はGit管理に入れません。
 
+### Mac / Windows の違い
+
+アプリが表示する起動コマンドは、使っているPCに合わせる必要があります。
+
+- Mac: ターミナルで起動します。
+- Windows: PowerShellで起動します。
+
+Mac向けの環境変数指定形式は、Windowsではそのまま使えません。
+WindowsではPowerShell形式で環境変数を設定します。
+
+Macでは、公開版リポジトリのフォルダをターミナルで開いてから、アプリが表示する1行コマンドを貼り付けます。
+`>` だけが出て止まった場合は `Control + C` でキャンセルし、1行コマンドを貼り直します。
+
+```powershell
+cd "C:\path\to\us-options-risk-planner-public-repo"
+$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="https://jimusaku-lab.github.io"
+$env:SAXO_LOCAL_UI_RETURN_URL="https://jimusaku-lab.github.io/us-options-risk-planner/"
+npm run dev:saxo-api
+```
+
+### 起動できたかどうかの見方
+
+ローカルAPIの起動に成功すると、ターミナルまたはPowerShellに次のような表示が出ます。
+
+```text
+Saxo read-only local API listening on http://127.0.0.1:18787
+```
+
+この表示が出たら、ターミナル/PowerShellは閉じずに置いてください。
+その後、アプリ画面に戻って `起動できたか確認` を押します。
+
+Macでコマンド貼り付け後に `>` だけが表示されて止まった場合は、まだ実行されていません。
+`Control + C` でキャンセルし、アプリが表示する1行コマンドを貼り直してください。
+
+### `.env.local` が必要な理由
+
+公開版GitHub PagesはClient IDやOAuth tokenを保存しません。
+そのため、ローカルAPIを起動するフォルダに `.env.local` が必要です。
+
+既に自分のローカル版でSaxo接続できている場合は、その `.env.local` を公開版リポジトリへコピーして使えます。
+初めて使う場合は、Saxo Developer Portalで取得したLIVE AppKeyを `.env.local` に設定します。
+
+`.env.local` はGitHubにpushしてはいけません。
+このリポジトリでは `.gitignore` で除外します。
+
 ## 6. ChatGPT/Codexに貼ってよい情報
 
 貼ってよいもの:

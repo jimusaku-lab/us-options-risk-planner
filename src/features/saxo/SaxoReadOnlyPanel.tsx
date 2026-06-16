@@ -59,6 +59,8 @@ const SAXO_DRAFTED_POSITION_KEY = "us-options-saxo-drafted-position-candidates-v
 const SAXO_LINKED_POSITION_KEY = "us-options-saxo-linked-position-candidates-v1";
 const SAXO_LINKED_POSITION_TARGET_KEY = "us-options-saxo-linked-position-targets-v1";
 const SAXO_ONBOARDING_CHECKS_KEY = "us-options-saxo-onboarding-checks-v1";
+const SAXO_LOCAL_API_OS_KEY = "us-options-saxo-local-api-os-v1";
+const SAXO_LOCAL_API_SETUP_KEY = "us-options-saxo-local-api-setup-v1";
 const SAXO_ONBOARDING_STEPS = [
   { id: "developer_portal", label: "Saxo Developer Portalに入れる" },
   { id: "sim_application", label: "SIM applicationを作成した" },
@@ -69,9 +71,17 @@ const SAXO_ONBOARDING_STEPS = [
   { id: "readonly_connected", label: "Read-only接続できた" },
 ] as const;
 type SaxoOnboardingStepId = (typeof SAXO_ONBOARDING_STEPS)[number]["id"];
-const SAXO_PUBLIC_REPO_PATH = "/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo";
+const SAXO_LOCAL_API_SETUP_STEPS = [
+  { id: "repository", label: "公開版リポジトリをダウンロード/clone済み" },
+  { id: "node", label: "Node.js/npm導入済み" },
+  { id: "env_local", label: ".env.local作成済み" },
+  { id: "local_api", label: "ローカルAPI起動済み" },
+] as const;
+type SaxoLocalApiSetupStepId = (typeof SAXO_LOCAL_API_SETUP_STEPS)[number]["id"];
+type SaxoLocalApiOs = "mac" | "windows" | "unknown";
 const SAXO_PUBLIC_UI_ALLOWED_ORIGIN = "https://jimusaku-lab.github.io";
 const SAXO_PUBLIC_UI_RETURN_URL = "https://jimusaku-lab.github.io/us-options-risk-planner/";
+const SAXO_LOCAL_API_SUCCESS_LOG = "Saxo read-only local API listening on http://127.0.0.1:18787";
 
 type SaxoPanelConnectionState = NonNullable<SaxoApiStatus["connectionState"]> | "disconnected" | "local_api_down";
 type LocalApiReachability = "unknown" | "checking" | "down" | "cors_or_pna_blocked" | "up";
@@ -151,6 +161,10 @@ export function SaxoReadOnlyPanel({
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [onboardingChecks, setOnboardingChecks] = useState<Record<SaxoOnboardingStepId, boolean>>(loadOnboardingChecks);
+  const [localApiOs, setLocalApiOs] = useState<SaxoLocalApiOs>(loadLocalApiOs);
+  const [localApiSetupChecks, setLocalApiSetupChecks] =
+    useState<Record<SaxoLocalApiSetupStepId, boolean>>(loadLocalApiSetupChecks);
+  const [startCommandCopied, setStartCommandCopied] = useState(false);
   const mappingWorkspace = workspace === "demo" ? "demo" : "real";
   const pendingSummaryRef = useRef<HTMLDivElement | null>(null);
   const mappingRef = useRef<HTMLDivElement | null>(null);
@@ -205,6 +219,14 @@ export function SaxoReadOnlyPanel({
   useEffect(() => {
     saveOnboardingChecks(onboardingChecks);
   }, [onboardingChecks]);
+
+  useEffect(() => {
+    saveLocalApiOs(localApiOs);
+  }, [localApiOs]);
+
+  useEffect(() => {
+    saveLocalApiSetupChecks(localApiSetupChecks);
+  }, [localApiSetupChecks]);
 
   const mappedSnapshots = useMemo(() => {
     const accountCodes: SaxoAccountCode[] = workspace === "demo" ? ["P"] : ["P", "N"];
@@ -426,6 +448,7 @@ export function SaxoReadOnlyPanel({
       setStatus(nextStatus);
       setLocalApiDown(false);
       setLocalApiReachability("up");
+      setLocalApiSetupChecks((current) => ({ ...current, local_api: true }));
       setApiErrorMessage("");
       try {
         const nextConfigStatus = await fetchSaxoConfigStatus();
@@ -442,6 +465,7 @@ export function SaxoReadOnlyPanel({
       setLocalApiDown(true);
       const reachability = classifyLocalApiFetchFailure(error);
       setLocalApiReachability(reachability);
+      setLocalApiSetupChecks((current) => ({ ...current, local_api: false }));
       const nextMessage = error instanceof Error ? error.message : "SaxoローカルAPIへ接続できません。";
       setApiErrorMessage(nextMessage);
       setMessage(nextMessage);
@@ -457,6 +481,7 @@ export function SaxoReadOnlyPanel({
       setStatus(nextStatus);
       setLocalApiDown(false);
       setLocalApiReachability("up");
+      setLocalApiSetupChecks((current) => ({ ...current, local_api: true }));
       setApiErrorMessage("");
       try {
         const nextConfigStatus = await fetchSaxoConfigStatus();
@@ -467,9 +492,7 @@ export function SaxoReadOnlyPanel({
         setApiErrorMessage(error instanceof Error ? error.message : "SaxoローカルAPI設定を確認できませんでした。");
       }
       setMessage(
-        nextStatus.connected
-          ? "接続済みです。まとめて取得へ進めます。"
-          : "ローカルAPIは起動しました。次はSaxo接続を押してください。",
+        createLocalApiStartupSuccessMessage(nextStatus),
       );
     } catch (error) {
       setStatus(null);
@@ -477,6 +500,7 @@ export function SaxoReadOnlyPanel({
       setLocalApiDown(true);
       const reachability = classifyLocalApiFetchFailure(error);
       setLocalApiReachability(reachability);
+      setLocalApiSetupChecks((current) => ({ ...current, local_api: false }));
       const nextMessage = error instanceof Error ? error.message : "SaxoローカルAPIへ接続できません。";
       setApiErrorMessage(nextMessage);
       setMessage(createLocalApiStartupResultMessage(reachability));
@@ -547,8 +571,15 @@ export function SaxoReadOnlyPanel({
 
   async function copyLocalApiStartCommand() {
     try {
-      await navigator.clipboard.writeText(getSaxoLocalApiStartCommand());
-      setMessage("起動コマンドをコピーしました。Macのターミナルに貼り付けてEnterを押してください。");
+      await navigator.clipboard.writeText(getSaxoLocalApiStartCommand(localApiOs));
+      setStartCommandCopied(true);
+      setMessage(
+        localApiOs === "unknown"
+          ? "MacまたはWindowsを選択してください。OSが分からない場合は、使っているPCに合わせて選び直してください。"
+          : localApiOs === "windows"
+          ? "起動コマンドをコピーしました。PowerShellで公開版リポジトリのフォルダを開いて貼り付け、Enterを押してください。"
+          : "起動コマンドをコピーしました。ターミナルで公開版リポジトリのフォルダを開いて貼り付け、Enterを押してください。`>` が出た場合は Control + C でキャンセルして貼り直してください。",
+      );
     } catch {
       setMessage("起動コマンドをコピーできませんでした。画面上のコマンドを手動でコピーしてください。");
     }
@@ -556,6 +587,10 @@ export function SaxoReadOnlyPanel({
 
   function toggleOnboardingCheck(id: SaxoOnboardingStepId, checked: boolean) {
     setOnboardingChecks((current) => ({ ...current, [id]: checked }));
+  }
+
+  function toggleLocalApiSetupCheck(id: SaxoLocalApiSetupStepId, checked: boolean) {
+    setLocalApiSetupChecks((current) => ({ ...current, [id]: checked }));
   }
 
   async function copyFriendConsultationPrompt() {
@@ -980,17 +1015,27 @@ export function SaxoReadOnlyPanel({
             />
             <SaxoApiOnboardingSection
               checks={onboardingChecks}
+              localApiOs={localApiOs}
+              localApiSetupChecks={localApiSetupChecks}
               onToggle={toggleOnboardingCheck}
+              onOsChange={setLocalApiOs}
+              onToggleLocalApiSetup={toggleLocalApiSetupCheck}
               onCopyConsultationPrompt={copyFriendConsultationPrompt}
             />
             {localApiDown ? (
               <LocalApiDownCard
                 isLoading={isLoading}
                 reachability={localApiReachability}
+                os={localApiOs}
+                setupChecks={localApiSetupChecks}
+                commandCopied={startCommandCopied}
                 diagnosticsOpen={showConnectionDetails}
                 onRefreshStatus={refreshLocalApiStartupStatus}
                 onCopyCommand={copyLocalApiStartCommand}
                 onToggleDiagnostics={() => setShowConnectionDetails((value) => !value)}
+                onShowSetup={() => {
+                  setMessage("導入手順を確認してください。Node.js LTS、公開版リポジトリ、.env.local の順に準備します。");
+                }}
               />
             ) : connectionState !== "connected" ? (
               <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
@@ -1024,7 +1069,7 @@ export function SaxoReadOnlyPanel({
                 onEnablePersistence={enablePersistence}
                 onDisablePersistence={disablePersistence}
                 onDisconnect={disconnect}
-                localApiOnlyCommand={getSaxoLocalApiOnlyCommand()}
+                localApiOnlyCommand={getSaxoLocalApiOnlyCommand(localApiOs)}
               />
             ) : null}
             {!showConnectionDetails && showSetupSection ? (
@@ -1032,29 +1077,33 @@ export function SaxoReadOnlyPanel({
                 接続設定の確認が必要です。詳細は「設定・診断を開く」内で確認してください。
               </div>
             ) : null}
-            <SaxoMainActions
-              isLoading={isLoading}
-              localApiDown={localApiDown}
-              onLoadAll={loadAllReadOnlyData}
-              onShowPending={() => scrollToSection("pending")}
-              onShowMapping={() => scrollToSection("mapping")}
-              showIndividualFetch={showIndividualFetch}
-              onToggleIndividualFetch={() => setShowIndividualFetch((value) => !value)}
-              onLoadSnapshots={loadSnapshots}
-              onLoadPositions={loadPositions}
-              onLoadOrders={loadOrders}
-              onLoadHistory={loadHistoryDiscovery}
-            />
-            <ReflectionPendingSummary
-              ref={pendingSummaryRef}
-              summary={reflectionSummary}
-              onShowMapping={() => scrollToSection("mapping")}
-              onShowSnapshot={() => scrollToSection("snapshot")}
-              onShowPositions={showPositionCandidatesFromSummary}
-              onShowOrders={() => scrollToSection("orders")}
-              onShowHistory={() => scrollToSection("history")}
-            />
+            {!localApiDown ? (
+              <SaxoMainActions
+                isLoading={isLoading}
+                localApiDown={localApiDown}
+                onLoadAll={loadAllReadOnlyData}
+                onShowPending={() => scrollToSection("pending")}
+                onShowMapping={() => scrollToSection("mapping")}
+                showIndividualFetch={showIndividualFetch}
+                onToggleIndividualFetch={() => setShowIndividualFetch((value) => !value)}
+                onLoadSnapshots={loadSnapshots}
+                onLoadPositions={loadPositions}
+                onLoadOrders={loadOrders}
+                onLoadHistory={loadHistoryDiscovery}
+              />
+            ) : null}
             {message ? <p className="rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">{message}</p> : null}
+            {!localApiDown ? (
+              <>
+              <ReflectionPendingSummary
+                ref={pendingSummaryRef}
+                summary={reflectionSummary}
+                onShowMapping={() => scrollToSection("mapping")}
+                onShowSnapshot={() => scrollToSection("snapshot")}
+                onShowPositions={showPositionCandidatesFromSummary}
+                onShowOrders={() => scrollToSection("orders")}
+                onShowHistory={() => scrollToSection("history")}
+              />
               <div className="rounded-md border border-slate-200 p-3">
                 <div ref={mappingRef} />
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1422,6 +1471,8 @@ export function SaxoReadOnlyPanel({
                   閉じる
                 </button>
               </div>
+              </>
+            ) : null}
           </div>
           {workspace === "demo" ? (
             <p className="mt-3 text-xs leading-5 text-slate-500">
@@ -1449,14 +1500,24 @@ function StatusRow({ label, value }: { label: string; value: string }) {
 
 function SaxoApiOnboardingSection({
   checks,
+  localApiOs,
+  localApiSetupChecks,
   onToggle,
+  onOsChange,
+  onToggleLocalApiSetup,
   onCopyConsultationPrompt,
 }: {
   checks: Record<SaxoOnboardingStepId, boolean>;
+  localApiOs: SaxoLocalApiOs;
+  localApiSetupChecks: Record<SaxoLocalApiSetupStepId, boolean>;
   onToggle: (id: SaxoOnboardingStepId, checked: boolean) => void;
+  onOsChange: (os: SaxoLocalApiOs) => void;
+  onToggleLocalApiSetup: (id: SaxoLocalApiSetupStepId, checked: boolean) => void;
   onCopyConsultationPrompt: () => void;
 }) {
   const completed = SAXO_ONBOARDING_STEPS.filter((step) => checks[step.id]).length;
+  const setupReady = isLocalApiReadyToStart(localApiSetupChecks);
+  const setupCompleted = SAXO_LOCAL_API_SETUP_STEPS.filter((step) => localApiSetupChecks[step.id]).length;
 
   return (
     <section className="rounded-md border border-sky-200 bg-sky-50 p-3">
@@ -1465,7 +1526,7 @@ function SaxoApiOnboardingSection({
           <h3 className="text-sm font-bold text-sky-950">Saxo API接続準備</h3>
           <p className="mt-1 text-sm leading-6 text-sky-900">
             Developer Portal account、OpenAPI application、LIVE AppKey、Redirect URI、ローカルAPI起動の関係を順番に確認します。
-            公開版はGitHub Pages上で動きますが、Saxo接続は各自のMacで起動したローカルAPIだけが行います。
+            公開版はGitHub Pages上で動きますが、Saxo接続は各自のPCで起動したローカルAPIだけが行います。
           </p>
           <p className="mt-1 text-xs font-semibold text-sky-800">
             Redirect URI: <code className="rounded bg-white px-1 py-0.5">http://127.0.0.1:18787/api/saxo/auth/callback</code>
@@ -1490,6 +1551,78 @@ function SaxoApiOnboardingSection({
             <span>{step.label}</span>
           </label>
         ))}
+      </div>
+      <div className="mt-3 rounded-md border border-sky-200 bg-white p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-bold text-slate-950">ローカルAPI補助サーバの準備</h4>
+            <p className="mt-1 text-xs leading-5 text-slate-700">
+              初回は、Node.js LTS、公開版リポジトリ、`.env.local` の準備が必要です。準備が終わるまでは起動コマンドを実行しても成功しません。
+            </p>
+          </div>
+          <span className={`rounded px-2 py-1 text-xs font-bold ${setupReady ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>
+            {setupCompleted}/{SAXO_LOCAL_API_SETUP_STEPS.length} 完了
+          </span>
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          {[
+            { id: "mac" as const, label: "Mac" },
+            { id: "windows" as const, label: "Windows" },
+            { id: "unknown" as const, label: "まだ分からない" },
+          ].map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`rounded-md border px-3 py-2 text-sm font-bold ${
+                localApiOs === item.id
+                  ? "border-sky-500 bg-sky-100 text-sky-950"
+                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+              onClick={() => onOsChange(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {SAXO_LOCAL_API_SETUP_STEPS.map((step) => (
+            <label
+              key={step.id}
+              className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800 ring-1 ring-slate-100"
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-sky-700"
+                checked={Boolean(localApiSetupChecks[step.id])}
+                onChange={(event) => onToggleLocalApiSetup(step.id, event.target.checked)}
+              />
+              <span>{step.label}</span>
+            </label>
+          ))}
+        </div>
+        {!setupReady ? (
+          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">
+            <div className="font-bold">導入手順</div>
+            <ol className="mt-1 list-decimal space-y-1 pl-5">
+              <li>Node.js LTSをインストールします。</li>
+              <li>GitHubから `jimusaku-lab/us-options-risk-planner` をダウンロードまたはcloneします。</li>
+              <li>{localApiOs === "windows" ? "PowerShellで公開版リポジトリのフォルダを開きます。" : "ターミナルで公開版リポジトリのフォルダを開きます。"}</li>
+              <li>Saxo Developer PortalのLIVE AppKeyを使い、公開版リポジトリ内に `.env.local` を作ります。</li>
+              <li>準備チェックを埋めてから、OS別の起動コマンドを実行します。</li>
+            </ol>
+          </div>
+        ) : (
+          <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold leading-5 text-emerald-900">
+            起動準備は完了扱いです。下のSaxoローカルAPIカードでOS別の起動コマンドをコピーできます。
+          </div>
+        )}
+        <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700">
+          <div className="font-bold text-slate-900">.env.local について</div>
+          <p className="mt-1">
+            `.env.local` はGitHub Pagesには保存されず、GitHubへpushしません。このリポジトリでは `.gitignore` 対象です。
+            初回ユーザーは、自分のLIVE AppKey（Client ID）をこのPC内の `.env.local` に設定します。Client Secret、Saxo ID、パスワード、2FAコードの入力欄はありません。
+          </p>
+        </div>
       </div>
       <div className="mt-3 rounded-md border border-red-200 bg-white px-3 py-2 text-xs leading-5 text-red-800">
         <div className="font-bold">セキュリティ注意</div>
@@ -1599,34 +1732,36 @@ function isPublicGithubPagesRuntime(): boolean {
   return typeof window !== "undefined" && window.location.origin === SAXO_PUBLIC_UI_ALLOWED_ORIGIN;
 }
 
-function getSaxoLocalApiStartCommand(): string {
-  if (isPublicGithubPagesRuntime()) {
-    return [
-      `cd "${SAXO_PUBLIC_REPO_PATH}"`,
-      `SAXO_LOCAL_UI_ALLOWED_ORIGIN=${SAXO_PUBLIC_UI_ALLOWED_ORIGIN} \\`,
-      `SAXO_LOCAL_UI_RETURN_URL=${SAXO_PUBLIC_UI_RETURN_URL} \\`,
-      "npm run dev:saxo-api",
-    ].join("\n");
+function getSaxoLocalApiStartCommand(os: SaxoLocalApiOs): string {
+  if (os === "windows") {
+    return `$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="${SAXO_PUBLIC_UI_ALLOWED_ORIGIN}"; $env:SAXO_LOCAL_UI_RETURN_URL="${SAXO_PUBLIC_UI_RETURN_URL}"; npm run dev:saxo-api`;
   }
-  return [
-    `cd "${SAXO_PUBLIC_REPO_PATH}"`,
-    "npm run dev:all",
-  ].join("\n");
+  if (os === "mac") {
+    return `SAXO_LOCAL_UI_ALLOWED_ORIGIN=${SAXO_PUBLIC_UI_ALLOWED_ORIGIN} SAXO_LOCAL_UI_RETURN_URL=${SAXO_PUBLIC_UI_RETURN_URL} npm run dev:saxo-api`;
+  }
+  return "Mac または Windows を選択してください。";
 }
 
-function getSaxoLocalApiOnlyCommand(): string {
-  if (isPublicGithubPagesRuntime()) {
+function getSaxoLocalApiOnlyCommand(os: SaxoLocalApiOs): string {
+  if (os === "windows") {
     return [
-      `cd "${SAXO_PUBLIC_REPO_PATH}"`,
+      `$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="${SAXO_PUBLIC_UI_ALLOWED_ORIGIN}"`,
+      `$env:SAXO_LOCAL_UI_RETURN_URL="${SAXO_PUBLIC_UI_RETURN_URL}"`,
+      "npm run dev:saxo-api",
+    ].join("\n");
+  }
+  if (os === "mac") {
+    return [
       `SAXO_LOCAL_UI_ALLOWED_ORIGIN=${SAXO_PUBLIC_UI_ALLOWED_ORIGIN} \\`,
       `SAXO_LOCAL_UI_RETURN_URL=${SAXO_PUBLIC_UI_RETURN_URL} \\`,
       "npm run dev:saxo-api",
     ].join("\n");
   }
-  return [
-    `cd "${SAXO_PUBLIC_REPO_PATH}"`,
-    "npm run dev:saxo-api",
-  ].join("\n");
+  return "Mac または Windows を選択してください。";
+}
+
+function isLocalApiReadyToStart(checks: Record<SaxoLocalApiSetupStepId, boolean>): boolean {
+  return Boolean(checks.repository && checks.node && checks.env_local);
 }
 
 function classifyLocalApiFetchFailure(error: unknown): LocalApiReachability {
@@ -1647,7 +1782,23 @@ function createLocalApiStartupResultMessage(reachability: LocalApiReachability):
   if (reachability === "cors_or_pna_blocked") {
     return "公開版Origin許可不足、またはChromeのCORS/Private Network Accessブロック疑いです。公開版用の起動コマンドでローカルAPIを起動してください。";
   }
-  return "まだ起動していません。コピーしたコマンドをターミナルで実行してください。";
+  return `まだ起動していません。ターミナル/PowerShellに成功ログ「${SAXO_LOCAL_API_SUCCESS_LOG}」が出ているか確認してください。Macで > が出て止まっている場合は Control + C でキャンセルし、1行コマンドを貼り直してください。`;
+}
+
+function createLocalApiStartupSuccessMessage(nextStatus: SaxoApiStatus): string {
+  if (!nextStatus.oauthConfigured) {
+    return "ローカルAPIは起動しました。次は設定・診断でLIVE AppKey（Client ID）を保存してください。";
+  }
+  if (nextStatus.environmentConfigured === false) {
+    return "ローカルAPIは起動しました。次は設定・診断でSIM/LIVE環境を選択してください。";
+  }
+  if (nextStatus.connectionState === "reconnect_required") {
+    return "ローカルAPIは起動しました。Saxo接続の期限が切れているため、次はSaxo再接続を押してください。";
+  }
+  if (nextStatus.connected) {
+    return "接続済みです。まとめて取得へ進めます。";
+  }
+  return "ローカルAPIは起動しました。次はSaxo接続を押してください。";
 }
 
 function formatLocalApiCauseMessage(reachability: LocalApiReachability): string {
@@ -1661,41 +1812,71 @@ function formatLocalApiCauseMessage(reachability: LocalApiReachability): string 
 function LocalApiDownCard({
   isLoading,
   reachability,
+  os,
+  setupChecks,
+  commandCopied,
   diagnosticsOpen,
   onRefreshStatus,
   onCopyCommand,
   onToggleDiagnostics,
+  onShowSetup,
 }: {
   isLoading: boolean;
   reachability: LocalApiReachability;
+  os: SaxoLocalApiOs;
+  setupChecks: Record<SaxoLocalApiSetupStepId, boolean>;
+  commandCopied: boolean;
   diagnosticsOpen: boolean;
   onRefreshStatus: () => void;
   onCopyCommand: () => void;
   onToggleDiagnostics: () => void;
+  onShowSetup: () => void;
 }) {
+  const setupReady = isLocalApiReadyToStart(setupChecks);
+  const canCopyCommand = setupReady && os !== "unknown";
+  const primaryAction =
+    !setupReady
+      ? { label: "導入手順を見る", onClick: onShowSetup, disabled: false, icon: <Eye size={15} /> }
+      : os === "unknown"
+        ? { label: "OSを選択してください", onClick: onShowSetup, disabled: true, icon: <Eye size={15} /> }
+        : commandCopied
+          ? { label: "起動できたか確認", onClick: onRefreshStatus, disabled: isLoading, icon: <RefreshCw size={15} /> }
+          : { label: "起動コマンドをコピー", onClick: onCopyCommand, disabled: false, icon: <Clipboard size={15} /> };
   return (
     <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-bold text-amber-950">Saxo APIを使うには、先にこのMacでローカルAPIを起動します。</h3>
+          <h3 className="text-sm font-bold text-amber-950">Saxo APIを使うには、先にこのPCでローカルAPIを起動します。</h3>
           <p className="mt-1 text-sm leading-6 text-amber-900">
-            Saxo接続の前に、下の起動コマンドをMacのターミナルで実行してください。起動できるまでSaxoログインやまとめて取得は使いません。
+            Saxo接続の前に、Node.js、公開版リポジトリ、`.env.local` を準備し、選択したOSのコマンドを実行してください。起動できるまでSaxoログインやまとめて取得は使いません。
             GitHub Pages自体はSaxoへ接続せず、Client IDやtokenもGitHubへ保存しません。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800" onClick={onCopyCommand}>
-            <Clipboard size={15} />
-            起動コマンドをコピー
-          </button>
           <button
-            className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-bold text-amber-900 disabled:opacity-40"
-            onClick={onRefreshStatus}
-            disabled={isLoading}
+            className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={primaryAction.onClick}
+            disabled={primaryAction.disabled}
           >
-            <RefreshCw size={15} />
-            起動できたか確認
+            {primaryAction.icon}
+            {primaryAction.label}
           </button>
+          {setupReady && canCopyCommand && !commandCopied ? (
+            <button
+              className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-bold text-amber-900 disabled:opacity-40"
+              onClick={onRefreshStatus}
+              disabled={isLoading}
+            >
+              <RefreshCw size={15} />
+              起動できたか確認
+            </button>
+          ) : null}
+          {commandCopied ? (
+            <button className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-bold text-amber-900" onClick={onCopyCommand}>
+              <Clipboard size={15} />
+              起動コマンドをコピーし直す
+            </button>
+          ) : null}
           <button className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-bold text-amber-900" onClick={onToggleDiagnostics}>
             {diagnosticsOpen ? "詳しい設定を閉じる" : "詳しい設定を見る"}
           </button>
@@ -1704,26 +1885,42 @@ function LocalApiDownCard({
       <div className="mt-3 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-950">
         {formatLocalApiCauseMessage(reachability)}
       </div>
-      <ol className="mt-3 grid gap-2 text-sm text-amber-950 md:grid-cols-3">
-        <li className="rounded-md border border-amber-200 bg-white p-3">
-          <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">1</span>
-          <span className="font-bold">「起動コマンドをコピー」を押す</span>
-        </li>
-        <li className="rounded-md border border-amber-200 bg-white p-3">
-          <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">2</span>
-          <span className="font-bold">Macのターミナルを開いて貼り付け、Enter</span>
-        </li>
-        <li className="rounded-md border border-amber-200 bg-white p-3">
-          <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">3</span>
-          <span className="font-bold">この画面に戻って「起動できたか確認」を押す</span>
-        </li>
-      </ol>
-      <div className="mt-3 grid gap-3 text-xs">
-        <div>
-          <div className="font-bold text-amber-950">推奨コマンド</div>
-          <pre className="mt-1 overflow-x-auto rounded bg-white p-2 text-slate-800">{getSaxoLocalApiStartCommand()}</pre>
+      {!setupReady ? (
+        <div className="mt-3 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm leading-6 text-amber-950">
+          <div className="font-bold">先に導入準備が必要です</div>
+          <p className="mt-1">上の「ローカルAPI補助サーバの準備」で、公開版リポジトリ、Node.js/npm、`.env.local` の準備を確認してください。未導入の状態では起動コマンドを出しても成功しません。</p>
         </div>
-      </div>
+      ) : (
+        <>
+          <ol className="mt-3 grid gap-2 text-sm text-amber-950 md:grid-cols-3">
+            <li className="rounded-md border border-amber-200 bg-white p-3">
+              <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">1</span>
+              <span className="font-bold">{os === "windows" ? "PowerShellで公開版リポジトリのフォルダを開く" : "ターミナルで公開版リポジトリのフォルダを開く"}</span>
+            </li>
+            <li className="rounded-md border border-amber-200 bg-white p-3">
+              <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">2</span>
+              <span className="font-bold">{os === "windows" ? "PowerShell用コマンドを貼り付け、Enter" : "1行コマンドを貼り付け、Enter"}</span>
+            </li>
+            <li className="rounded-md border border-amber-200 bg-white p-3">
+              <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">3</span>
+              <span className="font-bold">成功ログを確認し、この画面で「起動できたか確認」</span>
+            </li>
+          </ol>
+          <div className="mt-3 grid gap-3 text-xs">
+            <div>
+              <div className="font-bold text-amber-950">{os === "windows" ? "PowerShell用コマンド" : "1行起動コマンド"}</div>
+              <pre className="mt-1 overflow-x-auto rounded bg-white p-2 text-slate-800">{getSaxoLocalApiStartCommand(os)}</pre>
+            </div>
+            <div className="rounded-md border border-amber-200 bg-white px-3 py-2 leading-5 text-amber-950">
+              <div className="font-bold">成功ログ</div>
+              <code className="mt-1 block rounded bg-amber-50 p-2 text-slate-800">{SAXO_LOCAL_API_SUCCESS_LOG}</code>
+              {os === "mac" ? (
+                <p className="mt-2">貼り付け後に `&gt;` だけが出て止まった場合は、Control + C でキャンセルし、上の1行コマンドを貼り直してください。</p>
+              ) : null}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -3691,6 +3888,53 @@ function loadOnboardingChecks(): Record<SaxoOnboardingStepId, boolean> {
 function saveOnboardingChecks(checks: Record<SaxoOnboardingStepId, boolean>): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(SAXO_ONBOARDING_CHECKS_KEY, JSON.stringify(checks));
+}
+
+function detectLocalApiOs(): SaxoLocalApiOs {
+  if (typeof window === "undefined") return "unknown";
+  const platform = `${navigator.userAgent} ${navigator.platform}`.toLowerCase();
+  if (platform.includes("win")) return "windows";
+  if (platform.includes("mac")) return "mac";
+  return "unknown";
+}
+
+function loadLocalApiOs(): SaxoLocalApiOs {
+  if (typeof window === "undefined") return "unknown";
+  const raw = window.localStorage.getItem(SAXO_LOCAL_API_OS_KEY);
+  if (raw === "mac" || raw === "windows" || raw === "unknown") return raw;
+  return detectLocalApiOs();
+}
+
+function saveLocalApiOs(os: SaxoLocalApiOs): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SAXO_LOCAL_API_OS_KEY, os);
+}
+
+function loadLocalApiSetupChecks(): Record<SaxoLocalApiSetupStepId, boolean> {
+  const checks = SAXO_LOCAL_API_SETUP_STEPS.reduce(
+    (acc, step) => {
+      acc[step.id] = false;
+      return acc;
+    },
+    {} as Record<SaxoLocalApiSetupStepId, boolean>,
+  );
+  if (typeof window === "undefined") return checks;
+  const raw = window.localStorage.getItem(SAXO_LOCAL_API_SETUP_KEY);
+  if (!raw) return checks;
+  try {
+    const parsed = JSON.parse(raw) as Partial<Record<SaxoLocalApiSetupStepId, boolean>>;
+    SAXO_LOCAL_API_SETUP_STEPS.forEach((step) => {
+      checks[step.id] = Boolean(parsed[step.id]);
+    });
+    return checks;
+  } catch {
+    return checks;
+  }
+}
+
+function saveLocalApiSetupChecks(checks: Record<SaxoLocalApiSetupStepId, boolean>): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SAXO_LOCAL_API_SETUP_KEY, JSON.stringify(checks));
 }
 
 function enrichHistoryEndpointsWithAccountMappings(

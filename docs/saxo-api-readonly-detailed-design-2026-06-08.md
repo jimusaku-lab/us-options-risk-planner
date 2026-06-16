@@ -7157,3 +7157,174 @@ Saxo API Read-onlyパネル内に `Saxo API接続準備` セクションを表�
 - ChatGPT/Codexへ渡す相談文を、秘密情報なしでコピーできる。
 - docsに友人向けガイドがある。
 - Saxo APIはRead-onlyのままで、発注系endpointを追加しない。
+
+## 68. 公開版Saxo接続のOS別ローカルAPI起動UX
+
+### 背景
+
+GitHub Pages公開版でSaxo API Read-onlyを使うには、静的サイトだけでは完結しない。
+利用者本人のPC上でローカルAPIを起動し、そのローカルAPIだけがSaxoと通信する。
+
+現状の案内は、ターミナル操作に慣れた利用者を前提にしすぎている。
+初回利用者は、次の状態を自分では判定できない。
+
+- 公開版画面に表示されたローカルPCのパスが、自分のPCでは存在しない。
+- ローカルAPI補助サーバをまだダウンロード/設置していない。
+- Node.jsやnpmが入っていない。
+- コピーしたコマンドが途中入力状態で止まっている。
+- `>` の継続プロンプトが出ていて、まだ実行されていない。
+- ローカルAPIは起動しているが、公開版Origin許可が足りない。
+- `.env.local` が公開版リポジトリに無く、LIVE AppKey未設定で止まる。
+- Mac向け説明をWindows利用者が見てしまう。
+
+そのため、公開版のSaxo接続導線は「ユーザーがターミナルの意味を理解している」前提にしない。
+アプリがOS別に案内し、実行結果を画面上で判定し、次に押すボタンを明示する。
+
+### 基本方針
+
+- 公開版UIは、Mac/Windowsを選べる起動手順を持つ。
+- 公開版UIに、開発者本人の固定パスを表示しない。
+- ローカルAPI補助サーバが未導入の人向けに、導入手順を先に表示する。
+- 利用者に複数行コマンドを主表示しない。原則として1行コマンドをコピーする。
+- ターミナル/PowerShellで見るべき成功ログを明示する。
+- 失敗時は「何が間違ったか」ではなく「次に何をすればよいか」を表示する。
+- `.env.local`、Client ID、OAuth token、口座データはGitHub Pagesへ保存しない。
+- 発注機能は引き続き持たせない。
+
+### OS選択
+
+公開版Saxo APIパネル内に、ローカルAPI起動環境を選ぶUIを置く。
+
+- Mac
+- Windows
+- まだ分からない
+
+ブラウザの `navigator.userAgent` 等で初期推定してよいが、利用者が手動変更できるようにする。
+
+### ローカルAPI補助サーバの導入状態
+
+公開版UIは、ローカルAPI起動の前に、利用者の導入状態を確認する。
+
+- まだ何も導入していない
+- GitHubから公開版リポジトリをダウンロード/clone済み
+- Node.js/npmを導入済み
+- `.env.local` を作成済み
+- ローカルAPIを起動済み
+
+`まだ何も導入していない` 利用者には、いきなり起動コマンドを表示しない。
+まず次を案内する。
+
+- Node.js LTSをインストールする。
+- 公開版リポジトリをダウンロードまたはcloneする。
+- リポジトリフォルダを開く。
+- `.env.local` を作成する。
+- OS別の起動コマンドを実行する。
+
+将来的には、友人向け公開版では「ローカルAPI補助サーバ一式のダウンロード」または「インストーラ」を用意することを検討する。
+少なくとも、GitHub Pages上に作者本人のローカルパスを固定表示してはいけない。
+
+### Mac向け手順
+
+Macでは「ターミナルを開く」「1行コマンドを貼る」「Enterを押す」の3手順にする。
+コピーするコマンドは1行にする。
+複数行バックスラッシュ形式は、詳細表示内だけに置く。
+
+Mac向け表示には、次を含める。
+
+- `Control + C` は、途中入力で `>` が出た場合だけ押す。
+- 成功ログは `Saxo read-only local API listening on http://127.0.0.1:18787`。
+- 成功ログが出たらターミナルは閉じない。
+
+### Windows向け手順
+
+Windowsでは、PowerShell前提の導線を別に用意する。
+Macの固定パスや `SAXO_LOCAL_UI_ALLOWED_ORIGIN=... npm run ...` 形式を表示しない。
+
+Windows向け表示には、次を含める。
+
+- PowerShellを開く。
+- 公開版リポジトリのフォルダへ移動する。
+- `.env.local` を作成または配置する。
+- 環境変数をPowerShell形式で設定してから `npm run dev:saxo-api` を実行する。
+
+PowerShell例:
+
+```powershell
+cd "C:\path\to\us-options-risk-planner-public-repo"
+$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="https://jimusaku-lab.github.io"
+$env:SAXO_LOCAL_UI_RETURN_URL="https://jimusaku-lab.github.io/us-options-risk-planner/"
+npm run dev:saxo-api
+```
+
+Windows利用者向けには、`.env.local` の作成方法も別カードに分けて表示する。
+Client IDは利用者本人のLIVE AppKeyであり、アプリ作者へ送らない。
+
+### `.env.local` の扱い
+
+公開版リポジトリでローカルAPIを起動する場合、そのリポジトリにも `.env.local` が必要になる。
+ローカル実用版で接続済みの利用者は、既存 `.env.local` をコピーしてよい。
+初回利用者は、アプリ内の設定・診断からLIVE AppKeyを保存するか、`.env.local` を作成する。
+
+表示上は次の2パターンを分ける。
+
+- 既に別フォルダのローカル版でSaxo接続済み
+  - `.env.local` を公開版リポジトリへコピーする案内を出す。
+- 初めてSaxo API接続を行う
+  - Saxo Developer PortalでLIVE AppKeyを取得し、公開版リポジトリの `.env.local` へ設定する案内を出す。
+
+`.env.local` は `.gitignore` 対象であり、GitHubへpushされないことを画面とdocsに明記する。
+
+### 起動確認の判定
+
+`起動できたか確認` は、単にボタンを押させるだけではなく、結果を次のいずれかで表示する。
+
+- 起動できています。次は `Saxo接続` または `Saxo再接続` を押してください。
+- 起動していません。ターミナル/PowerShellに成功ログが出ているか確認してください。
+- コマンドが途中入力で止まっている可能性があります。`>` が出ていたら `Control + C` でキャンセルし、1行コマンドを貼り直してください。
+- 公開版Origin許可またはPrivate Network Accessでブロックされています。公開版用の起動コマンドで起動し直してください。
+- LIVE AppKeyが未設定です。設定・診断でLIVE AppKeyを保存してください。
+
+### 画面上の次アクション
+
+公開版Saxo APIパネルは、常に「次に押すもの」を1つだけ目立たせる。
+
+状態別の主ボタン:
+
+- 未導入: `導入手順を見る`
+- ローカルAPI未起動: `起動コマンドをコピー`
+- コマンド貼り付け後: `起動できたか確認`
+- ローカルAPI起動済み・Saxo未接続: `Saxo接続`
+- token期限切れ: `Saxo再接続`
+- 接続済み: `まとめて取得`
+
+補助ボタン:
+
+- `詳しい設定を見る`
+- `OSを変更`
+- `トラブル時の見方`
+
+### 完了条件
+
+- Mac利用者が、アプリの案内だけでローカルAPIを起動できる。
+- Windows利用者が、Mac向けコマンドを見せられず、PowerShell向け手順を確認できる。
+- `>` の継続入力で止まった場合の復旧手順が画面上に出る。
+- `.env.local` が必要であること、GitHubに保存されないことが分かる。
+- `起動できたか確認` の結果が、必ず画面上の次アクションに変換される。
+- Saxo APIはRead-onlyのままで、発注系endpointは追加しない。
+
+### 実装メモ
+
+2026-06-16時点の公開版実装では、通常表示・コピー用コマンドに作者PC固有の `/Users/...` パスを出さない。
+利用者はターミナルまたはPowerShellで、自分がclone/downloadした公開版リポジトリのフォルダを開いてから、OS別の起動コマンドを実行する。
+
+Macの主表示は1行コマンド:
+
+```bash
+SAXO_LOCAL_UI_ALLOWED_ORIGIN=https://jimusaku-lab.github.io SAXO_LOCAL_UI_RETURN_URL=https://jimusaku-lab.github.io/us-options-risk-planner/ npm run dev:saxo-api
+```
+
+Windowsの主表示はPowerShell 1行コマンド:
+
+```powershell
+$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="https://jimusaku-lab.github.io"; $env:SAXO_LOCAL_UI_RETURN_URL="https://jimusaku-lab.github.io/us-options-risk-planner/"; npm run dev:saxo-api
+```
