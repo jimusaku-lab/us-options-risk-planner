@@ -94,14 +94,14 @@
 
 ## commit / push
 
-- 実装commit hash: `TODO`
-- Pages deploy commit hash: `TODO`
-- main push: `TODO`
-- gh-pages push: `TODO`
+- 実装commit hash: `4dcfc75`
+- Pages deploy commit hash: `3849840`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが `assets/index-VqB-zPEO.js` を参照することを確認予定。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが `assets/index-VqB-zPEO.js` を参照することを確認した。
 
 ## 残課題
 
