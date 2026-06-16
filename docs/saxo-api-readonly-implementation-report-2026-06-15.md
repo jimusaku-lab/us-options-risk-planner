@@ -60,6 +60,60 @@
 
 ---
 
+# 2026-06-16 一般公開版 ChatGPT/Codex相談文コピー更新
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 対象ブランチ: `main` / `gh-pages`
+
+## 実装内容
+
+- `ChatGPT/Codexに渡す相談文をコピー` のコピー内容を更新した。
+- 目的を `GitHub Pages公開版の米国株オプション建玉管理アプリで、Saxo OpenAPI Read-only接続を設定したい` に変更した。
+- 前提として、アプリ本体はGitHub Pages公開版を使い続け、Saxo通信だけPC側補助ツールで行うことを明記した。
+- 伴走してほしい内容に、OS確認、Developer Portal、OpenAPI application、Redirect URI、LIVE AppKey確認、Node.js/npm、`.env.local`、Mac/Windows別起動コマンド、成功ログ確認、Macの `>` 継続入力時の復旧、アプリ側の `起動できたか確認` と `Saxo接続` / `Saxo再接続` への誘導を追加した。
+- 絶対に共有しない情報に、Saxo ID、Saxoパスワード、2FAコード、Client Secret、Saxo Account ID、OAuth token、refresh token、口座番号、口座残高や建玉の詳細スクリーンショットを明記した。
+- 共有してよい情報に、OS、一般的な画面文言、Redirect URI、エラー文、個人情報を隠したスクリーンショット、LIVE AppKeyが取得済みかどうかだけを明記した。
+- 友人向けガイドと詳細設計書の相談文説明も同じ趣旨に更新した。
+- Saxo APIはRead-onlyのままで、発注・注文変更・注文取消endpointは追加していない。
+
+## 修正ファイル
+
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `docs/saxo-api-readonly-detailed-design-2026-06-08.md`
+- `docs/友人向けSaxo API接続準備ガイド.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-B3OF-1I8.js`
+  - bundle内に `GitHub Pages公開版の米国株オプション建玉管理アプリで、Saxo OpenAPI Read-only接続を設定したいです`、`PC側補助ツールの準備に必要なNode.js/npm、.env.local、起動コマンドの手順を、Mac/Windows別に案内してください`、`Saxo read-only local API listening on http://127.0.0.1:18787`、`口座残高や建玉の詳細スクリーンショット`、`LIVE AppKeyが「取得済みかどうか」だけ`、`Client Secretはこのアプリでは使いません` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: 後続commitで確定
+- Pages deploy commit hash: 後続commitで確定
+- main push: 実施予定
+- gh-pages push: 実施予定
+
+## 公開URL確認
+
+- `gh-pages` 反映後、`https://jimusaku-lab.github.io/us-options-risk-planner/` が新bundle `assets/index-B3OF-1I8.js` を参照することを確認する。
+- 公開bundle内に新しい相談文が含まれることを確認する。
+
+## 残課題
+
+- この時点ではなし。
+
+---
+
 # 2026-06-16 一般公開版 Saxo接続準備画面の説明順序修正
 
 ## 対象

@@ -7132,10 +7132,14 @@ Saxo API Read-onlyパネル内に `Saxo API接続準備` セクションを表�
 
 相談文に含める要点:
 
-- 目的: Saxo OpenAPI Read-only接続を設定したい。
-- 秘密情報は貼らない。
-- Saxo Developer Portal、OpenAPI application、Redirect URI、LIVE AppKey、ローカルAPI起動の画面操作だけ伴走してほしい。
-- Client Secret、Saxo Account ID、password、2FAコード、OAuth token、refresh tokenは絶対に共有しない。
+- 目的: GitHub Pages公開版の米国株オプション建玉管理アプリで、Saxo OpenAPI Read-only接続を設定したい。
+- 前提: アプリ本体はGitHub Pagesの公開版を使い続け、Saxo通信だけをPC側補助ツールで行う。
+- PCがMacかWindowsかの確認から伴走してほしい。
+- Saxo Developer Portal、OpenAPI application、Redirect URI、LIVE AppKey確認を案内してほしい。
+- PC側補助ツールの準備に必要なNode.js/npm、`.env.local`、起動コマンドをMac/Windows別に案内してほしい。
+- 成功ログ `Saxo read-only local API listening on http://127.0.0.1:18787` の確認、Macの `>` 継続入力時の `Control + C` 案内、アプリ画面での `起動できたか確認`、`Saxo接続` / `Saxo再接続` への誘導を含める。
+- 絶対に共有しない情報: Saxo ID、Saxo password、2FAコード、Client Secret、Saxo Account ID、OAuth token、refresh token、口座番号、口座残高や建玉の詳細スクリーンショット。
+- 共有してよい情報: OS、画面上の一般的な文言、Redirect URI、エラー文、個人情報を隠したスクリーンショット、LIVE AppKeyが取得済みかどうか。
 - このアプリはRead-only用途で、発注、注文変更、注文取消を行わない。
 
 ### docsガイド
