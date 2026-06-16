@@ -7013,7 +7013,7 @@ P売り権利行使後の例:
 
 ローカル実用版のSaxo API Read-only取込は、個人利用の実用化段階としては十分な水準に到達している。
 
-ただし、GitHub Pagesの一般公開版へそのまま移植してはいけない。公開版は静的サイトであり、Saxo APIへ直接接続しない。利用者が各自のMacでローカルAPIを起動し、そのローカルAPIを公開版UIから呼び出す構成にする。
+ただし、GitHub Pagesの一般公開版へそのまま移植してはいけない。公開版は静的サイトであり、Saxo APIへ直接接続しない。アプリ本体はGitHub Pagesの公開版を使い続け、Saxo API接続を使う場合だけ、利用者本人のPCでローカルAPI補助ツールを起動する構成にする。
 
 ### 公開版で守る前提
 
@@ -7057,8 +7057,8 @@ GitHub Pagesでは、CORS origin は `https://jimusaku-lab.github.io` だが、�
 
 公開版では、Saxo APIパネルを次の表示にする。
 
-- ローカルAPI未起動: `この機能は各自のMacでローカルAPIを起動した場合だけ使えます`
-- 設定未完了: `Client IDはGitHubには保存されません。各自のMacの.env.localまたは画面入力で設定してください`
+- ローカルAPI未起動: `この機能は各自のPCでローカルAPI補助ツールを起動した場合だけ使えます`
+- 設定未完了: `Client IDはGitHubには保存されません。各自のPCの.env.localまたは画面入力で設定してください`
 - 接続済み: ローカル実用版と同じRead-only取込UX
 
 #### 公開版リポジトリへ移すファイル
@@ -7169,12 +7169,12 @@ GitHub Pages公開版でSaxo API Read-onlyを使うには、静的サイトだ�
 初回利用者は、次の状態を自分では判定できない。
 
 - 公開版画面に表示されたローカルPCのパスが、自分のPCでは存在しない。
-- ローカルAPI補助サーバをまだダウンロード/設置していない。
+- ローカルAPI補助ツールをまだ準備していない。
 - Node.jsやnpmが入っていない。
 - コピーしたコマンドが途中入力状態で止まっている。
 - `>` の継続プロンプトが出ていて、まだ実行されていない。
 - ローカルAPIは起動しているが、公開版Origin許可が足りない。
-- `.env.local` が公開版リポジトリに無く、LIVE AppKey未設定で止まる。
+- `.env.local` がローカルAPI補助ツールのフォルダに無く、LIVE AppKey未設定で止まる。
 - Mac向け説明をWindows利用者が見てしまう。
 
 そのため、公開版のSaxo接続導線は「ユーザーがターミナルの意味を理解している」前提にしない。
@@ -7184,7 +7184,7 @@ GitHub Pages公開版でSaxo API Read-onlyを使うには、静的サイトだ�
 
 - 公開版UIは、Mac/Windowsを選べる起動手順を持つ。
 - 公開版UIに、開発者本人の固定パスを表示しない。
-- ローカルAPI補助サーバが未導入の人向けに、導入手順を先に表示する。
+- ローカルAPI補助ツールが未導入の人向けに、導入手順を先に表示する。
 - 利用者に複数行コマンドを主表示しない。原則として1行コマンドをコピーする。
 - ターミナル/PowerShellで見るべき成功ログを明示する。
 - 失敗時は「何が間違ったか」ではなく「次に何をすればよいか」を表示する。
@@ -7201,12 +7201,12 @@ GitHub Pages公開版でSaxo API Read-onlyを使うには、静的サイトだ�
 
 ブラウザの `navigator.userAgent` 等で初期推定してよいが、利用者が手動変更できるようにする。
 
-### ローカルAPI補助サーバの導入状態
+### ローカルAPI補助ツールの導入状態
 
 公開版UIは、ローカルAPI起動の前に、利用者の導入状態を確認する。
 
 - まだ何も導入していない
-- GitHubから公開版リポジトリをダウンロード/clone済み
+- ローカルAPI補助ツールを導入済み
 - Node.js/npmを導入済み
 - `.env.local` を作成済み
 - ローカルAPIを起動済み
@@ -7215,13 +7215,18 @@ GitHub Pages公開版でSaxo API Read-onlyを使うには、静的サイトだ�
 まず次を案内する。
 
 - Node.js LTSをインストールする。
-- 公開版リポジトリをダウンロードまたはcloneする。
-- リポジトリフォルダを開く。
+- ローカルAPI補助ツールをダウンロードまたは設置する。
+- ローカルAPI補助ツールのフォルダを開く。
 - `.env.local` を作成する。
 - OS別の起動コマンドを実行する。
 
-将来的には、友人向け公開版では「ローカルAPI補助サーバ一式のダウンロード」または「インストーラ」を用意することを検討する。
-少なくとも、GitHub Pages上に作者本人のローカルパスを固定表示してはいけない。
+友人に使ってもらうアプリ本体は、引き続きGitHub Pagesの公開版である。
+利用者にローカル版アプリを使わせる意図ではない。
+PCに置く必要があるのは、Saxoと通信するためのローカルAPI補助ツールだけである。
+
+将来的には、友人向け公開版では「ローカルAPI補助ツール一式のダウンロード」または「インストーラ」を用意する。
+GitHubリポジトリをcloneさせる方法は、暫定・上級者向けの手段に留める。
+少なくとも、GitHub Pages上に作者本人のローカルパスや、ローカル版アプリ利用を前提にした案内を固定表示してはいけない。
 
 ### Mac向け手順
 
@@ -7243,14 +7248,14 @@ Macの固定パスや `SAXO_LOCAL_UI_ALLOWED_ORIGIN=... npm run ...` 形式を�
 Windows向け表示には、次を含める。
 
 - PowerShellを開く。
-- 公開版リポジトリのフォルダへ移動する。
+- ローカルAPI補助ツールのフォルダへ移動する。
 - `.env.local` を作成または配置する。
 - 環境変数をPowerShell形式で設定してから `npm run dev:saxo-api` を実行する。
 
 PowerShell例:
 
 ```powershell
-cd "C:\path\to\us-options-risk-planner-public-repo"
+cd "C:\path\to\saxo-local-api-helper"
 $env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="https://jimusaku-lab.github.io"
 $env:SAXO_LOCAL_UI_RETURN_URL="https://jimusaku-lab.github.io/us-options-risk-planner/"
 npm run dev:saxo-api
@@ -7261,16 +7266,16 @@ Client IDは利用者本人のLIVE AppKeyであり、アプリ作者へ送らな
 
 ### `.env.local` の扱い
 
-公開版リポジトリでローカルAPIを起動する場合、そのリポジトリにも `.env.local` が必要になる。
+ローカルAPI補助ツールでローカルAPIを起動する場合、その補助ツールのフォルダに `.env.local` が必要になる。
 ローカル実用版で接続済みの利用者は、既存 `.env.local` をコピーしてよい。
 初回利用者は、アプリ内の設定・診断からLIVE AppKeyを保存するか、`.env.local` を作成する。
 
 表示上は次の2パターンを分ける。
 
 - 既に別フォルダのローカル版でSaxo接続済み
-  - `.env.local` を公開版リポジトリへコピーする案内を出す。
+  - `.env.local` をローカルAPI補助ツールのフォルダへコピーする案内を出す。
 - 初めてSaxo API接続を行う
-  - Saxo Developer PortalでLIVE AppKeyを取得し、公開版リポジトリの `.env.local` へ設定する案内を出す。
+  - Saxo Developer PortalでLIVE AppKeyを取得し、ローカルAPI補助ツールの `.env.local` へ設定する案内を出す。
 
 `.env.local` は `.gitignore` 対象であり、GitHubへpushされないことを画面とdocsに明記する。
 
@@ -7315,7 +7320,7 @@ Client IDは利用者本人のLIVE AppKeyであり、アプリ作者へ送らな
 ### 実装メモ
 
 2026-06-16時点の公開版実装では、通常表示・コピー用コマンドに作者PC固有の `/Users/...` パスを出さない。
-利用者はターミナルまたはPowerShellで、自分がclone/downloadした公開版リポジトリのフォルダを開いてから、OS別の起動コマンドを実行する。
+利用者はターミナルまたはPowerShellで、自分が導入したローカルAPI補助ツールのフォルダを開いてから、OS別の起動コマンドを実行する。
 
 Macの主表示は1行コマンド:
 

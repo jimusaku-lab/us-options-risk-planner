@@ -72,7 +72,7 @@ const SAXO_ONBOARDING_STEPS = [
 ] as const;
 type SaxoOnboardingStepId = (typeof SAXO_ONBOARDING_STEPS)[number]["id"];
 const SAXO_LOCAL_API_SETUP_STEPS = [
-  { id: "repository", label: "公開版リポジトリをダウンロード/clone済み" },
+  { id: "repository", label: "ローカルAPI補助ツールを準備済み" },
   { id: "node", label: "Node.js/npm導入済み" },
   { id: "env_local", label: ".env.local作成済み" },
   { id: "local_api", label: "ローカルAPI起動済み" },
@@ -537,7 +537,7 @@ export function SaxoReadOnlyPanel({
       setMessage(
         error instanceof Error
           ? error.message
-          : "SaxoローカルAPIが起動していません。別ターミナルで `npm run dev:saxo-api` または `npm run dev:all` を起動してください。",
+          : "SaxoローカルAPIが起動していません。ローカルAPI補助ツールのフォルダで `npm run dev:saxo-api` を起動してください。",
       );
     } finally {
       setIsLoading(false);
@@ -577,8 +577,8 @@ export function SaxoReadOnlyPanel({
         localApiOs === "unknown"
           ? "MacまたはWindowsを選択してください。OSが分からない場合は、使っているPCに合わせて選び直してください。"
           : localApiOs === "windows"
-          ? "起動コマンドをコピーしました。PowerShellで公開版リポジトリのフォルダを開いて貼り付け、Enterを押してください。"
-          : "起動コマンドをコピーしました。ターミナルで公開版リポジトリのフォルダを開いて貼り付け、Enterを押してください。`>` が出た場合は Control + C でキャンセルして貼り直してください。",
+          ? "起動コマンドをコピーしました。PowerShellでローカルAPI補助ツールのフォルダを開いて貼り付け、Enterを押してください。"
+          : "起動コマンドをコピーしました。ターミナルでローカルAPI補助ツールのフォルダを開いて貼り付け、Enterを押してください。`>` が出た場合は Control + C でキャンセルして貼り直してください。",
       );
     } catch {
       setMessage("起動コマンドをコピーできませんでした。画面上のコマンドを手動でコピーしてください。");
@@ -1034,7 +1034,7 @@ export function SaxoReadOnlyPanel({
                 onCopyCommand={copyLocalApiStartCommand}
                 onToggleDiagnostics={() => setShowConnectionDetails((value) => !value)}
                 onShowSetup={() => {
-                  setMessage("導入手順を確認してください。Node.js LTS、公開版リポジトリ、.env.local の順に準備します。");
+                  setMessage("導入手順を確認してください。Node.js LTS、ローカルAPI補助ツール、.env.local の順に準備します。");
                 }}
               />
             ) : connectionState !== "connected" ? (
@@ -1526,7 +1526,8 @@ function SaxoApiOnboardingSection({
           <h3 className="text-sm font-bold text-sky-950">Saxo API接続準備</h3>
           <p className="mt-1 text-sm leading-6 text-sky-900">
             Developer Portal account、OpenAPI application、LIVE AppKey、Redirect URI、ローカルAPI起動の関係を順番に確認します。
-            公開版はGitHub Pages上で動きますが、Saxo接続は各自のPCで起動したローカルAPIだけが行います。
+            アプリ本体はGitHub Pagesの公開版を使います。Saxo API接続を使う場合だけ、PCにローカルAPI補助ツールを準備します。
+            ローカルAPI補助ツールはSaxoとの通信だけを担当します。
           </p>
           <p className="mt-1 text-xs font-semibold text-sky-800">
             Redirect URI: <code className="rounded bg-white px-1 py-0.5">http://127.0.0.1:18787/api/saxo/auth/callback</code>
@@ -1555,9 +1556,10 @@ function SaxoApiOnboardingSection({
       <div className="mt-3 rounded-md border border-sky-200 bg-white p-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h4 className="text-sm font-bold text-slate-950">ローカルAPI補助サーバの準備</h4>
+            <h4 className="text-sm font-bold text-slate-950">ローカルAPI補助ツールの準備</h4>
             <p className="mt-1 text-xs leading-5 text-slate-700">
-              初回は、Node.js LTS、公開版リポジトリ、`.env.local` の準備が必要です。準備が終わるまでは起動コマンドを実行しても成功しません。
+              初回は、Node.js LTS、ローカルAPI補助ツール、`.env.local` の準備が必要です。準備が終わるまでは起動コマンドを実行しても成功しません。
+              アプリ本体の更新はGitHub Pages側で反映され、補助ツールはSaxo API接続に必要な通信だけを担当します。
             </p>
           </div>
           <span className={`rounded px-2 py-1 text-xs font-bold ${setupReady ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>
@@ -1605,9 +1607,9 @@ function SaxoApiOnboardingSection({
             <div className="font-bold">導入手順</div>
             <ol className="mt-1 list-decimal space-y-1 pl-5">
               <li>Node.js LTSをインストールします。</li>
-              <li>GitHubから `jimusaku-lab/us-options-risk-planner` をダウンロードまたはcloneします。</li>
-              <li>{localApiOs === "windows" ? "PowerShellで公開版リポジトリのフォルダを開きます。" : "ターミナルで公開版リポジトリのフォルダを開きます。"}</li>
-              <li>Saxo Developer PortalのLIVE AppKeyを使い、公開版リポジトリ内に `.env.local` を作ります。</li>
+              <li>ローカルAPI補助ツールをPCに準備します。</li>
+              <li>{localApiOs === "windows" ? "PowerShellでローカルAPI補助ツールのフォルダを開きます。" : "ターミナルでローカルAPI補助ツールのフォルダを開きます。"}</li>
+              <li>Saxo Developer PortalのLIVE AppKeyを使い、ローカルAPI補助ツール内に `.env.local` を作ります。</li>
               <li>準備チェックを埋めてから、OS別の起動コマンドを実行します。</li>
             </ol>
           </div>
@@ -1619,7 +1621,7 @@ function SaxoApiOnboardingSection({
         <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700">
           <div className="font-bold text-slate-900">.env.local について</div>
           <p className="mt-1">
-            `.env.local` はGitHub Pagesには保存されず、GitHubへpushしません。このリポジトリでは `.gitignore` 対象です。
+            `.env.local` はGitHub Pagesには保存されず、GitHubへpushしません。ローカルAPI補助ツール側で `.gitignore` 対象です。
             初回ユーザーは、自分のLIVE AppKey（Client ID）をこのPC内の `.env.local` に設定します。Client Secret、Saxo ID、パスワード、2FAコードの入力欄はありません。
           </p>
         </div>
@@ -1848,7 +1850,7 @@ function LocalApiDownCard({
         <div>
           <h3 className="text-sm font-bold text-amber-950">Saxo APIを使うには、先にこのPCでローカルAPIを起動します。</h3>
           <p className="mt-1 text-sm leading-6 text-amber-900">
-            Saxo接続の前に、Node.js、公開版リポジトリ、`.env.local` を準備し、選択したOSのコマンドを実行してください。起動できるまでSaxoログインやまとめて取得は使いません。
+            Saxo接続の前に、Node.js、ローカルAPI補助ツール、`.env.local` を準備し、選択したOSのコマンドを実行してください。起動できるまでSaxoログインやまとめて取得は使いません。
             GitHub Pages自体はSaxoへ接続せず、Client IDやtokenもGitHubへ保存しません。
           </p>
         </div>
@@ -1888,14 +1890,14 @@ function LocalApiDownCard({
       {!setupReady ? (
         <div className="mt-3 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm leading-6 text-amber-950">
           <div className="font-bold">先に導入準備が必要です</div>
-          <p className="mt-1">上の「ローカルAPI補助サーバの準備」で、公開版リポジトリ、Node.js/npm、`.env.local` の準備を確認してください。未導入の状態では起動コマンドを出しても成功しません。</p>
+          <p className="mt-1">上の「ローカルAPI補助ツールの準備」で、補助ツール、Node.js/npm、`.env.local` の準備を確認してください。未導入の状態では起動コマンドを出しても成功しません。</p>
         </div>
       ) : (
         <>
           <ol className="mt-3 grid gap-2 text-sm text-amber-950 md:grid-cols-3">
             <li className="rounded-md border border-amber-200 bg-white p-3">
               <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">1</span>
-              <span className="font-bold">{os === "windows" ? "PowerShellで公開版リポジトリのフォルダを開く" : "ターミナルで公開版リポジトリのフォルダを開く"}</span>
+              <span className="font-bold">{os === "windows" ? "PowerShellでローカルAPI補助ツールのフォルダを開く" : "ターミナルでローカルAPI補助ツールのフォルダを開く"}</span>
             </li>
             <li className="rounded-md border border-amber-200 bg-white p-3">
               <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">2</span>
@@ -1980,7 +1982,7 @@ function SaxoDiagnostics({
         <StatusRow label="OAuth後の戻り先" value={configStatus?.localUiReturnUrl ?? "未取得"} />
       </dl>
       <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700">
-        GitHub Pages版でSaxo API Read-onlyを使う場合も、Saxo通信は各自のMac上のローカルAPIだけが行います。
+        GitHub Pages版でSaxo API Read-onlyを使う場合も、Saxo通信は各自のPC上のローカルAPI補助ツールだけが行います。
         GitHub PagesはSaxoへ直接接続せず、Client ID、OAuth token、口座データ、JSONバックアップを保存しません。
       </div>
       <ReadOnlyStorageNotice status={status} />

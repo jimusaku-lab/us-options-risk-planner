@@ -60,6 +60,62 @@
 
 ---
 
+# 2026-06-16 一般公開版 Saxo API Read-only オンボーディング文言修正
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 対象ブランチ: `main` / `gh-pages`
+
+## 実装内容
+
+- 公開版UIから、友人利用者に公開版リポジトリのcloneやローカル版アプリ利用を促すように見える文言を削除した。
+- 準備チェックの `公開版リポジトリをダウンロード/clone済み` を `ローカルAPI補助ツールを準備済み` に変更した。
+- 導入手順を、アプリ本体はGitHub Pagesの公開版を使い続け、Saxo API接続を使う場合だけPCにローカルAPI補助ツールを準備する説明へ変更した。
+- ローカルAPI補助ツールはSaxoとの通信だけを担当し、GitHub Pagesや作者側にClient ID、OAuth token、口座情報を保存しないことを明記した。
+- Mac / Windows の起動案内は、公開版リポジトリではなくローカルAPI補助ツールのフォルダを開く説明に変更した。
+- 公開版アプリの更新はGitHub Pages側で反映され、ローカルAPI補助ツールはSaxo API接続に必要な補助機能であることをUIと設計書に明記した。
+- 将来的に補助ツールのバージョン確認や古い場合の更新案内を出す方針を設計書側に維持した。
+- Saxo APIはRead-onlyのままで、発注・注文変更・注文取消endpointは追加していない。
+- Client Secret、Saxo ID、password、2FA、OAuth tokenの入力欄や保存処理は追加していない。
+
+## 修正ファイル
+
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `docs/saxo-api-readonly-detailed-design-2026-06-08.md`
+- `docs/友人向けSaxo API接続準備ガイド.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-C9H6MPWh.js`
+  - bundle内に `公開版リポジトリ`、`jimusaku-lab/us-options-risk-planner`、`ダウンロードまたはclone`、`ローカル版アプリ`、`/Users/motomichi` が含まれないことを確認した。
+  - bundle内に `ローカルAPI補助ツール`、`アプリ本体はGitHub Pagesの公開版を使います`、`PowerShell` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: 後続commitで確定
+- Pages deploy commit hash: 後続commitで確定
+- main push: 実施予定
+- gh-pages push: 実施予定
+
+## 公開URL確認
+
+- `gh-pages` 反映後、`https://jimusaku-lab.github.io/us-options-risk-planner/` が新bundle `assets/index-C9H6MPWh.js` を参照することを確認する。
+- 公開bundle内に旧表現が残らず、`ローカルAPI補助ツール` 表現へ置き換わっていることを確認する。
+
+## 残課題
+
+- この時点ではなし。
+
+---
+
 # 2026-06-16 一般公開版 Saxo API Read-only 接続導線修正
 
 ## 対象

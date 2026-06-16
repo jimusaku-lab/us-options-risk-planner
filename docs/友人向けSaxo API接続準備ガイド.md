@@ -78,9 +78,13 @@ LIVE接続は本番口座のRead-only接続です。SIM / Trial口座ではあ�
 
 ## 5. ローカルAPIの起動
 
-GitHub Pages自体はSaxoへ接続しません。Saxoとの通信は、自分のMacで起動したローカルAPIだけが行います。
+GitHub Pages自体はSaxoへ接続しません。Saxoとの通信は、自分のPCで起動したローカルAPI補助ツールだけが行います。
 
-公開版リポジトリをcloneしたディレクトリで、次を実行します。
+友人が普段使うアプリ本体は、GitHub Pagesの公開版です。
+更新も今まで通りGitHub Pages側で反映されます。
+PCに置く必要があるのは、Saxoと通信するためのローカルAPI補助ツールだけです。
+
+ローカルAPI補助ツールのフォルダで、次を実行します。
 
 ```bash
 npm run dev:saxo-api
@@ -108,11 +112,11 @@ SAXO_LOCAL_API_PORT=18787
 Mac向けの環境変数指定形式は、Windowsではそのまま使えません。
 WindowsではPowerShell形式で環境変数を設定します。
 
-Macでは、公開版リポジトリのフォルダをターミナルで開いてから、アプリが表示する1行コマンドを貼り付けます。
+Macでは、ローカルAPI補助ツールのフォルダをターミナルで開いてから、アプリが表示する1行コマンドを貼り付けます。
 `>` だけが出て止まった場合は `Control + C` でキャンセルし、1行コマンドを貼り直します。
 
 ```powershell
-cd "C:\path\to\us-options-risk-planner-public-repo"
+cd "C:\path\to\saxo-local-api-helper"
 $env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="https://jimusaku-lab.github.io"
 $env:SAXO_LOCAL_UI_RETURN_URL="https://jimusaku-lab.github.io/us-options-risk-planner/"
 npm run dev:saxo-api
@@ -137,7 +141,7 @@ Macでコマンド貼り付け後に `>` だけが表示されて止まった場
 公開版GitHub PagesはClient IDやOAuth tokenを保存しません。
 そのため、ローカルAPIを起動するフォルダに `.env.local` が必要です。
 
-既に自分のローカル版でSaxo接続できている場合は、その `.env.local` を公開版リポジトリへコピーして使えます。
+既に自分のローカル版でSaxo接続できている場合は、その `.env.local` をローカルAPI補助ツールのフォルダへコピーして使えます。
 初めて使う場合は、Saxo Developer Portalで取得したLIVE AppKeyを `.env.local` に設定します。
 
 `.env.local` はGitHubにpushしてはいけません。
