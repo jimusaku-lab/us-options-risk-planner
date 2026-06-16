@@ -100,20 +100,20 @@
 
 ## commit / push
 
-- 実装commit hash: `TBD`
+- 実装commit hash: `bb9a606`
 - 報告書commit hash: `TBD`
-- Pages deploy commit hash: `TBD`
+- Pages deploy commit hash: `ba812d0`
 - main push: 予定
 - gh-pages push: 予定
 
 ## 公開URL確認
 
-- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundleを参照することを確認予定。
-- 公開bundle内に `次回以降の再ログインを減らすため、接続保持を保存してください`、`このPCに接続保持を保存`、`準備手順を再表示`、`準備手順を閉じる` が含まれることを確認予定。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-iVAo1oEw.js` を参照することを確認予定。
+- 公開bundle内に `次回以降の再ログインを減らすため、接続保持を保存してください`、`このPCに接続保持を保存`、`準備手順を再表示`、`準備手順を閉じる` が含まれることを確認済み。
 
 ## 残課題
 
-- commit / push / GitHub Pages反映後に公開URL確認結果を確定する。
+- main / gh-pages push 後に公開URLのHTML参照bundleを最終確認する。
 
 ---
 
