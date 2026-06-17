@@ -112,6 +112,59 @@
 - `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BG4gbuqs.js` を参照することを確認した。
 - 公開bundle内に `プレミアム年率`、`権利行使時想定`、`主分母: 取得原価`、`プレミアム込み想定益` が含まれることを確認した。
 
+# カバードコール注文前の権利行使時想定年率・SummaryCards統一 公開版反映報告 2026-06-17
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.29`
+
+## 実装内容
+
+- 上部Dashboardの `権利行使時想定` 枠に、想定年率と手数料後想定年率を追加した。
+- 下部 `SummaryCards` でも、注文前・建玉中未確認の表示では `calculateDashboardPremiumDisplay` を使うようにし、上部Dashboardと同じ予定プレミアム、手数料後プレミアム、取得原価ベース分母、プレミアム年率を表示するようにした。
+- 下部 `SummaryCards` の年率カードが旧 `taxResult` 経路で `0.0% / 0.0%` を出す状態を避け、注文前では `予定 5.0% / 手数料後 4.8%` の表示へ分岐するようにした。
+- 下部 `SummaryCards` に `権利行使時想定` カードを追加し、想定年率、手数料後想定年率、株式売却益、プレミアム込み想定益、手数料後想定益を表示するようにした。
+- 権利行使時想定は実績ではなく、成績サマリーへ混ぜない注記を維持した。
+
+## 修正ファイル
+
+- `src/domain/dashboardDisplay.test.ts`
+- `src/components/dashboard/Dashboard.tsx`
+- `src/components/results/SummaryCards.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（15 files / 78 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-Rr91d3jl.js`
+  - bundle内に `プレミアム年率`、`権利行使時想定`、`想定年率`、`手数料後想定益`、`実績には含めません` が含まれることを確認した。
+
+## 表示確認
+
+- Cプレミアム `0.65`、1枚、分母 `$20,750`、DTE `23日` で、プレミアム年率は約 `5.0%`、手数料後は約 `4.8%` になる。
+- 権利行使時想定年率は、プレミアム込み想定益 `$3,315.00` を分子にして約 `253.5%`、手数料後想定益 `$3,312.75` を分子にして約 `253.4%` になる。
+- 下部サマリーカードでも、注文前の年率が旧経路の `0.0% / 0.0%` に戻らず、上部Dashboardと同じプレミアム年率を表示できる。
+- 権利行使時想定は、満期時に株価が権利行使価格以上となり株式が売却された場合の想定値として表示され、実績成績には混ざらない。
+
+## commit / push
+
+- 実装commit hash: `9f93524`
+- Pages deploy commit hash: `57fe3fb`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-Rr91d3jl.js` を参照することを確認した。
+- 公開bundle内に `プレミアム年率`、`権利行使時想定`、`想定年率`、`手数料後想定益`、`実績には含めません` が含まれることを確認した。
+
 ---
 
 # 2026-06-17 一般公開版 N株式保有からNカバードコール建玉を作成する導線
