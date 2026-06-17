@@ -197,14 +197,15 @@
 
 ## commit / push
 
-- 実装commit hash: 記録予定
-- Pages deploy commit hash: 記録予定
-- main push: 実行予定
-- gh-pages push: 実行予定
+- 実装commit hash: `40fafae`
+- Pages deploy commit hash: `b713f0d`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- `https://jimusaku-lab.github.io/us-options-risk-planner/`: main commit / gh-pages deploy 後に確認予定
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BJXsHE_d.js` を参照することを確認した。
+- 公開bundle内に `権利行使時想定`、`参考JPY未計算`、`プレミアム込み`、`手数料後` が含まれることを確認した。
 
 ---
 
