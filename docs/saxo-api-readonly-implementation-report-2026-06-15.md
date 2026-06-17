@@ -115,7 +115,7 @@
 
 ## commit / push
 
-- 実装commit hash: 後続commit後に確定
+- 実装commit hash: `19809f9`
 - Pages deploy commit hash: 後続deploy後に確定
 - main push: 後続push後に確定
 - gh-pages push: 後続push後に確定
