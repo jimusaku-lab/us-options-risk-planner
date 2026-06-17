@@ -128,6 +128,7 @@ export function Dashboard({
               const premiumDisplayUSD = isHistoryRow
                 ? premium / ((simulation.referenceFxRateJPY ?? simulation.fxRateJPY) || 1)
                 : premiumDisplay.premiumUSD;
+              const hasEffectiveFx = premiumDisplay.effectiveFxRateJPY !== null;
               const primary =
                 historyPerformance?.primaryDenominator ??
                 getPrimaryDenominator(calculateDenominators(simulationWithAccount, premium));
@@ -157,7 +158,11 @@ export function Dashboard({
                   ? "未入力"
                   : isHistoryRow && primary.netAnnualReturnPct !== undefined
                   ? `${formatPct(primary.annualReturnPct)} / ${formatPct(primary.netAnnualReturnPct)}`
-                  : `${premiumDisplay.basis === "planned" ? "予定 " : premiumDisplay.basis === "open_unconfirmed" ? "約定未確認 " : ""}${formatPct(primary.annualReturnPct)}`;
+                  : premiumDisplay.annualReturnPct !== undefined
+                    ? `${premiumDisplay.basis === "planned" ? "予定 " : premiumDisplay.basis === "open_unconfirmed" ? "約定未確認 " : ""}${formatPct(premiumDisplay.annualReturnPct)}${
+                        premiumDisplay.netAnnualReturnPct !== undefined ? ` / 手数料後 ${formatPct(premiumDisplay.netAnnualReturnPct)}` : ""
+                      }`
+                    : `${premiumDisplay.basis === "planned" ? "予定 " : premiumDisplay.basis === "open_unconfirmed" ? "約定未確認 " : ""}${formatPct(primary.annualReturnPct)}`;
               return (
                 <Fragment key={simulation.id}>
                 {isFirstHistory ? (
@@ -223,7 +228,18 @@ export function Dashboard({
                         {!isHistoryRow && premiumDisplay.netAfterFeesUSD !== undefined && Math.abs(premiumDisplay.netAfterFeesUSD - premiumDisplay.premiumUSD) > 0.005 ? (
                           <span className="block text-xs text-slate-500">手数料後 {formatUSD(premiumDisplay.netAfterFeesUSD)}</span>
                         ) : null}
-                        <span className="block text-xs text-slate-500">参考 {formatJPY(premium)}</span>
+                        <span className="block text-xs text-slate-500">{hasEffectiveFx ? `参考 ${formatJPY(premium)}` : "参考JPY未計算"}</span>
+                        {!isHistoryRow && premiumDisplay.coveredCallAssignmentEstimate ? (
+                          <span className="mt-2 block rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-sky-950">
+                            <span className="block font-bold">権利行使時想定</span>
+                            <span className="block">株式売却益 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.stockSaleGainUSD)}</span>
+                            <span className="block">プレミアム込み {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.totalWithPremiumUSD)}</span>
+                            <span className="block">手数料後 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.totalAfterFeesUSD)}</span>
+                            <span className="block text-sky-800">
+                              満期時に株価が権利行使価格以上となり、株式が売却された場合の想定です。実績には含めません。
+                            </span>
+                          </span>
+                        ) : null}
                       </>
                     ) : (
                       <>
@@ -240,7 +256,7 @@ export function Dashboard({
                     {primary.currency === "USD" ? (
                       <>
                         <span className="block">{formatUSD(primary.amountUSD ?? 0)}</span>
-                        <span className="block text-xs text-slate-500">参考 {formatJPY(primary.amountJPY)}</span>
+                        <span className="block text-xs text-slate-500">{hasEffectiveFx ? `参考 ${formatJPY(primary.amountJPY)}` : "参考JPY未計算"}</span>
                       </>
                     ) : (
                       formatJPY(primary.amountJPY)

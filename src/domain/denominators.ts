@@ -107,7 +107,12 @@ function calculateDenominatorsUSD(
   profitJPY: number,
   netProfitJPY?: number,
 ): DenominatorResult[] {
-  const fx = simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
+  const fx =
+    simulation.referenceFxRateJPY !== undefined && simulation.referenceFxRateJPY > 0
+      ? simulation.referenceFxRateJPY
+      : simulation.fxRateJPY > 0
+        ? simulation.fxRateJPY
+        : 0;
   const profitUSD = fx > 0 ? profitJPY / fx : 0;
   const netProfitUSD = netProfitJPY === undefined || fx <= 0 ? undefined : netProfitJPY / fx;
   const stockUSD = calculateStockDenominatorForSimulationUSD(simulation);

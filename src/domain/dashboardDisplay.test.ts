@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TradeSimulation } from "@/types/domain";
-import { calculateDashboardPremiumDisplay } from "./dashboardDisplay";
+import { calculateDashboardPremiumDisplay, getEffectiveFxRateJPY } from "./dashboardDisplay";
 
 function createPlannedCoveredCall(overrides: Partial<TradeSimulation> = {}): TradeSimulation {
   const simulation: TradeSimulation = {
@@ -111,5 +111,42 @@ describe("dashboard premium display", () => {
     expect(display.basis).toBe("planned");
     expect(display.hasPremiumInput).toBe(false);
     expect(display.premiumUSD).toBe(0);
+  });
+
+  it("calculates N account planned annual return in USD even when reference FX is zero", () => {
+    const simulation = createPlannedCoveredCall({
+      entryDate: "2026-06-17",
+      expiryDate: "2026-07-10",
+      dte: 0,
+      fxRateJPY: 160.38,
+      referenceFxRateJPY: 0,
+    });
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(getEffectiveFxRateJPY(simulation)).toBe(160.38);
+    expect(display.dte).toBe(23);
+    expect(display.premiumUSD).toBeCloseTo(65, 8);
+    expect(display.netAfterFeesUSD).toBeCloseTo(62.75, 8);
+    expect(display.premiumJPY).toBeCloseTo(10_424.7, 1);
+    expect(display.annualReturnPct).toBeCloseTo(5.0, 1);
+    expect(display.netAnnualReturnPct).toBeCloseTo(4.8, 1);
+  });
+
+  it("calculates covered call assignment estimate separately from premium annual return", () => {
+    const simulation = createPlannedCoveredCall({
+      entryDate: "2026-06-17",
+      expiryDate: "2026-07-10",
+      dte: 0,
+      fxRateJPY: 160.38,
+      referenceFxRateJPY: 0,
+    });
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(display.coveredCallAssignmentEstimate?.shares).toBe(100);
+    expect(display.coveredCallAssignmentEstimate?.stockSaleGainUSD).toBeCloseTo(3_250, 8);
+    expect(display.coveredCallAssignmentEstimate?.totalWithPremiumUSD).toBeCloseTo(3_315, 8);
+    expect(display.coveredCallAssignmentEstimate?.totalAfterFeesUSD).toBeCloseTo(3_312.75, 8);
   });
 });

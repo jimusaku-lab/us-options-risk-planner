@@ -159,6 +159,55 @@
 
 ---
 
+# 2026-06-17 一般公開版 N口座カバードコールのUSD予定年率・参考JPY・権利行使時想定損益
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.27`
+
+## 実装内容
+
+- `referenceFxRateJPY = 0` を有効な為替として扱わず、`referenceFxRateJPY > 0`、次に `fxRateJPY > 0` の順で使う `effectiveFx` 判定を追加した。
+- N口座の注文前・約定未確認表示では、USD予定利益、USD分母、建玉日から満期日までのDTEで予定年率を直接計算するようにした。
+- 参考JPYは `effectiveFx` がある場合だけ表示し、ない場合は `参考JPY未計算` と表示するようにした。
+- カバードコールの注文前表示に、プレミアム年率とは別枠で `権利行使時想定` を追加した。
+- 権利行使時想定では、株式売却益、プレミアム込み想定益、手数料後想定益を表示し、実績ではなく成績サマリーへ混ぜない旨を注記するようにした。
+- `calculateDenominatorsUSD` でも同じ `effectiveFx` 判定を使い、分母の参考JPYが `参考 0円` にならないようにした。
+
+## 修正ファイル
+
+- `src/domain/dashboardDisplay.ts`
+- `src/domain/dashboardDisplay.test.ts`
+- `src/domain/denominators.ts`
+- `src/components/dashboard/Dashboard.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（15 files / 78 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-BJXsHE_d.js`
+  - bundle内に `権利行使時想定`、`参考JPY未計算`、`プレミアム込み`、`手数料後` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: 記録予定
+- Pages deploy commit hash: 記録予定
+- main push: 実行予定
+- gh-pages push: 実行予定
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/`: main commit / gh-pages deploy 後に確認予定
+
+---
+
 # 2026-06-17 一般公開版 買いオプションの反対売買決済優先UX
 
 ## 対象
