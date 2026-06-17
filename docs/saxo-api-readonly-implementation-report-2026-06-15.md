@@ -93,8 +93,8 @@
 
 ## commit / push
 
-- 実装commit hash: `TBD`
-- Pages deploy commit hash: `TBD`
+- 実装commit hash: `9b5d875`
+- Pages deploy commit hash: `d3805fa`
 - main push: 予定
 - gh-pages push: 予定
 
