@@ -229,17 +229,6 @@ export function Dashboard({
                           <span className="block text-xs text-slate-500">手数料後 {formatUSD(premiumDisplay.netAfterFeesUSD)}</span>
                         ) : null}
                         <span className="block text-xs text-slate-500">{hasEffectiveFx ? `参考 ${formatJPY(premium)}` : "参考JPY未計算"}</span>
-                        {!isHistoryRow && premiumDisplay.coveredCallAssignmentEstimate ? (
-                          <span className="mt-2 block rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-sky-950">
-                            <span className="block font-bold">権利行使時想定</span>
-                            <span className="block">株式売却益 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.stockSaleGainUSD)}</span>
-                            <span className="block">プレミアム込み {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.totalWithPremiumUSD)}</span>
-                            <span className="block">手数料後 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.totalAfterFeesUSD)}</span>
-                            <span className="block text-sky-800">
-                              満期時に株価が権利行使価格以上となり、株式が売却された場合の想定です。実績には含めません。
-                            </span>
-                          </span>
-                        ) : null}
                       </>
                     ) : (
                       <>
@@ -263,8 +252,27 @@ export function Dashboard({
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
+                    {!isHistoryRow && premiumDisplay.annualReturnPct !== undefined ? (
+                      <span className="block text-[11px] font-bold text-slate-500">プレミアム年率</span>
+                    ) : null}
                     {annualReturnLabel}
                     {isHistoryRow ? <span className="mt-1 block text-[11px] font-semibold text-slate-500">税前 / 税後</span> : null}
+                    {!isHistoryRow && premiumDisplay.coveredCallAssignmentEstimate ? (
+                      <span className="mt-2 block rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-sky-950">
+                        <span className="block font-bold">権利行使時想定</span>
+                        <span className="block text-sky-800">主分母: 取得原価 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD)}</span>
+                        {premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD !== undefined &&
+                        Math.abs(premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD - premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD) > 0.005 ? (
+                          <span className="block text-sky-700">参考: 現在株価ベース {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD)}</span>
+                        ) : null}
+                        <span className="block">株式売却益 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.stockSaleGainUSD)}</span>
+                        <span className="block">プレミアム込み想定益 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.totalWithPremiumUSD)}</span>
+                        <span className="block">手数料後想定益 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.totalAfterFeesUSD)}</span>
+                        <span className="block text-sky-800">
+                          満期時に株価が権利行使価格以上となり、株式が売却された場合の想定です。実績には含めません。
+                        </span>
+                      </span>
+                    ) : null}
                   </td>
                   <td
                     className={`py-3 pr-3 text-right text-xs font-bold ${

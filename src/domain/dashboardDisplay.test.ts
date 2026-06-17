@@ -145,6 +145,7 @@ describe("dashboard premium display", () => {
     const display = calculateDashboardPremiumDisplay(simulation);
 
     expect(display.coveredCallAssignmentEstimate?.shares).toBe(100);
+    expect(display.coveredCallAssignmentEstimate?.costBasisDenominatorUSD).toBeCloseTo(20_750, 8);
     expect(display.coveredCallAssignmentEstimate?.stockSaleGainUSD).toBeCloseTo(3_250, 8);
     expect(display.coveredCallAssignmentEstimate?.totalWithPremiumUSD).toBeCloseTo(3_315, 8);
     expect(display.coveredCallAssignmentEstimate?.totalAfterFeesUSD).toBeCloseTo(3_312.75, 8);

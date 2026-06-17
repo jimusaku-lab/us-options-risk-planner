@@ -14,6 +14,8 @@ const HISTORY_STATUSES = new Set(["closed", "assigned", "expired"]);
 
 export type CoveredCallAssignmentEstimate = {
   shares: number;
+  costBasisDenominatorUSD: number;
+  currentPriceDenominatorUSD?: number;
   stockSaleGainUSD: number;
   totalWithPremiumUSD: number;
   totalAfterFeesUSD: number;
@@ -99,11 +101,16 @@ function calculateCoveredCallAssignmentEstimate(params: {
   if (!callLeg || !stockPosition || params.simulation.strategyType !== "covered_call") return undefined;
   const coveredShares = Math.min(stockPosition.shares, callLeg.quantity * 100);
   if (coveredShares <= 0 || callLeg.strikeUSD <= 0 || stockPosition.averageCostUSD <= 0) return undefined;
+  const costBasisDenominatorUSD = stockPosition.averageCostUSD * coveredShares;
+  const currentPriceDenominatorUSD =
+    params.simulation.currentPriceUSD > 0 ? params.simulation.currentPriceUSD * coveredShares : undefined;
   const stockSaleGainUSD = (callLeg.strikeUSD - stockPosition.averageCostUSD) * coveredShares;
   const totalWithPremiumUSD = stockSaleGainUSD + params.premiumUSD;
   const totalAfterFeesUSD = stockSaleGainUSD + params.netAfterFeesUSD;
   return {
     shares: coveredShares,
+    costBasisDenominatorUSD,
+    currentPriceDenominatorUSD,
     stockSaleGainUSD,
     totalWithPremiumUSD,
     totalAfterFeesUSD,
