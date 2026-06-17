@@ -147,14 +147,15 @@
 
 ## commit / push
 
-- 実装commit hash: 記録予定
-- Pages deploy commit hash: 記録予定
-- main push: 実行予定
-- gh-pages push: 実行予定
+- 実装commit hash: `388f9d6`
+- Pages deploy commit hash: `8d2c270`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- `https://jimusaku-lab.github.io/us-options-risk-planner/`: main commit / gh-pages deploy 後に確認予定
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-qceZbmUO.js` を参照することを確認した。
+- 公開bundle内に `予定プレミアム`、`約定未確認プレミアム`、`手数料後`、`未入力` が含まれることを確認した。
 
 ---
 
