@@ -109,8 +109,8 @@
 
 ## 公開URL確認
 
-- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BG4gbuqs.js` を参照することを確認する。
-- 公開bundle内に `プレミアム年率`、`権利行使時想定`、`主分母: 取得原価`、`プレミアム込み想定益` が含まれることを確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BG4gbuqs.js` を参照することを確認した。
+- 公開bundle内に `プレミアム年率`、`権利行使時想定`、`主分母: 取得原価`、`プレミアム込み想定益` が含まれることを確認した。
 
 ---
 
