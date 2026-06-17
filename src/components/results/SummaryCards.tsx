@@ -8,6 +8,7 @@ import {
   calculateUsedMarginJPY,
   calculateUsedMarginUSD,
 } from "@/domain/calculations";
+import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 type SummaryCardsProps = {
@@ -37,8 +38,10 @@ export function SummaryCards({
   denominatorFormula,
   stockTransfer,
 }: SummaryCardsProps) {
-  const premiumJPY = calculateNetInitialPremiumJPY(simulation);
-  const premiumUSD = calculateNetInitialPremiumUSD(simulation);
+  const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
+  const usePremiumDisplay = !historyMode && (premiumDisplay.basis === "planned" || premiumDisplay.basis === "open_unconfirmed");
+  const premiumJPY = usePremiumDisplay ? premiumDisplay.premiumJPY : calculateNetInitialPremiumJPY(simulation);
+  const premiumUSD = usePremiumDisplay ? premiumDisplay.premiumUSD : calculateNetInitialPremiumUSD(simulation);
   const putAssignmentJPY = calculatePutAssignmentCapitalTotalJPY(simulation);
   const putAssignmentUSD = calculatePutAssignmentCapitalTotalUSD(simulation);
   const usedMarginJPY = calculateUsedMarginJPY({
@@ -70,18 +73,71 @@ export function SummaryCards({
   )}日。左が税前、右が税引後。`;
   const historyModeNotice =
     "現在のN口座株式の損益ではありません。現物株の現在時価や移管後の損益は、この年率計算に含めていません。";
+  const summaryDenominatorUSD =
+    usePremiumDisplay && premiumDisplay.coveredCallAssignmentEstimate
+      ? premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD
+      : primaryDenominator.amountUSD;
+  const summaryDenominatorJPY =
+    usePremiumDisplay && premiumDisplay.coveredCallAssignmentEstimate && premiumDisplay.effectiveFxRateJPY
+      ? premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD * premiumDisplay.effectiveFxRateJPY
+      : primaryDenominator.amountJPY;
+  const summaryDenominatorCurrency =
+    usePremiumDisplay && premiumDisplay.coveredCallAssignmentEstimate ? "USD" : primaryDenominator.currency;
+  const premiumCardNote = usePremiumDisplay
+    ? [
+        `${premiumDisplay.label}。`,
+        premiumDisplay.netAfterFeesUSD !== undefined && Math.abs(premiumDisplay.netAfterFeesUSD - premiumDisplay.premiumUSD) > 0.005
+          ? `手数料後 ${isN ? formatUSD(premiumDisplay.netAfterFeesUSD) : formatJPY(premiumDisplay.netAfterFeesJPY ?? 0)}。`
+          : "",
+        isN
+          ? premiumDisplay.effectiveFxRateJPY
+            ? `参考JPY ${formatJPY(premiumDisplay.premiumJPY)}。`
+            : "参考JPY未計算。"
+          : "",
+      ].filter(Boolean).join(" ")
+    : isN
+      ? `N口座のUSD主計算。参考JPY ${formatJPY(premiumJPY)}。`
+      : historyMode
+        ? "終了済みのP口座プット売りで確定したオプション収入です。"
+        : "P口座JPY決済。手数料・税金は別カードで控除します。";
+  const denominatorCardValue =
+    summaryDenominatorCurrency === "USD" ? formatUSD(summaryDenominatorUSD ?? 0) : formatJPY(summaryDenominatorJPY);
+  const denominatorCardNote = usePremiumDisplay && premiumDisplay.coveredCallAssignmentEstimate
+    ? [
+        `取得原価ベース。${formatUSD(premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD)}。`,
+        premiumDisplay.effectiveFxRateJPY ? `参考JPY ${formatJPY(summaryDenominatorJPY)}。` : "参考JPY未計算。",
+        premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD !== undefined &&
+        Math.abs(premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD - premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD) > 0.005
+          ? `参考: 現在株価ベース ${formatUSD(premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD)}。`
+          : "",
+        denominatorFormula,
+      ].filter(Boolean).join(" ")
+    : [
+        primaryDenominator.currency === "USD"
+          ? `${primaryDenominator.label}。参考JPY ${formatJPY(primaryDenominator.amountJPY)}。`
+          : primaryDenominator.label,
+        denominatorFormula,
+      ].filter(Boolean).join(" / ");
+  const annualCardValue =
+    usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
+      ? `予定 ${formatPct(premiumDisplay.annualReturnPct)}${
+          premiumDisplay.netAnnualReturnPct !== undefined ? ` / 手数料後 ${formatPct(premiumDisplay.netAnnualReturnPct)}` : ""
+        }`
+      : `${formatPct(primaryDenominator.annualReturnPct)} / ${formatPct(taxResult.netAnnualReturnPct)}`;
+  const annualCardNote = usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
+    ? `プレミアム年率。${premiumDisplay.dte}日換算。権利行使時想定は別カードで確認します。`
+    : historyMode
+      ? historyAnnualFormula
+      : `税前 / 税引後。${simulation.dte}日換算。`;
+  const assignmentEstimate = usePremiumDisplay ? premiumDisplay.coveredCallAssignmentEstimate : undefined;
 
   const cards = [
     {
       title: historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
       value: isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
-      note: isN
-        ? `N口座のUSD主計算。参考JPY ${formatJPY(premiumJPY)}。`
-        : historyMode
-          ? "終了済みのP口座プット売りで確定したオプション収入です。"
-          : "P口座JPY決済。手数料・税金は別カードで控除します。",
+      note: premiumCardNote,
     },
-    ...(!historyMode && coveredCallAssignmentPreview
+    ...(!historyMode && coveredCallAssignmentPreview && !assignmentEstimate
       ? [
           {
             title: "満期想定損益",
@@ -95,19 +151,32 @@ export function SummaryCards({
       : []),
     {
       title: historyMode ? "この履歴の年率分母" : "使用分母",
-      value: historyDenominatorValue,
-      note: [
-        primaryDenominator.currency === "USD"
-          ? `${primaryDenominator.label}。参考JPY ${formatJPY(primaryDenominator.amountJPY)}。`
-          : primaryDenominator.label,
-        denominatorFormula,
-      ].filter(Boolean).join(" / "),
+      value: usePremiumDisplay ? denominatorCardValue : historyDenominatorValue,
+      note: denominatorCardNote,
     },
     {
       title: historyMode ? "この履歴のオプション年率" : "年率",
-      value: `${formatPct(primaryDenominator.annualReturnPct)} / ${formatPct(taxResult.netAnnualReturnPct)}`,
-      note: historyMode ? historyAnnualFormula : `税前 / 税引後。${simulation.dte}日換算。`,
+      value: annualCardValue,
+      note: annualCardNote,
     },
+    ...(!historyMode && assignmentEstimate
+      ? [
+          {
+            title: "権利行使時想定",
+            value: assignmentEstimate.annualReturnPct !== undefined
+              ? `想定年率 ${formatPct(assignmentEstimate.annualReturnPct)}${
+                  assignmentEstimate.netAnnualReturnPct !== undefined ? ` / 手数料後 ${formatPct(assignmentEstimate.netAnnualReturnPct)}` : ""
+                }`
+              : "想定年率 未計算",
+            note: [
+              `株式売却益 ${formatUSD(assignmentEstimate.stockSaleGainUSD)}。`,
+              `プレミアム込み想定益 ${formatUSD(assignmentEstimate.totalWithPremiumUSD)}。`,
+              `手数料後想定益 ${formatUSD(assignmentEstimate.totalAfterFeesUSD)}。`,
+              "満期時に株価が権利行使価格以上となり、株式が売却された場合の想定です。実績には含めません。",
+            ].join(" "),
+          },
+        ]
+      : []),
     ...(!historyMode
       ? [
           {

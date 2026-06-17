@@ -149,5 +149,7 @@ describe("dashboard premium display", () => {
     expect(display.coveredCallAssignmentEstimate?.stockSaleGainUSD).toBeCloseTo(3_250, 8);
     expect(display.coveredCallAssignmentEstimate?.totalWithPremiumUSD).toBeCloseTo(3_315, 8);
     expect(display.coveredCallAssignmentEstimate?.totalAfterFeesUSD).toBeCloseTo(3_312.75, 8);
+    expect(display.coveredCallAssignmentEstimate?.annualReturnPct).toBeCloseTo(253.5, 1);
+    expect(display.coveredCallAssignmentEstimate?.netAnnualReturnPct).toBeCloseTo(253.4, 1);
   });
 });

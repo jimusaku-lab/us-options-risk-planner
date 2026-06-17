@@ -268,6 +268,14 @@ export function Dashboard({
                         <span className="block">株式売却益 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.stockSaleGainUSD)}</span>
                         <span className="block">プレミアム込み想定益 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.totalWithPremiumUSD)}</span>
                         <span className="block">手数料後想定益 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.totalAfterFeesUSD)}</span>
+                        {premiumDisplay.coveredCallAssignmentEstimate.annualReturnPct !== undefined ? (
+                          <span className="block">
+                            想定年率 {formatPct(premiumDisplay.coveredCallAssignmentEstimate.annualReturnPct)}
+                            {premiumDisplay.coveredCallAssignmentEstimate.netAnnualReturnPct !== undefined
+                              ? ` / 手数料後 ${formatPct(premiumDisplay.coveredCallAssignmentEstimate.netAnnualReturnPct)}`
+                              : ""}
+                          </span>
+                        ) : null}
                         <span className="block text-sky-800">
                           満期時に株価が権利行使価格以上となり、株式が売却された場合の想定です。実績には含めません。
                         </span>
