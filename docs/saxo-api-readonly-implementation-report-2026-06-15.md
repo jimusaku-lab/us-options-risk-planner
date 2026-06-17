@@ -60,6 +60,54 @@
 
 ---
 
+# 2026-06-17 一般公開版 履歴折りたたみ時の履歴実績カード非表示と当年成績内訳表示
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.18`、`18.19`、`18.20`
+
+## 実装内容
+
+- Dashboardの履歴開閉状態を `App.tsx` 側へ持ち上げ、履歴一覧が閉じている間は終了済み履歴1件の `SummaryCards` historyModeを表示しないようにした。
+- 履歴一覧を閉じている間は、現在状態カードだけを表示し、`終了済みプット売りの実績`、`この履歴の確定オプション収入`、`この履歴の年率分母`、`この履歴のオプション年率` を出さないようにした。
+- `WorkflowTask.type === "complete"` は押せるボタンではなく、`完了（追加操作なし）` の非クリック表示にした。
+- 当年成績サマリーに `optionBreakdowns` を追加し、`2026年累計 / 確認済みN件の合計` と、反対売買決済・P売り権利行使プレミアムの内訳を表示できるようにした。
+- `18,792円` の履歴1件実績と、`34,283円` の当年累計が別物だと分かる説明を成績ページに追加した。
+
+## 修正ファイル
+
+- `src/App.tsx`
+- `src/components/dashboard/Dashboard.tsx`
+- `src/components/dashboard/YearlyPerformanceSummaryCard.tsx`
+- `src/domain/yearlyPerformance.ts`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 70 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+
+## commit / push
+
+- 実装commit hash: `TBD`
+- Pages deploy commit hash: `TBD`
+- main push: 予定
+- gh-pages push: 予定
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/`: push後に確認予定
+
+## 残課題
+
+- 実画面の履歴開閉目視はユーザーの保存済みREALデータに依存するため、今回は表示条件、テスト、ビルド、公開bundle更新までを確認する。
+
+---
+
 # 2026-06-16 一般公開版 Saxo履歴候補のStock履歴一括作成除外
 
 ## 対象

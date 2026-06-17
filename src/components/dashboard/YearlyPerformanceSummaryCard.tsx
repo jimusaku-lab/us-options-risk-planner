@@ -52,6 +52,7 @@ export function YearlyPerformanceSummaryCard({
           <p className="mt-1 text-sm text-slate-600">
             確認済みの反対売買決済、満期終了、P売り権利行使で確定したオプション損益を集計します。
             株式取得後の現物株時価は混ぜず、株式譲渡損益は売却・譲渡記録が入力された時点で別集計します。
+            表示額は{selectedYear}年累計で、個別履歴1件の実績カードとは別の合計です。
           </p>
         </div>
         {detailsMode === "toggle" ? (
@@ -75,7 +76,7 @@ export function YearlyPerformanceSummaryCard({
         <MetricCard
           label="オプション損益"
           value={formatJPY(summary.optionPnlJPY, { signed: true })}
-          subLabel={`${summary.optionCount}件 / P・DEMO JPY`}
+          subLabel={`${selectedYear}年累計 / 確認済み${summary.optionCount}件の合計`}
           tone={summary.optionPnlJPY >= 0 ? "green" : "red"}
         />
         <MetricCard
@@ -97,6 +98,26 @@ export function YearlyPerformanceSummaryCard({
           tone={summary.unconfirmedCount > 0 ? "amber" : "slate"}
         />
       </div>
+
+      {summary.optionBreakdowns.length > 0 ? (
+        <section className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <div className="text-xs font-bold text-slate-500">当年オプション損益の内訳</div>
+          <p className="mt-1 text-sm leading-6 text-slate-700">
+            {formatJPY(summary.optionPnlJPY, { signed: true })} は、確認済み{summary.optionCount}件の合計です。履歴1件の実績額とは分けて確認します。
+          </p>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {summary.optionBreakdowns.map((item) => (
+              <div key={item.id} className="rounded bg-white px-3 py-2 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-bold text-slate-900">{item.ticker} / {item.label}</span>
+                  <span className="numeric-input font-bold text-emerald-700">{formatJPY(item.amountJPY, { signed: true })}</span>
+                </div>
+                <div className="mt-1 text-xs text-slate-500">{item.date}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {showDetails ? (
         <div className="mt-5 grid gap-4">

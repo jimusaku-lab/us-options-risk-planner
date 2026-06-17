@@ -71,6 +71,7 @@ export default function App() {
   const [editorFocusRequest, setEditorFocusRequest] = useState<{ anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string } | null>(null);
   const [performanceYear, setPerformanceYear] = useState(() => Number(formatLocalDate().slice(0, 4)));
   const [activeView, setActiveView] = useState<"positions" | "performance">("positions");
+  const [dashboardHistoryOpen, setDashboardHistoryOpen] = useState(false);
   const [saxoOrderCandidates, setSaxoOrderCandidates] = useState<SaxoApiOrderSnapshot[]>([]);
   const [saxoHistoryCandidates, setSaxoHistoryCandidates] = useState<SaxoHistoryDiscoveryItem[]>([]);
   const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
@@ -919,6 +920,8 @@ export default function App() {
                 onDelete={deleteSimulation}
                 workspace={activeWorkspace}
                 accountInputs={accountInputs}
+                historyOpen={dashboardHistoryOpen}
+                onHistoryOpenChange={setDashboardHistoryOpen}
                 onWarningAction={goToCloseDecision}
                 onWorkflowTaskAction={goToWorkflowTask}
               />
@@ -999,6 +1002,7 @@ export default function App() {
   };
   const historyPerformance = calculateHistoryPerformance(selectedWithAccount);
   const historyResultMode = historyPerformance.historyResultMode;
+  const showSelectedHistoryDetails = historyResultMode && dashboardHistoryOpen;
   const assignedShortPutLeg = historyPerformance.assignedShortPutLeg;
   const assignedPutStockHoldingMode = historyPerformance.assignedPutStockHoldingMode;
   const assignedDenominatorFx = historyPerformance.assignedPutDenominatorFx ?? 0;
@@ -1088,6 +1092,8 @@ export default function App() {
               onDelete={deleteSimulation}
               workspace={activeWorkspace}
               accountInputs={accountInputs}
+              historyOpen={dashboardHistoryOpen}
+              onHistoryOpenChange={setDashboardHistoryOpen}
               onWarningAction={goToCloseDecision}
               onWorkflowTaskAction={goToWorkflowTask}
             />
@@ -1187,20 +1193,27 @@ export default function App() {
                 stockTransfer={selectedStockTransfer}
               />
             ) : null}
-            <SummaryCards
-              simulation={taxSimulation}
-              primaryDenominator={primaryWithNet}
-              taxResult={taxResult}
-              blockingCount={countableWarnings.filter((warning) => warning.blocking).length}
-              coveredCallAssignmentPreview={historyResultMode ? null : coveredCallAssignmentPreview}
-              primaryWarning={countableWarnings.find((warning) => warning.blocking) ?? countableWarnings[0]}
-              onWarningAction={(warning) => goToCloseDecision(selected.id, warning)}
-              historyMode={historyResultMode}
-              stockHoldingMode={assignedPutStockHoldingMode}
-              denominatorFormula={assignedPutDenominatorFormula}
-              stockTransfer={selectedStockTransfer}
-            />
-            {historyResultMode ? (
+            {!historyResultMode || showSelectedHistoryDetails ? (
+              <SummaryCards
+                simulation={taxSimulation}
+                primaryDenominator={primaryWithNet}
+                taxResult={taxResult}
+                blockingCount={countableWarnings.filter((warning) => warning.blocking).length}
+                coveredCallAssignmentPreview={historyResultMode ? null : coveredCallAssignmentPreview}
+                primaryWarning={countableWarnings.find((warning) => warning.blocking) ?? countableWarnings[0]}
+                onWarningAction={(warning) => goToCloseDecision(selected.id, warning)}
+                historyMode={showSelectedHistoryDetails}
+                stockHoldingMode={assignedPutStockHoldingMode}
+                denominatorFormula={assignedPutDenominatorFormula}
+                stockTransfer={selectedStockTransfer}
+              />
+            ) : null}
+            {historyResultMode && !showSelectedHistoryDetails ? (
+              <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600 shadow-sm">
+                履歴一覧を畳んでいるため、終了済みプット売り1件の実績カードは非表示です。履歴1件の確定オプション収入・年率を確認する場合は、上の建玉ダッシュボードで履歴を表示して対象行を選んでください。
+              </section>
+            ) : null}
+            {showSelectedHistoryDetails ? (
               <DenominatorTable
                 denominators={denominators}
                 collapsible
@@ -1208,7 +1221,7 @@ export default function App() {
                 title="分母の参考比較"
                 subtitle="終了済み履歴では参考表示です。主な確認は実績分母を見ます。"
               />
-            ) : (
+            ) : !historyResultMode ? (
               <>
                 <DenominatorTable denominators={denominators} />
                 <AnnualReturnFormula
@@ -1239,7 +1252,7 @@ export default function App() {
                 </section>
                 <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
               </>
-            )}
+            ) : null}
             {activeWorkspace === "live" ? (
               <WheelPanel
                 cycles={wheelCycles}

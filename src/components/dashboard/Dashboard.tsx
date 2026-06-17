@@ -1,6 +1,6 @@
 import type { RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } from "@/types/domain";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
-import { Fragment, useState } from "react";
+import { Fragment } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
@@ -29,6 +29,8 @@ export function Dashboard({
   onDelete,
   workspace,
   accountInputs,
+  historyOpen,
+  onHistoryOpenChange,
   onWarningAction,
   onWorkflowTaskAction,
 }: {
@@ -40,10 +42,12 @@ export function Dashboard({
   onDelete: (id: string) => void;
   workspace: WorkspaceMode;
   accountInputs: AccountInputs;
+  historyOpen: boolean;
+  onHistoryOpenChange: (open: boolean) => void;
   onWarningAction?: (simulationId: string, warning: RiskWarning) => void;
   onWorkflowTaskAction?: (simulationId: string, task: WorkflowTask) => void;
 }) {
-  const [showHistory, setShowHistory] = useState(false);
+  const showHistory = historyOpen;
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "open");
   const historySimulations = simulations.filter((simulation) => endedStatuses.has(simulation.status));
   const visibleSimulations = [...currentSimulations, ...(showHistory ? historySimulations : [])];
@@ -70,7 +74,7 @@ export function Dashboard({
         </div>
         <button
           className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-          onClick={() => setShowHistory((current) => !current)}
+          onClick={() => onHistoryOpenChange(!showHistory)}
         >
           {showHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           履歴 {historySimulations.length}件を{showHistory ? "畳む" : "表示"}
@@ -253,22 +257,31 @@ export function Dashboard({
                     ) : null}
                   </td>
                   <td className="py-3 pr-3">
-                    <button
-                      className={`rounded-md border px-2 py-1 text-xs font-bold ${
-                        primaryTask.severity === "danger"
-                          ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
-                          : primaryTask.severity === "warning"
-                            ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
-                            : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
-                      }`}
-                      title={primaryTask.detail}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onWorkflowTaskAction?.(simulation.id, primaryTask);
-                      }}
-                    >
-                      {workflowTasks.length > 1 ? `未完了${workflowTasks.length}件` : primaryTask.label}
-                    </button>
+                    {primaryTask.type === "complete" ? (
+                      <span
+                        className="inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800"
+                        title={primaryTask.detail}
+                      >
+                        完了（追加操作なし）
+                      </span>
+                    ) : (
+                      <button
+                        className={`rounded-md border px-2 py-1 text-xs font-bold ${
+                          primaryTask.severity === "danger"
+                            ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
+                            : primaryTask.severity === "warning"
+                              ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                              : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
+                        }`}
+                        title={primaryTask.detail}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onWorkflowTaskAction?.(simulation.id, primaryTask);
+                        }}
+                      >
+                        {workflowTasks.length > 1 ? `未完了${workflowTasks.length}件` : primaryTask.label}
+                      </button>
+                    )}
                     {workflowTasks.length > 1 ? (
                       <div className="mt-1 text-[11px] leading-4 text-slate-500">{primaryTask.label}</div>
                     ) : null}

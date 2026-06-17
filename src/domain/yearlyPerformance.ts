@@ -52,6 +52,15 @@ export type YearlyPerformanceTickerSummary = {
   count: number;
 };
 
+export type YearlyPerformanceOptionBreakdown = {
+  id: string;
+  simulationId: string;
+  ticker: string;
+  label: string;
+  date: string;
+  amountJPY: number;
+};
+
 export type YearlyPerformanceSummary = {
   year: number;
   realizedPnlJPY: number;
@@ -66,6 +75,7 @@ export type YearlyPerformanceSummary = {
   monthly: YearlyPerformanceMonthlyRow[];
   taxBuckets: YearlyPerformanceTaxBucket[];
   tickerSummaries: YearlyPerformanceTickerSummary[];
+  optionBreakdowns: YearlyPerformanceOptionBreakdown[];
   issues: YearlyPerformanceIssue[];
   availableYears: number[];
 };
@@ -77,6 +87,7 @@ type AggregationEvent = {
   amountJPY: number;
   amountUSD?: number;
   referenceJPY?: number;
+  label?: string;
 };
 
 function isNAccount(accountEnvironment: AccountEnvironment): boolean {
@@ -257,6 +268,7 @@ export function calculateYearlyPerformanceSummary(
   let optionCount = 0;
   let nOptionCount = 0;
   let stockSettlementCount = 0;
+  const optionBreakdowns: YearlyPerformanceOptionBreakdown[] = [];
 
   const addEvent = (event: AggregationEvent) => {
     const eventYear = parseYear(event.date);
@@ -283,6 +295,14 @@ export function calculateYearlyPerformanceSummary(
     if (event.kind === "option") {
       optionPnlJPY += event.amountJPY;
       optionCount += 1;
+      optionBreakdowns.push({
+        id: `${event.simulation.id}-${event.date}-${optionCount}`,
+        simulationId: event.simulation.id,
+        ticker,
+        label: event.label ?? "確認済みオプション損益",
+        date: event.date,
+        amountJPY: event.amountJPY,
+      });
       row.optionJPY += event.amountJPY;
       row.totalJPY += event.amountJPY;
       addTickerSummary(tickerMap, ticker, {
@@ -331,6 +351,7 @@ export function calculateYearlyPerformanceSummary(
             amountJPY: 0,
             amountUSD: result.realizedPnlUSD,
             referenceJPY: result.realizedPnlJPY,
+            label: "反対売買決済",
           });
         } else {
           addEvent({
@@ -338,6 +359,7 @@ export function calculateYearlyPerformanceSummary(
             date: result.execution.closeDate,
             kind: "option",
             amountJPY: result.realizedPnlJPY,
+            label: "反対売買決済",
           });
         }
       });
@@ -348,6 +370,7 @@ export function calculateYearlyPerformanceSummary(
         date: getAssignedShortPutPremiumDate(simulation),
         kind: "option",
         amountJPY: calculateNetInitialPremiumJPY(simulation),
+        label: "P売り権利行使プレミアム",
       });
     }
 
@@ -406,6 +429,7 @@ export function calculateYearlyPerformanceSummary(
       },
     ],
     tickerSummaries: Array.from(tickerMap.values()).sort((a, b) => Math.abs(b.totalJPY + b.nReferenceJPY) - Math.abs(a.totalJPY + a.nReferenceJPY)),
+    optionBreakdowns,
     issues,
     availableYears: Array.from(availableYearSet).sort((a, b) => b - a),
   };
