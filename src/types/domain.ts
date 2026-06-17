@@ -389,6 +389,21 @@ export type ScenarioResult = {
 export type PayoffPoint = {
   stockPriceUSD: number;
   pnlJPY: number;
+  profitJPY?: number;
+  lossJPY?: number;
+};
+
+export type PayoffBreakeven = {
+  priceUSD: number;
+  label: string;
+};
+
+export type PayoffSummary = {
+  breakevens: PayoffBreakeven[];
+  maxLossLabel: string;
+  maxProfitLabel: string;
+  hasLongOption: boolean;
+  formulas: string[];
 };
 
 export type RiskWarning = {

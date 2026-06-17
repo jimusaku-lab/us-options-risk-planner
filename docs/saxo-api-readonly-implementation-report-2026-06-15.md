@@ -127,6 +127,52 @@
 
 ---
 
+# 2026-06-17 一般公開版 損益分岐点・満期損益図の全脚対応
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.24`
+
+## 実装内容
+
+- `src/domain/payoff.ts` を全 `optionLegs` 対応へ拡張し、`buy` / `sell` と `call` / `put` の満期損益式を明示的に分岐した。
+- コール買いの損益分岐点を `権利行使価格 + 支払プレミアム + 手数料按分`、プット買いの損益分岐点を `権利行使価格 - 支払プレミアム - 手数料按分` で表示できるようにした。
+- プット売り、カバードコール、ショートストラングルでも既存の損益図が破綻しないよう、売り脚も同じ共通式で計算するようにした。
+- `満期時の損益図` に、現在株価、権利行使価格、損益分岐点、0損益ラインを表示するようにした。
+- 利益領域を緑、損失領域を赤で表示するようにした。
+- 最大損失、最大利益、損益分岐点、損益分岐点の計算式をチャート下に表示するようにした。
+- 買いオプションでは、満期保有推奨と誤解しないための注意文を表示するようにした。
+
+## 修正ファイル
+
+- `src/types/domain.ts`
+- `src/domain/payoff.ts`
+- `src/domain/payoff.test.ts`
+- `src/components/results/Charts.tsx`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（14 files / 74 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+
+## commit / push
+
+- 実装commit hash: 後続commit後に確定
+- Pages deploy commit hash: 後続deploy後に確定
+- main push: 後続push後に確定
+- gh-pages push: 後続push後に確定
+
+## 公開URL確認
+
+- 後続deploy後に `https://jimusaku-lab.github.io/us-options-risk-planner/` の参照bundleを確認する。
+
+---
+
 # 2026-06-17 一般公開版 履歴折りたたみ時の履歴実績カード非表示と当年成績内訳表示
 
 ## 対象
