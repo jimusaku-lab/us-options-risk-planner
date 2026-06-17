@@ -2,8 +2,8 @@ import type { RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } f
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { Fragment } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
-import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
+import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
@@ -123,7 +123,11 @@ export function Dashboard({
               };
               const isHistoryRow = endedStatuses.has(simulation.status);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
-              const premium = historyPerformance?.premiumJPY ?? calculateNetInitialPremiumJPY(simulationWithAccount);
+              const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
+              const premium = historyPerformance?.premiumJPY ?? premiumDisplay.premiumJPY;
+              const premiumDisplayUSD = isHistoryRow
+                ? premium / ((simulation.referenceFxRateJPY ?? simulation.fxRateJPY) || 1)
+                : premiumDisplay.premiumUSD;
               const primary =
                 historyPerformance?.primaryDenominator ??
                 getPrimaryDenominator(calculateDenominators(simulationWithAccount, premium));
@@ -149,9 +153,11 @@ export function Dashboard({
               const stockAcquisitionSummary = getStockAcquisitionSummary(simulation);
               const isFirstHistory = showHistory && index === currentSimulations.length && historySimulations.length > 0;
               const annualReturnLabel =
-                isHistoryRow && primary.netAnnualReturnPct !== undefined
+                !isHistoryRow && !premiumDisplay.hasPremiumInput
+                  ? "未入力"
+                  : isHistoryRow && primary.netAnnualReturnPct !== undefined
                   ? `${formatPct(primary.annualReturnPct)} / ${formatPct(primary.netAnnualReturnPct)}`
-                  : formatPct(primary.annualReturnPct);
+                  : `${premiumDisplay.basis === "planned" ? "予定 " : premiumDisplay.basis === "open_unconfirmed" ? "約定未確認 " : ""}${formatPct(primary.annualReturnPct)}`;
               return (
                 <Fragment key={simulation.id}>
                 {isFirstHistory ? (
@@ -208,13 +214,25 @@ export function Dashboard({
                   <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">{strikeLabel}</td>
                   <td className="py-3 pr-3 text-slate-700">{simulation.expiryDate}</td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
+                    {!premiumDisplay.hasPremiumInput && !isHistoryRow ? (
+                      <span className="font-bold text-slate-500">未入力</span>
+                    ) : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
                       <>
-                        <span className="block">{formatUSD(premium / ((simulation.referenceFxRateJPY ?? simulation.fxRateJPY) || 1))}</span>
+                        {!isHistoryRow ? <span className="block text-[11px] font-bold text-slate-500">{premiumDisplay.label}</span> : null}
+                        <span className="block">{formatUSD(premiumDisplayUSD)}</span>
+                        {!isHistoryRow && premiumDisplay.netAfterFeesUSD !== undefined && Math.abs(premiumDisplay.netAfterFeesUSD - premiumDisplay.premiumUSD) > 0.005 ? (
+                          <span className="block text-xs text-slate-500">手数料後 {formatUSD(premiumDisplay.netAfterFeesUSD)}</span>
+                        ) : null}
                         <span className="block text-xs text-slate-500">参考 {formatJPY(premium)}</span>
                       </>
                     ) : (
-                      formatJPY(premium)
+                      <>
+                        {!isHistoryRow ? <span className="block text-[11px] font-bold text-slate-500">{premiumDisplay.label}</span> : null}
+                        <span className="block">{formatJPY(premium)}</span>
+                        {!isHistoryRow && premiumDisplay.netAfterFeesJPY !== undefined && Math.abs(premiumDisplay.netAfterFeesJPY - premiumDisplay.premiumJPY) > 0.5 ? (
+                          <span className="block text-xs text-slate-500">手数料後 {formatJPY(premiumDisplay.netAfterFeesJPY)}</span>
+                        ) : null}
+                      </>
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">

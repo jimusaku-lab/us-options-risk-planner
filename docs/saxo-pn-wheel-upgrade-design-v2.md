@@ -4281,3 +4281,101 @@ N口座で100株保有中。1枚までC売りできます。
 - 同じC売り下書きが重複作成されない
 - C売り約定確認後、ホイールフェーズが `Nカバードコール` に進む
 - 公開版へ展開する場合は、修正後にGitHub Pagesへpushして公開URLで確認する
+
+### 18.26 2026-06-17 注文前建玉のプレミアム・年率が0表示になる問題
+
+実画面で、N口座カバードコールの注文前下書きに次の値を入力しているにもかかわらず、建玉ダッシュボードではプレミアム `$0.00`、年率 `0.0%` と表示された。
+
+- 状態: `注文前`
+- 戦略: `カバードコール`
+- C権利行使価格: `$240`
+- Cプレミアム: `$0.65`
+- 数量: `1枚`
+- 取引手数料: `$2.25`
+- 使用分母: `$20,750`
+
+これは仕様として不適切である。注文前は実績値ではないが、注文判断に使うための `予定プレミアム` と `予定年率` を表示すべきである。
+
+期待表示:
+
+```text
+プレミアム: $65.00
+参考: 予定値 / 未約定
+
+年率: 予定 xx.x%
+```
+
+手数料控除後を併記する場合:
+
+```text
+予定受取: $65.00
+手数料後: $62.75
+```
+
+現行コード上の原因:
+
+- `Dashboard` は `calculateNetInitialPremiumJPY(simulationWithAccount)` を使ってプレミアムを表示している
+- `calculateNetInitialPremiumJPY/USD` は `calculateOptionEntryExecutionSummary` が存在すると、オプション脚の `premiumUSD` よりも約定確認用の `optionEntryExecutions` を優先する
+- N口座では、未確認の `optionEntryExecutions` でも summary が返る
+- 注文前下書きに、未確認かつ古い約定確認下書きが存在すると、その `fillPriceUSD = 0` が表示計算を上書きする
+- その結果、入力欄の `Cプレミアム 0.65` がダッシュボードへ反映されず、`0` 表示になる
+
+表示ルールを分ける:
+
+```text
+注文前:
+  optionLegs の premiumUSD から予定プレミアムを計算する
+  optionEntryExecutions は使わない
+  ラベルは「予定プレミアム」「予定年率」
+
+建玉中・約定未確認:
+  optionLegs の premiumUSD を予定値として表示する
+  ただし「約定未確認」と明示する
+  未確認の optionEntryExecutions が0なら、表示値を上書きしない
+
+建玉中・約定確認済み:
+  confirmed の optionEntryExecutions またはSaxo実績値を優先する
+  ラベルは「建玉時プレミアム」
+
+決済済み・権利行使済み・満期終了:
+  実績値を表示する
+  ラベルは「確定プレミアム」または「この履歴の確定オプション収入」
+```
+
+実装方針:
+
+- `calculateNetInitialPremiumJPY/USD` をそのまま注文前ダッシュボードに使わない
+- 表示用途別のヘルパーを追加する
+
+```text
+calculateDisplayPremium(simulation, purpose)
+
+purpose:
+  dashboard
+  summary
+  execution
+  history
+```
+
+または、最低限の修正として以下を行う。
+
+- `simulation.status === "planned"` の場合、`Dashboard` は `calculateTotalPremiumReceivedUSD/JPY - calculateTotalPremiumPaidUSD/JPY` を直接使う
+- `optionEntryExecutions` が未確認の場合、ダッシュボード・サマリーのプレミアム計算では無視する
+- 未確認下書きの `fillPriceUSD` が0で、対象脚の `premiumUSD` が0より大きい場合、対象脚の値を表示する
+- `optionLegs` のプレミアムを変更した時、未確認の手入力 `optionEntryExecutions` が存在するなら、必要に応じて `fillPriceUSD` も同期する。ただしSaxo履歴由来・確認済みの実績値は上書きしない
+
+UX表示:
+
+- 注文前行のダッシュボードでは、列名またはセル内に `予定` を明記する
+- 例: `予定 $65.00 / 参考 10,425円`
+- 年率も `予定 5.0%` のようにする
+- `0` 表示は、本当にプレミアム未入力の場合だけにする
+- プレミアム未入力なら `未入力` と出し、`$0.00` で確定値のように見せない
+
+完了条件:
+
+- 注文前のN口座カバードコールで `Cプレミアム 0.65`、`1枚` を入力すると、ダッシュボードに `$65.00` が表示される
+- 手数料後を併記する設計なら `$62.75` も表示される
+- 年率が0.0%ではなく、予定プレミアムを分子にした予定年率で表示される
+- 未確認の `optionEntryExecutions` が0でも、注文前の表示を0に上書きしない
+- 約定確認済みになった後は、確認済み実績値を優先する

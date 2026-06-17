@@ -109,6 +109,55 @@
 
 ---
 
+# 2026-06-17 一般公開版 注文前建玉の予定プレミアム・予定年率表示修正
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.26`
+
+## 実装内容
+
+- Dashboard一覧行のプレミアム表示用に `src/domain/dashboardDisplay.ts` を追加した。
+- `planned` の建玉では、未確認の `optionEntryExecutions` を使わず、`optionLegs.premiumUSD` から予定プレミアムを計算するようにした。
+- `open` でも建玉開始確認が未確認の場合は、未確認の約定確認下書きが0でも `optionLegs.premiumUSD` を予定値として表示するようにした。
+- 建玉開始確認済み・履歴行では、従来通り確認済み実績値または履歴実績値を優先する。
+- Dashboard一覧行では、注文前に `予定プレミアム`、未確認建玉に `約定未確認プレミアム`、注文前年率に `予定` を表示するようにした。
+- 本当にプレミアム未入力の場合は `$0.00` ではなく `未入力` と表示し、年率も `未入力` とするようにした。
+- N口座の注文前カバードコールでは、予定受取額と手数料後金額を併記するようにした。
+
+## 修正ファイル
+
+- `src/domain/dashboardDisplay.ts`
+- `src/domain/dashboardDisplay.test.ts`
+- `src/components/dashboard/Dashboard.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（15 files / 76 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-qceZbmUO.js`
+  - bundle内に `予定プレミアム`、`約定未確認プレミアム`、`手数料後`、`未入力` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: 記録予定
+- Pages deploy commit hash: 記録予定
+- main push: 実行予定
+- gh-pages push: 実行予定
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/`: main commit / gh-pages deploy 後に確認予定
+
+---
+
 # 2026-06-17 一般公開版 買いオプションの反対売買決済優先UX
 
 ## 対象
