@@ -163,13 +163,14 @@
 ## commit / push
 
 - 実装commit hash: `1002059`
-- Pages deploy commit hash: 後続deploy後に確定
-- main push: 後続push後に確定
-- gh-pages push: 後続push後に確定
+- Pages deploy commit hash: `d6966a7`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- 後続deploy後に `https://jimusaku-lab.github.io/us-options-risk-planner/` の参照bundleを確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-CH02V1aJ.js` と `assets/index-DR-6Do-7.css` を参照することを確認した。
+- 公開bundle内に `満期時の損益図`、`損益分岐点の計算`、`最大損失`、`最大利益`、`満期まで持つことを推奨する図ではありません` が含まれることを確認した。
 
 ---
 
