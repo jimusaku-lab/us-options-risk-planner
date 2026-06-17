@@ -95,12 +95,14 @@
 
 - 実装commit hash: `9b5d875`
 - Pages deploy commit hash: `d3805fa`
-- main push: 予定
-- gh-pages push: 予定
+- 報告書commit hash: `108d737`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- `https://jimusaku-lab.github.io/us-options-risk-planner/`: push後に確認予定
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-D52BWoQa.js` を参照することを確認した。
+- 公開bundle内に `履歴一覧を畳んでいるため`、`完了（追加操作なし）`、`当年オプション損益の内訳` が含まれることを確認した。
 
 ## 残課題
 
