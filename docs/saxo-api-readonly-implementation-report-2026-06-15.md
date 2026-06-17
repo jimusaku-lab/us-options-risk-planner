@@ -58,6 +58,60 @@
 
 - この時点ではなし。
 
+# カバードコールの利回り表示分離 公開版反映報告 2026-06-17
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.28`
+
+## 実装内容
+
+- Dashboard一覧行のカバードコール表示で、主年率を `プレミアム年率` として維持し、権利行使時の株式売却益を別枠 `権利行使時想定` に分離した。
+- `権利行使時想定` では、主分母を取得原価ベース `平均取得単価 × 株数` として表示するようにした。
+- 現在株価ベースの分母が取得原価ベースと異なる場合は、補助表示として `参考: 現在株価ベース` を表示するようにした。
+- 権利行使時想定には、株式売却益、プレミアム込み想定益、手数料後想定益を表示するようにした。
+- `満期時に株価が権利行使価格以上となり、株式が売却された場合の想定です。実績には含めません。` の注記を追加した。
+- 成績サマリーの集計ロジックは変更せず、権利行使時想定を実績へ混ぜない方針を維持した。
+
+## 修正ファイル
+
+- `src/domain/dashboardDisplay.ts`
+- `src/domain/dashboardDisplay.test.ts`
+- `src/components/dashboard/Dashboard.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（15 files / 78 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-BG4gbuqs.js`
+  - bundle内に `プレミアム年率`、`権利行使時想定`、`主分母: 取得原価`、`プレミアム込み想定益`、`満期時に株価が権利行使価格以上` が含まれることを確認した。
+
+## 表示確認
+
+- Cプレミアム `0.65`、1枚では、予定プレミアムは `$65.00` のまま主表示できる。
+- 分母 `$20,750`、DTE `23日` のプレミアム年率は、税前約 `5.0%`、手数料後約 `4.8%` として表示できる。
+- 権利行使時想定は、株式売却益 `$3,250.00`、プレミアム込み想定益 `$3,315.00`、手数料後想定益 `$3,312.75` として別枠表示できる。
+- 権利行使時想定は、実績ではなく想定値として表示され、成績サマリーには混ざらない。
+
+## commit / push
+
+- 実装commit hash: `6ab6f2a`
+- Pages deploy commit hash: `c677dcd`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BG4gbuqs.js` を参照することを確認する。
+- 公開bundle内に `プレミアム年率`、`権利行使時想定`、`主分母: 取得原価`、`プレミアム込み想定益` が含まれることを確認する。
+
 ---
 
 # 2026-06-17 一般公開版 N株式保有からNカバードコール建玉を作成する導線
