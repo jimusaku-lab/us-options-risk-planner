@@ -91,6 +91,36 @@ describe("workflow tasks", () => {
     expect(getPrimaryWorkflowTask(createOpenSimulation()).label).toBe("反対売買判断");
   });
 
+  it("uses sell-to-close guidance as the primary task for open long options", () => {
+    const longCallLeg = {
+      ...callLeg,
+      id: "long-call",
+      side: "buy" as const,
+      isCovered: false,
+    };
+    const sim = createOpenSimulation({
+      strategyType: "long_call",
+      optionLegs: [longCallLeg],
+      optionEntryExecutions: [
+        {
+          id: "entry-long-call",
+          legId: longCallLeg.id,
+          tradeDate: sampleAmznSimulation.entryDate,
+          contracts: longCallLeg.quantity,
+          fillPriceUSD: longCallLeg.premiumUSD,
+          settlementCurrency: "JPY",
+          source: "manual",
+          confirmed: true,
+        },
+      ],
+    });
+
+    const task = getPrimaryWorkflowTask(sim);
+    expect(task.label).toBe("反対売買で決済");
+    expect(task.detail).toContain("満期前に反対売買で決済");
+    expect(task.focusField).toBe("close-decision-call-long-call");
+  });
+
   it("prioritizes marking closed when a buyback close execution is valid", () => {
     const sim = createOpenSimulation({
       optionCloseExecutions: [

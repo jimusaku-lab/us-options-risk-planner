@@ -60,6 +60,72 @@
 
 ---
 
+# 2026-06-17 一般公開版 買いオプションの反対売買決済優先UX
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.23`
+
+## 実装内容
+
+- `long_call` / `long_put` を戦略種別として追加し、`コール買い` / `プット買い` を建玉入力で選択できるようにした。
+- Saxo現在建玉の long option は、`short_put` / `covered_call` ではなく `long_put` / `long_call` として下書き化するようにした。
+- long option の建玉中 primary action を `反対売買で決済` にし、ITMでも満期前は売却決済を優先案内するようにした。
+- `反対売買判断` カードに買いオプション用の主表示を追加した。
+  - 支払プレミアム
+  - 現在オプション価格
+  - 評価損益
+  - 評価損益率
+  - 利確ライン
+  - 損切りライン
+  - 残存日数
+  - 本質的価値
+  - 時間的価値
+- 利確/損切りラインは、支払プレミアム比 `+30% / -30%` を初期候補にし、ユーザーが変更できるようにした。
+- 権利行使は主ボタンにせず、`例外的な権利行使として確認` の折りたたみ内へ移した。
+- Saxo履歴分類で、long call / long put の `buy` を建玉開始、`sell` を決済候補として扱えるようにした。Stock履歴は通常の3-A/7候補へ混ぜない方針を維持した。
+- 公開版のSaxo設定表示で参照していた `localUiAllowedOrigin` / `localUiReturnUrl` を `SaxoConfigStatus` 型へ追加した。
+- 発注、注文変更、注文取消endpointは追加していない。
+- Saxo ID、password、2FA、OAuth token、Client Secretの保存処理や入力欄は追加していない。
+
+## 修正ファイル
+
+- `src/types/domain.ts`
+- `src/domain/strategyLabels.ts`
+- `src/domain/calculations.ts`
+- `src/domain/optionEntryExecutions.ts`
+- `src/domain/workflowTasks.ts`
+- `src/domain/workflowTasks.test.ts`
+- `src/features/saxo/saxoAccountSync.ts`
+- `src/features/saxo/saxoAccountSync.test.ts`
+- `src/components/results/CloseDecisionCard.tsx`
+- `src/components/wizard/SimulationEditor.tsx`
+- `src/App.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（13 files / 71 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+
+## commit / push
+
+- 実装commit hash: 後続commit後に確定
+- Pages deploy commit hash: 後続deploy後に確定
+- main push: 後続push後に確定
+- gh-pages push: 後続push後に確定
+
+## 公開URL確認
+
+- 後続deploy後に `https://jimusaku-lab.github.io/us-options-risk-planner/` の参照bundleを確認する。
+
+---
+
 # 2026-06-17 一般公開版 履歴折りたたみ時の履歴実績カード非表示と当年成績内訳表示
 
 ## 対象

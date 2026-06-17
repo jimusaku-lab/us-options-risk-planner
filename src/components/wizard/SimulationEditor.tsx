@@ -45,10 +45,10 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const [entryCandidatePickerId, setEntryCandidatePickerId] = useState<string | null>(null);
   const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
   const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
-  const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
+  const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call"].includes(
     simulation.strategyType,
   );
-  const needsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
+  const needsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put"].includes(
     simulation.strategyType,
   );
   const needsStock = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
@@ -127,43 +127,53 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     (stockAcquisitionComplete ? onStockAcquisitionCompleteClose ?? onCloseEditor : onCloseEditor)?.();
   };
   const updateStrategy = (strategyType: StrategyType) => {
-    const nextNeedsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
+    const nextNeedsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call"].includes(
       strategyType,
     );
-    const nextNeedsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
+    const nextNeedsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put"].includes(
       strategyType,
     );
     const nextNeedsStock = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
       strategyType,
     );
+    const callSide: OptionLeg["side"] = strategyType === "long_call" ? "buy" : "sell";
+    const putSide: OptionLeg["side"] = strategyType === "long_put" ? "buy" : "sell";
     const nextLegs = [
       ...(nextNeedsCall
         ? [
-            callLeg ?? {
+            {
+              ...(callLeg ?? {
               id: `${simulation.id}-call`,
               type: "call" as const,
-              side: "sell" as const,
+              side: callSide,
               strikeUSD: 0,
               premiumUSD: 0,
               quantity: 1,
               expiryDate: simulation.expiryDate,
               isCovered: nextNeedsStock,
               assignmentPolicy: "unknown" as const,
+              }),
+              side: callSide,
+              isCovered: nextNeedsStock,
             },
           ]
         : []),
       ...(nextNeedsPut
         ? [
-            putLeg ?? {
+            {
+              ...(putLeg ?? {
               id: `${simulation.id}-put`,
               type: "put" as const,
-              side: "sell" as const,
+              side: putSide,
               strikeUSD: 0,
               premiumUSD: 0,
               quantity: 1,
               expiryDate: simulation.expiryDate,
               putIntent: "can_buy" as const,
               assignmentPolicy: "unknown" as const,
+              }),
+              side: putSide,
+              putIntent: putSide === "sell" ? putLeg?.putIntent ?? "can_buy" : undefined,
             },
           ]
         : []),
@@ -751,6 +761,8 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               ["short_put", "プット売り"],
               ["covered_call_plus_short_put", "カバードコール＋追加P売り"],
               ["short_strangle", "ショートストラングル"],
+              ["long_call", "コール買い"],
+              ["long_put", "プット買い"],
               ["wheel", "ホイール戦略"],
             ]}
           />

@@ -660,8 +660,10 @@ export function getSaxoHistoryCandidateTarget(item: SaxoHistoryDiscoveryItem): S
   if (item.kind === "closed_position") return "close";
   if (item.openClose === "close") return "close";
   if (item.openClose === "open") return "entry";
-  if (item.buySell === "sell") return "entry";
+  if (item.buySell === "sell" && (item.profitLoss !== undefined || item.profitLossBase !== undefined)) return "close";
   if (item.buySell === "buy" && (item.profitLoss !== undefined || item.profitLossBase !== undefined)) return "close";
+  if (item.buySell === "buy") return "entry";
+  if (item.buySell === "sell") return "entry";
   return "unknown";
 }
 

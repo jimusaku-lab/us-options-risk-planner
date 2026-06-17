@@ -4,6 +4,8 @@ export type StrategyType =
   | "covered_call_plus_short_put"
   | "wheel"
   | "short_strangle"
+  | "long_call"
+  | "long_put"
   | "custom";
 
 export type DenominatorMode =
@@ -120,6 +122,8 @@ export type StockPosition = {
 export type ClosePlan = {
   enabled: boolean;
   closePriceUSD?: number;
+  profitTargetPriceUSD?: number;
+  stopLossPriceUSD?: number;
   latestCloseDate?: string;
   orderType?: "limit" | "market" | "stop" | "stop_limit";
   commissionUSD?: number;

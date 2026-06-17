@@ -418,7 +418,16 @@ describe("Saxo read-only account sync", () => {
         assetType: "StockOption",
         buySell: "buy",
       }),
-    ).toBe("unknown");
+    ).toBe("entry");
+    expect(
+      getSaxoHistoryCandidateTarget({
+        id: "long-close-sell",
+        kind: "trade",
+        assetType: "StockOption",
+        buySell: "sell",
+        profitLoss: 120,
+      }),
+    ).toBe("close");
     expect(
       getSaxoHistoryCandidateTarget({
         id: "stock-transfer-sell",

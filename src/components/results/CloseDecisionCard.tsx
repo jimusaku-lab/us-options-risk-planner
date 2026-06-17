@@ -25,6 +25,8 @@ export function CloseDecisionCard({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const shortLegs = simulation.optionLegs.filter((leg) => leg.side === "sell");
+  const longLegs = simulation.optionLegs.filter((leg) => leg.side === "buy");
+  const closeDecisionLegs = [...shortLegs, ...longLegs];
   const updateLeg = (id: string, patch: Partial<OptionLeg>) => {
     onChange({
       ...simulation,
@@ -69,7 +71,9 @@ export function CloseDecisionCard({
       {isOpen ? (
         <>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Saxoの決済チケットに表示される現在の買戻し価格を入力し、出口ルールに到達しているか確認します。
+            {longLegs.length > 0 && shortLegs.length === 0
+              ? "買いオプションは原則として満期前に反対売買で決済します。ITMでも権利行使ではなく、まず売却決済・利確/損切りライン・残存日数を確認します。"
+              : "Saxoの決済チケットに表示される現在の買戻し価格を入力し、出口ルールに到達しているか確認します。"}
           </p>
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             {shortLegs.map((leg) => (
@@ -81,6 +85,19 @@ export function CloseDecisionCard({
                 openCommissionUSD={(simulation.brokerCommissionUSD ?? 0) / Math.max(1, shortLegs.length)}
                 saxoOrderCandidates={saxoOrderCandidates}
                 onCloseCostChange={(closeCostUSD) => updateLeg(leg.id, { closeCostUSD })}
+                onExecutionDraft={() => addExecutionDraft(leg)}
+              />
+            ))}
+            {longLegs.map((leg) => (
+              <LongOptionCloseCard
+                key={leg.id}
+                leg={leg}
+                simulation={simulation}
+                fxRateJPY={simulation.fxRateJPY}
+                openCommissionUSD={(simulation.brokerCommissionUSD ?? 0) / Math.max(1, closeDecisionLegs.length)}
+                saxoOrderCandidates={saxoOrderCandidates}
+                onClosePriceChange={(closeCostUSD) => updateLeg(leg.id, { closeCostUSD })}
+                onClosePlanChange={(closePlanPatch) => updateLeg(leg.id, { closePlan: { enabled: true, ...(leg.closePlan ?? {}), ...closePlanPatch } })}
                 onExecutionDraft={() => addExecutionDraft(leg)}
               />
             ))}
@@ -555,6 +572,184 @@ function getPremiumCandidatePrice(candidate: SaxoOptionPremiumCandidate | null):
   if (!candidate) return null;
   const price = candidate.mid ?? candidate.last ?? candidate.ask ?? candidate.bid;
   return price !== undefined && Number.isFinite(price) && price > 0 ? price : null;
+}
+
+function LongOptionCloseCard({
+  leg,
+  simulation,
+  fxRateJPY,
+  openCommissionUSD,
+  saxoOrderCandidates,
+  onClosePriceChange,
+  onClosePlanChange,
+  onExecutionDraft,
+}: {
+  leg: OptionLeg;
+  simulation: TradeSimulation;
+  fxRateJPY: number;
+  openCommissionUSD: number;
+  saxoOrderCandidates: SaxoApiOrderSnapshot[];
+  onClosePriceChange: (closePriceUSD: number) => void;
+  onClosePlanChange: (closePlanPatch: Partial<NonNullable<OptionLeg["closePlan"]>>) => void;
+  onExecutionDraft: () => void;
+}) {
+  const [apiCandidate, setApiCandidate] = useState<SaxoOptionPremiumCandidate | null>(null);
+  const [apiCandidateMessage, setApiCandidateMessage] = useState("");
+  const [isLoadingApiCandidate, setIsLoadingApiCandidate] = useState(false);
+  const closePriceUSD = leg.closeCostUSD ?? leg.closePlan?.closePriceUSD;
+  const paidPremiumUSD = calculatePremiumUSD({ premiumUSD: leg.premiumUSD, quantity: leg.quantity });
+  const paidPremiumJPY = calculatePremiumJPY({ premiumUSD: leg.premiumUSD, quantity: leg.quantity, fxRateJPY });
+  const currentOptionValueUSD = closePriceUSD !== undefined && closePriceUSD > 0 ? closePriceUSD * 100 * leg.quantity : null;
+  const closeCommissionUSD = leg.closePlan?.commissionUSD ?? openCommissionUSD;
+  const estimatedProfitUSD = currentOptionValueUSD === null ? null : currentOptionValueUSD - paidPremiumUSD - openCommissionUSD - closeCommissionUSD;
+  const estimatedProfitJPY = estimatedProfitUSD === null ? null : estimatedProfitUSD * fxRateJPY;
+  const profitPct = estimatedProfitUSD === null || paidPremiumUSD <= 0 ? null : (estimatedProfitUSD / paidPremiumUSD) * 100;
+  const profitTargetPriceUSD = leg.closePlan?.profitTargetPriceUSD ?? roundOptionPrice(leg.premiumUSD * 1.3);
+  const stopLossPriceUSD = leg.closePlan?.stopLossPriceUSD ?? roundOptionPrice(leg.premiumUSD * 0.7);
+  const intrinsicValueUSD =
+    closePriceUSD === undefined || closePriceUSD <= 0
+      ? null
+      : leg.type === "call"
+        ? Math.max(0, simulation.currentPriceUSD - leg.strikeUSD)
+        : Math.max(0, leg.strikeUSD - simulation.currentPriceUSD);
+  const timeValueUSD = closePriceUSD === undefined || closePriceUSD <= 0 || intrinsicValueUSD === null
+    ? null
+    : Math.max(0, closePriceUSD - intrinsicValueUSD);
+  const dte = calculateRemainingDaysUntilExpiry(leg.expiryDate);
+  const orderCandidates = findOrderCandidatesForLeg(simulation, leg, saxoOrderCandidates).filter((order) => order.isExitCandidate);
+  const candidatePriceUSD = getPremiumCandidatePrice(apiCandidate);
+  const label = `${leg.type === "call" ? "C" : "P"} ${leg.strikeUSD} ${leg.expiryDate}`;
+
+  async function loadApiCandidate() {
+    setIsLoadingApiCandidate(true);
+    setApiCandidateMessage("");
+    try {
+      const candidate = await fetchSaxoOptionPremiumCandidate({
+        symbol: simulation.ticker,
+        expiry: leg.expiryDate,
+        strike: leg.strikeUSD,
+        optionType: leg.type,
+      });
+      setApiCandidate(candidate);
+      setApiCandidateMessage(candidate.message);
+    } catch (error) {
+      setApiCandidate(null);
+      setApiCandidateMessage(
+        error instanceof Error
+          ? `${error.message} 既存の現在オプション価格は変更していません。`
+          : "API候補価格を取得できませんでした。既存の現在オプション価格は変更していません。",
+      );
+    } finally {
+      setIsLoadingApiCandidate(false);
+    }
+  }
+
+  return (
+    <div id={`close-decision-${leg.type}-${leg.id}`} className="rounded-md border border-indigo-200 bg-indigo-50/40 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="font-bold text-slate-950">{label}</div>
+          <p className="mt-1 text-xs font-semibold text-indigo-800">主アクション: 反対売買で決済</p>
+        </div>
+        <span className="rounded-full bg-indigo-100 px-2 py-1 text-xs font-bold text-indigo-800">
+          {leg.type === "call" ? "コール買い" : "プット買い"}
+        </span>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-700">
+        買いオプションは、満期前ならITMでも売却決済を優先して確認します。権利行使は例外処理です。
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <NumberInput
+          label="現在オプション価格"
+          value={closePriceUSD ?? Number.NaN}
+          suffix="USD/株"
+          placeholder="Saxo決済チケットの売却価格"
+          min={0}
+          onChange={(value) => {
+            onClosePriceChange(value);
+            onClosePlanChange({ closePriceUSD: value });
+          }}
+        />
+        <NumberInput
+          label="利確ライン"
+          value={profitTargetPriceUSD}
+          suffix="USD/株"
+          min={0}
+          onChange={(profitTargetPriceUSD) => onClosePlanChange({ profitTargetPriceUSD })}
+        />
+        <NumberInput
+          label="損切りライン"
+          value={stopLossPriceUSD}
+          suffix="USD/株"
+          min={0}
+          onChange={(stopLossPriceUSD) => onClosePlanChange({ stopLossPriceUSD })}
+        />
+      </div>
+      <ApiPremiumCandidatePanel
+        candidate={apiCandidate}
+        candidatePriceUSD={candidatePriceUSD}
+        message={apiCandidateMessage}
+        isLoading={isLoadingApiCandidate}
+        onLoad={loadApiCandidate}
+        onAdopt={(price) => {
+          onClosePriceChange(price);
+          onClosePlanChange({ closePriceUSD: price });
+        }}
+      />
+      <SaxoExitOrderStatus candidates={orderCandidates} totalFetched={saxoOrderCandidates.length} />
+      {closePriceUSD !== undefined && closePriceUSD > 0 ? (
+        <button
+          className="mt-3 rounded-md bg-slate-950 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
+          onClick={onExecutionDraft}
+        >
+          反対売買の決済実績を作成
+        </button>
+      ) : null}
+      <dl className="mt-3 grid gap-2 text-sm">
+        <Row label="支払プレミアム" value={`${formatUSD(paidPremiumUSD)} / 参考 ${formatJPY(paidPremiumJPY)}`} />
+        <Row
+          label="現在オプション価格"
+          value={currentOptionValueUSD === null ? "未入力" : `${formatUSD(currentOptionValueUSD)} / 参考 ${formatJPY(currentOptionValueUSD * fxRateJPY)}`}
+        />
+        <Row
+          label="評価損益"
+          value={estimatedProfitUSD === null ? "未計算" : `${formatUSD(estimatedProfitUSD)} / 参考 ${formatJPY(estimatedProfitJPY ?? 0, { signed: true })}`}
+          tone={estimatedProfitUSD === null ? undefined : estimatedProfitUSD >= 0 ? "green" : "red"}
+        />
+        <Row
+          label="評価損益率"
+          value={profitPct === null ? "未計算" : `${profitPct > 0 ? "+" : ""}${formatPct(profitPct)}`}
+          tone={profitPct === null ? undefined : profitPct >= 0 ? "green" : "red"}
+        />
+        <Row
+          label="利確/損切りライン"
+          value={`${formatUSD(profitTargetPriceUSD)} / ${formatUSD(stopLossPriceUSD)}（初期候補 +30% / -30%）`}
+        />
+        <Row label="残存日数" value={`${dte}日`} tone={dte <= 7 ? "amber" : undefined} />
+        <Row label="本質的価値" value={intrinsicValueUSD === null ? "未計算" : `${formatUSD(intrinsicValueUSD)} / 株`} />
+        <Row label="時間的価値" value={timeValueUSD === null ? "未計算" : `${formatUSD(timeValueUSD)} / 株`} tone={timeValueUSD !== null && timeValueUSD <= 0.05 ? "amber" : undefined} />
+      </dl>
+      <details className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
+        <summary className="cursor-pointer font-bold text-slate-800">例外的な権利行使として確認</summary>
+        <p className="mt-2 leading-6 text-slate-600">
+          権利行使は通常ルートではありません。現物株を長期保有したい場合だけ、100株分の資金と失う時間的価値を確認してから例外処理として扱います。反対売買で終えた場合、株式取得カードや株式譲渡カードは使いません。
+        </p>
+      </details>
+    </div>
+  );
+}
+
+function roundOptionPrice(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.round(value * 100) / 100;
+}
+
+function calculateRemainingDaysUntilExpiry(expiryDate: string, now = new Date()): number {
+  const expiry = new Date(`${expiryDate}T00:00:00`);
+  if (Number.isNaN(expiry.getTime())) return 0;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const expiryDay = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+  return Math.max(0, Math.ceil((expiryDay.getTime() - today.getTime()) / 86_400_000));
 }
 
 function formatOptionalUSD(value?: number): string {

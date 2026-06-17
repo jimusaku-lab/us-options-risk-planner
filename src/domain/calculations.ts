@@ -89,6 +89,18 @@ export function getShortCallLegs(simulation: TradeSimulation): OptionLeg[] {
   return getShortOptionLegs(simulation).filter((leg) => leg.type === "call");
 }
 
+export function getLongOptionLegs(simulation: TradeSimulation): OptionLeg[] {
+  return simulation.optionLegs.filter((leg) => leg.side === "buy");
+}
+
+export function getLongCallLegs(simulation: TradeSimulation): OptionLeg[] {
+  return getLongOptionLegs(simulation).filter((leg) => leg.type === "call");
+}
+
+export function getLongPutLegs(simulation: TradeSimulation): OptionLeg[] {
+  return getLongOptionLegs(simulation).filter((leg) => leg.type === "put");
+}
+
 export function calculateTotalPremiumReceivedJPY(simulation: TradeSimulation): number {
   return simulation.optionLegs
     .filter((leg) => leg.side === "sell")

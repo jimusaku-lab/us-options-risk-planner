@@ -46,8 +46,8 @@ export function getOptionEntryExecutions(simulation: TradeSimulation): OptionEnt
 export function hasUnconfirmedOptionEntryExecutions(simulation: TradeSimulation): boolean {
   if (simulation.status !== "open") return false;
   const executions = getOptionEntryExecutions(simulation);
-  const shortLegs = simulation.optionLegs.filter((leg) => leg.side === "sell");
-  return executions.length < shortLegs.length || executions.some((execution) => !execution.confirmed);
+  const optionLegs = simulation.optionLegs;
+  return executions.length < optionLegs.length || executions.some((execution) => !execution.confirmed);
 }
 
 function signedLegMultiplier(leg?: OptionLeg): number {

@@ -6,6 +6,8 @@ export const strategyLabels: Record<StrategyType, string> = {
   covered_call_plus_short_put: "カバードコール＋追加P売り",
   wheel: "ホイール戦略",
   short_strangle: "ショートストラングル",
+  long_call: "コール買い",
+  long_put: "プット買い",
   custom: "カスタム",
 };
 

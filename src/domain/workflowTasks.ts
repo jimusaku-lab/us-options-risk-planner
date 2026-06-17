@@ -1,5 +1,5 @@
 import type { TradeSimulation, WorkflowTask } from "@/types/domain";
-import { getShortCallLegs, getShortOptionLegs, getShortPutLegs } from "./calculations";
+import { getLongOptionLegs, getShortCallLegs, getShortOptionLegs, getShortPutLegs } from "./calculations";
 import {
   hasConfirmedBuybackCloseExecution,
   hasConfirmedExpiredCloseExecution,
@@ -13,6 +13,7 @@ function task(simulation: TradeSimulation, task: Omit<WorkflowTask, "simulationI
 
 export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
   const shortLegs = getShortOptionLegs(simulation);
+  const longLegs = getLongOptionLegs(simulation);
   const tasks: WorkflowTask[] = [];
 
   if (simulation.status === "planned") {
@@ -31,7 +32,8 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
 
   if (simulation.status === "open") {
     const firstShortLeg = shortLegs[0];
-    if (shortLegs.length > 0 && hasUnconfirmedOptionEntryExecutions(simulation)) {
+    const firstLongLeg = longLegs[0];
+    if ((shortLegs.length > 0 || longLegs.length > 0) && hasUnconfirmedOptionEntryExecutions(simulation)) {
       tasks.push(
         task(simulation, {
           id: `${simulation.id}-confirm-entry`,
@@ -83,16 +85,23 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
         }),
       );
     } else {
+      const isLongOnly = longLegs.length > 0 && shortLegs.length === 0;
       tasks.push(
         task(simulation, {
           id: `${simulation.id}-review-close`,
           type: "review_close_decision",
           severity: "info",
-          label: "反対売買判断",
-          detail: "建玉中です。必要に応じて買戻し価格を確認します。",
+          label: isLongOnly ? "反対売買で決済" : "反対売買判断",
+          detail: isLongOnly
+            ? "買いオプションは原則として満期前に反対売買で決済します。利確/損切りラインと満期接近を確認してください。"
+            : "建玉中です。必要に応じて買戻し価格を確認します。",
           actionLabel: "反対売買判断へ",
           targetAnchor: "close-decision",
-          focusField: firstShortLeg ? `close-decision-${firstShortLeg.type}-${firstShortLeg.id}` : undefined,
+          focusField: firstShortLeg
+            ? `close-decision-${firstShortLeg.type}-${firstShortLeg.id}`
+            : firstLongLeg
+              ? `close-decision-${firstLongLeg.type}-${firstLongLeg.id}`
+              : undefined,
         }),
       );
     }

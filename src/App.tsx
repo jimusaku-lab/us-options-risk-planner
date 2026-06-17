@@ -313,7 +313,13 @@ export default function App() {
       name: `${ticker || "Saxo建玉候補"} / API取込下書き`,
       ticker,
       underlyingName: position.underlyingName ?? "",
-      strategyType: position.optionType === "put" ? "short_put" : "covered_call",
+      strategyType: position.side === "long"
+        ? position.optionType === "put"
+          ? "long_put"
+          : "long_call"
+        : position.optionType === "put"
+          ? "short_put"
+          : "covered_call",
       currentPriceUSD: position.currentPrice ?? position.currentStockPrice ?? 0,
       fxRateJPY: selected?.fxRateJPY ?? 0,
       accountCode,
@@ -505,7 +511,6 @@ export default function App() {
     const targetSimulation = simulations.find((simulation) => simulation.id === id);
     if (targetSimulation && anchorId === "option-entry-executions" && (targetSimulation.optionEntryExecutions ?? []).length === 0) {
       const entryDrafts = targetSimulation.optionLegs
-        .filter((leg) => leg.side === "sell")
         .map((leg) => createOptionEntryExecutionDraft({ simulation: targetSimulation, leg }));
       if (entryDrafts.length > 0) {
         upsertSimulation({
