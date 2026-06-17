@@ -116,13 +116,14 @@
 ## commit / push
 
 - 実装commit hash: `19809f9`
-- Pages deploy commit hash: 後続deploy後に確定
-- main push: 後続push後に確定
-- gh-pages push: 後続push後に確定
+- Pages deploy commit hash: `1819246`
+- main push: 済み
+- gh-pages push: 済み
 
 ## 公開URL確認
 
-- 後続deploy後に `https://jimusaku-lab.github.io/us-options-risk-planner/` の参照bundleを確認する。
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-DlRQda41.js` と `assets/index-DR-6Do-7.css` を参照することを確認した。
+- 公開bundle内に `反対売買で決済`、`例外的な権利行使として確認`、`コール買い`、`プット買い` が含まれることを確認した。
 
 ---
 
