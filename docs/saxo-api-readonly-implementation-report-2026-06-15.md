@@ -60,6 +60,54 @@
 
 ---
 
+# 2026-06-17 一般公開版 N株式保有からNカバードコール建玉を作成する導線
+
+## 対象
+
+- リポジトリ: `jimusaku-lab/us-options-risk-planner`
+- 作業ディレクトリ: `/Users/motomichi/Documents/30_ファイナンス（作業中）/us-options-risk-planner-public-repo`
+- 公開URL: `https://jimusaku-lab.github.io/us-options-risk-planner/`
+- 設計参照: `docs/saxo-pn-wheel-upgrade-design-v2.md` の `18.25`
+
+## 実装内容
+
+- ホイール管理の `n_stock_holding` フェーズで100株以上を保有している場合、ホイールカードに `Nカバードコール建玉を作成` を表示するようにした。
+- ボタン押下で、N口座カバードコール用の `covered_call` 下書きを作成し、建玉入力画面を開くようにした。
+- 作成する下書きには、N口座、USD決済、ticker、保有株数、平均取得単価、100株につき1枚までのC売り脚を初期反映するようにした。
+- 同じホイールサイクル、または同一ticker・N口座の未完了カバードコール下書きがある場合は重複作成せず、`作成済みC売り入力を開く` として既存入力へ誘導するようにした。
+- 100株未満では作成ボタンを出さず、`100株未満のためカバードコールを作成できません。` を表示するようにした。
+- C売りの建玉開始約定確認が完了して `covered_call` 建玉が `open` になった場合、ホイールイベント `covered_call_opened` を作成し、フェーズを `n_covered_call` へ進めるようにした。
+
+## 修正ファイル
+
+- `src/store/useOptionsStore.ts`
+- `src/components/wheel/WheelPanel.tsx`
+- `src/App.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（14 files / 74 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-BRL9-zZa.js`
+  - bundle内に `Nカバードコール建玉を作成`、`作成済みC売り入力を開く`、`100株未満のためカバードコールを作成できません`、`covered_call_opened` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: 記録予定
+- Pages deploy commit hash: 記録予定
+- main push: 実行予定
+- gh-pages push: 実行予定
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/`: main commit / gh-pages deploy 後に確認予定
+
+---
+
 # 2026-06-17 一般公開版 買いオプションの反対売買決済優先UX
 
 ## 対象

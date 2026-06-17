@@ -93,6 +93,7 @@ export default function App() {
     replaceWorkspaceData,
     createWheelCycleFromSimulation,
     createStockTransferFromSimulation,
+    createCoveredCallDraftFromWheelCycle,
     settings,
   } = useOptionsStore();
   const {
@@ -249,6 +250,17 @@ export default function App() {
     setActiveView("positions");
     setIsEditorOpen(false);
     setWheelFocusRequest({ ticker: ticker ? normalizeTicker(ticker) : undefined, requestId: Date.now() + Math.random() });
+  };
+  const createCoveredCallFromWheelCycle = (cycleId: string) => {
+    const simulationId = createCoveredCallDraftFromWheelCycle(cycleId);
+    if (!simulationId) {
+      setQuoteStatus("Nカバードコール下書きを作成できませんでした。N株式保有が100株以上あるか確認してください。");
+      return;
+    }
+    selectSimulation(simulationId);
+    setIsEditorOpen(true);
+    setEditorFocusRequest({ anchorId: "simulation-editor", requestId: Date.now() + Math.random() });
+    setQuoteStatus("Nカバードコール下書きを開きました。SaxoのC売り注文チケットを見ながら、満期日、権利行使価格、プレミアム、手数料を入力してください。");
   };
   const createCandidateSimulation = (candidate: CandidateSymbol, strategyType: "covered_call" | "short_put") => {
     const simulation = createSimulationFromCandidate({
@@ -982,7 +994,14 @@ export default function App() {
                 </button>
               </section>
               {activeWorkspace === "live" ? (
-                <WheelPanel cycles={wheelCycles} events={wheelEvents} stockTransfers={stockTransfers} focusRequest={wheelFocusRequest} />
+                <WheelPanel
+                  cycles={wheelCycles}
+                  events={wheelEvents}
+                  stockTransfers={stockTransfers}
+                  simulations={simulations}
+                  focusRequest={wheelFocusRequest}
+                  onCreateCoveredCallFromCycle={(cycle) => createCoveredCallFromWheelCycle(cycle.id)}
+                />
               ) : (
                 <DemoWheelNotice />
               )}
@@ -1263,10 +1282,12 @@ export default function App() {
                 cycles={wheelCycles}
                 events={wheelEvents}
                 stockTransfers={stockTransfers}
+                simulations={simulations}
                 focusRequest={wheelFocusRequest}
                 onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
                 selectedTransferRecorded={selectedStockTransferRecorded}
                 onCreateTransferFromSelected={canCreateStockTransferFromSelected ? () => createStockTransferFromSimulation(selected) : undefined}
+                onCreateCoveredCallFromCycle={(cycle) => createCoveredCallFromWheelCycle(cycle.id)}
               />
             ) : (
               <DemoWheelNotice />

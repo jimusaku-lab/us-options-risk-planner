@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import type { StockTransferEvent, WheelCycle, WheelEvent, WheelPhase } from "@/types/domain";
+import type { StockTransferEvent, TradeSimulation, WheelCycle, WheelEvent, WheelPhase } from "@/types/domain";
 import { formatJPY, formatUSD } from "@/lib/format";
 
 const phaseLabels: Record<WheelPhase, string> = {
@@ -22,17 +22,21 @@ export function WheelPanel({
   cycles,
   events = [],
   stockTransfers = [],
+  simulations = [],
   focusRequest,
   onCreateFromSelected,
   onCreateTransferFromSelected,
+  onCreateCoveredCallFromCycle,
   selectedTransferRecorded,
 }: {
   cycles: WheelCycle[];
   events?: WheelEvent[];
   stockTransfers?: StockTransferEvent[];
+  simulations?: TradeSimulation[];
   focusRequest?: { ticker?: string; requestId: number } | null;
   onCreateFromSelected?: () => void;
   onCreateTransferFromSelected?: () => void;
+  onCreateCoveredCallFromCycle?: (cycle: WheelCycle) => void;
   selectedTransferRecorded?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -105,6 +109,8 @@ export function WheelPanel({
               cycle={cycle}
               events={events.filter((event) => event.wheelCycleId === cycle.id)}
               stockTransfers={stockTransfers.filter((transfer) => transfer.destinationWheelCycleId === cycle.id)}
+              simulations={simulations}
+              onCreateCoveredCallFromCycle={onCreateCoveredCallFromCycle}
               highlighted={Boolean(highlightedTicker) && cycle.ticker.toUpperCase() === highlightedTicker}
             />
           ))}
@@ -118,17 +124,32 @@ function WheelCycleCard({
   cycle,
   events,
   stockTransfers,
+  simulations,
+  onCreateCoveredCallFromCycle,
   highlighted,
 }: {
   cycle: WheelCycle;
   events: WheelEvent[];
   stockTransfers: StockTransferEvent[];
+  simulations: TradeSimulation[];
+  onCreateCoveredCallFromCycle?: (cycle: WheelCycle) => void;
   highlighted?: boolean;
 }) {
   const fx = cycle.referenceFxRateJPY ?? 0;
   const isNWheelActive = cycle.currentPhase.startsWith("n_");
   const cameFromPTransfer = stockTransfers.length > 0 || cycle.linkedSimulationIds.some((id) => id.includes("transfer"));
   const route = !isNWheelActive || cameFromPTransfer ? pRoute : nRoute;
+  const existingCoveredCall = simulations.find(
+    (simulation) =>
+      simulation.strategyType === "covered_call" &&
+      simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" &&
+      simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase() &&
+      ["planned", "open"].includes(simulation.status) &&
+      (cycle.linkedSimulationIds.includes(simulation.id) ||
+        (simulation.stockPosition?.shares ?? 0) <= cycle.currentShares),
+  );
+  const coveredCallContracts = Math.floor(cycle.currentShares / 100);
+  const canStartCoveredCall = cycle.currentPhase === "n_stock_holding";
   return (
     <div className={`rounded-md border p-3 text-sm ${highlighted ? "border-teal-500 bg-teal-50 ring-2 ring-teal-200" : "border-slate-200"}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -156,6 +177,28 @@ function WheelCycleCard({
         <Metric label="次の候補" value={nextActionLabel(cycle.currentPhase)} />
       </div>
       <PhaseStepper route={route} currentPhase={cycle.currentPhase} />
+      {canStartCoveredCall ? (
+        <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-950">
+          <div className="font-bold">次の工程: N口座カバードコール</div>
+          {cycle.currentShares >= 100 ? (
+            <>
+              <p className="mt-1">
+                N口座で{cycle.currentShares}株保有中です。保有100株につき1枚まで、最大{coveredCallContracts}枚のC売り下書きを作成できます。
+              </p>
+              <button
+                className="mt-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800"
+                onClick={() => onCreateCoveredCallFromCycle?.(cycle)}
+              >
+                {existingCoveredCall ? "作成済みC売り入力を開く" : "Nカバードコール建玉を作成"}
+              </button>
+            </>
+          ) : (
+            <div className="mt-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-slate-600">
+              100株未満のためカバードコールを作成できません。
+            </div>
+          )}
+        </div>
+      ) : null}
       {stockTransfers.length > 0 ? (
         <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs leading-5 text-emerald-950">
           {stockTransfers.map((transfer) => (

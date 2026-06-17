@@ -89,6 +89,7 @@ type OptionsStore = {
   selectSimulation: (id: string) => void;
   createWheelCycleFromSimulation: (simulation: TradeSimulation) => void;
   createStockTransferFromSimulation: (simulation: TradeSimulation) => void;
+  createCoveredCallDraftFromWheelCycle: (cycleId: string) => string | undefined;
   updateSettings: (settings: Partial<AppSettings>) => void;
 };
 
@@ -285,6 +286,88 @@ function repairWheelCyclePhase(cycle: WheelCycle, simulations: TradeSimulation[]
   }
 
   return cycle;
+}
+
+function hasConfirmedCoveredCallEntry(simulation: TradeSimulation): boolean {
+  if (simulation.status !== "open") return false;
+  if (simulation.strategyType !== "covered_call") return false;
+  if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" && simulation.accountCode !== "N") return false;
+  const callLegIds = simulation.optionLegs
+    .filter((leg) => leg.type === "call" && leg.side === "sell")
+    .map((leg) => leg.id);
+  if (callLegIds.length === 0) return false;
+  const executions = simulation.optionEntryExecutions ?? [];
+  return callLegIds.every((legId) => executions.some((execution) => execution.legId === legId && execution.confirmed));
+}
+
+function buildCoveredCallDraftFromWheelCycle(cycle: WheelCycle, workspace: WorkspaceMode): TradeSimulation | undefined {
+  if (cycle.currentPhase !== "n_stock_holding") return undefined;
+  const quantity = Math.floor(cycle.currentShares / 100);
+  if (quantity <= 0) return undefined;
+  const today = formatLocalDate();
+  const expiryDate = formatLocalDate(addLocalDays(new Date(), 30));
+  const id = `wheel-covered-call-${cycle.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return {
+    id,
+    status: "planned",
+    name: `${cycle.ticker} N口座カバードコール下書き`,
+    ticker: cycle.ticker,
+    underlyingName: "",
+    strategyType: "covered_call",
+    currentPriceUSD: cycle.averageCostUSD,
+    fxRateJPY: cycle.referenceFxRateJPY ?? 0,
+    accountCode: "N",
+    accountEnvironment: "PROD_N_USD_SETTLEMENT",
+    accountCurrency: "USD",
+    referenceFxRateJPY: cycle.referenceFxRateJPY ?? 0,
+    entryDate: today,
+    expiryDate,
+    dte: 30,
+    stockPosition: {
+      shares: cycle.currentShares,
+      averageCostUSD: cycle.averageCostUSD,
+      denominatorPriceMode: "average_cost",
+      canSellAtStrike: false,
+    },
+    optionLegs: [
+      {
+        id: `${id}-call`,
+        type: "call",
+        side: "sell",
+        strikeUSD: 0,
+        premiumUSD: 0,
+        quantity,
+        expiryDate,
+        isCovered: true,
+        assignmentPolicy: "unknown",
+        callExitIntent: "covered_can_sell",
+      },
+    ],
+    brokerMarginJPY: 0,
+    marginBufferMultiplier: 1,
+    marginUsagePercent: 0,
+    availableCashJPY: 0,
+    denominatorMode: "stock_plus_margin",
+    profitTakeRule: {
+      enabled: false,
+      targetPremiumKeepPercent: 60,
+      latestCloseDaysBeforeExpiry: 7,
+    },
+    stopLossRule: {
+      enabled: false,
+      type: "option_buyback_price",
+      value: 0,
+    },
+    taxProfileId: "japan_derivative_separate_tax_user_confirm",
+    nisaExpectedAnnualReturnPct: DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT,
+    brokerCommissionUSD: DEFAULT_BROKER_COMMISSION_USD,
+    beginnerMode: workspace === "demo",
+    notes:
+      "N口座で100株保有中です。\n" +
+      "この入力は、次のホイール工程であるN口座カバードコール用の下書きです。\n" +
+      "SaxoのC売り注文チケットを見ながら、満期日、権利行使価格、プレミアム、手数料を入力してください。\n" +
+      "注文・発注はこのアプリでは行いません。",
+  };
 }
 
 const storedSettings = loadJson<AppSettings>(SETTINGS_KEY, {
@@ -553,8 +636,48 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       const simulations = exists ? current.map((item) => (item.id === normalized.id ? normalized : item)) : [normalized, ...current];
       const simulationsByWorkspace = { ...state.simulationsByWorkspace, [state.activeWorkspace]: simulations };
       const selectedSimulationIds = { ...state.selectedSimulationIds, [state.activeWorkspace]: normalized.id };
+      let wheelCycles = state.wheelCyclesByWorkspace[state.activeWorkspace];
+      let wheelEvents = state.wheelEventsByWorkspace[state.activeWorkspace];
+      if (hasConfirmedCoveredCallEntry(normalized)) {
+        const alreadyOpened = wheelEvents.some((event) => event.type === "covered_call_opened" && event.linkedSimulationId === normalized.id);
+        const targetCycle = wheelCycles.find(
+          (cycle) =>
+            cycle.currentPhase === "n_stock_holding" &&
+            cycle.ticker.toUpperCase() === normalized.ticker.toUpperCase() &&
+            (cycle.linkedSimulationIds.includes(normalized.id) || cycle.currentShares >= (normalized.stockPosition?.shares ?? 0)),
+        );
+        if (!alreadyOpened && targetCycle) {
+          const event: WheelEvent = {
+            id: `wheel-event-${state.activeWorkspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            wheelCycleId: targetCycle.id,
+            type: "covered_call_opened",
+            occurredAt: normalized.entryDate,
+            accountCode: "N",
+            description: `${normalized.ticker} N口座カバードコールを建玉開始`,
+            usdPnl: 0,
+            phaseAfter: "n_covered_call",
+            linkedSimulationId: normalized.id,
+          };
+          wheelEvents = [event, ...wheelEvents];
+          wheelCycles = wheelCycles.map((cycle) =>
+            cycle.id === targetCycle.id
+              ? {
+                  ...cycle,
+                  currentPhase: "n_covered_call",
+                  currentAccountCode: "N",
+                  eventIds: [...cycle.eventIds, event.id],
+                  linkedSimulationIds: Array.from(new Set([...cycle.linkedSimulationIds, normalized.id])),
+                }
+              : cycle,
+          );
+        }
+      }
+      const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: wheelCycles };
+      const wheelEventsByWorkspace = { ...state.wheelEventsByWorkspace, [state.activeWorkspace]: wheelEvents };
       saveJson(SIMULATIONS_KEY, simulationsByWorkspace);
-      return { simulationsByWorkspace, selectedSimulationIds, simulations, selectedSimulationId: normalized.id };
+      saveJson(WHEEL_KEY, wheelCyclesByWorkspace);
+      saveJson(WHEEL_EVENTS_KEY, wheelEventsByWorkspace);
+      return { simulationsByWorkspace, selectedSimulationIds, wheelCyclesByWorkspace, wheelEventsByWorkspace, simulations, wheelCycles, wheelEvents, selectedSimulationId: normalized.id };
     }),
   replaceWorkspaceData: (incoming) =>
     set((state) => {
@@ -741,6 +864,57 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       saveJson(STOCK_TRANSFERS_KEY, stockTransfersByWorkspace);
       return { wheelCyclesByWorkspace, wheelEventsByWorkspace, stockTransfersByWorkspace, wheelCycles, wheelEvents, stockTransfers };
     }),
+  createCoveredCallDraftFromWheelCycle: (cycleId) => {
+    let targetId: string | undefined;
+    set((state) => {
+      const cycle = state.wheelCyclesByWorkspace[state.activeWorkspace].find((item) => item.id === cycleId);
+      if (!cycle || cycle.currentPhase !== "n_stock_holding" || cycle.currentShares < 100) return {};
+      const existing = state.simulationsByWorkspace[state.activeWorkspace].find(
+        (simulation) =>
+          simulation.strategyType === "covered_call" &&
+          simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" &&
+          simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase() &&
+          ["planned", "open"].includes(simulation.status) &&
+          (cycle.linkedSimulationIds.includes(simulation.id) ||
+            (simulation.stockPosition?.shares ?? 0) <= cycle.currentShares),
+      );
+      if (existing) {
+        targetId = existing.id;
+        const wheelCycles = state.wheelCyclesByWorkspace[state.activeWorkspace].map((item) =>
+          item.id === cycle.id && !item.linkedSimulationIds.includes(existing.id)
+            ? { ...item, linkedSimulationIds: [...item.linkedSimulationIds, existing.id] }
+            : item,
+        );
+        const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: wheelCycles };
+        saveJson(WHEEL_KEY, wheelCyclesByWorkspace);
+        return { wheelCyclesByWorkspace, wheelCycles };
+      }
+      const draft = buildCoveredCallDraftFromWheelCycle(cycle, state.activeWorkspace);
+      if (!draft) return {};
+      const normalized = normalizeSimulation(draft, state.activeWorkspace);
+      targetId = normalized.id;
+      const simulations = [normalized, ...state.simulationsByWorkspace[state.activeWorkspace]];
+      const wheelCycles = state.wheelCyclesByWorkspace[state.activeWorkspace].map((item) =>
+        item.id === cycle.id
+          ? { ...item, linkedSimulationIds: Array.from(new Set([...item.linkedSimulationIds, normalized.id])) }
+          : item,
+      );
+      const simulationsByWorkspace = { ...state.simulationsByWorkspace, [state.activeWorkspace]: simulations };
+      const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: wheelCycles };
+      const selectedSimulationIds = { ...state.selectedSimulationIds, [state.activeWorkspace]: normalized.id };
+      saveJson(SIMULATIONS_KEY, simulationsByWorkspace);
+      saveJson(WHEEL_KEY, wheelCyclesByWorkspace);
+      return {
+        simulationsByWorkspace,
+        wheelCyclesByWorkspace,
+        selectedSimulationIds,
+        simulations,
+        wheelCycles,
+        selectedSimulationId: normalized.id,
+      };
+    });
+    return targetId;
+  },
   updateSettings: (settings) =>
     set((state) => {
       const next = { ...state.settings, ...settings };
