@@ -56,7 +56,7 @@ import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 import { useCandidatesStore } from "@/store/useCandidatesStore";
 import { DEFAULT_BROKER_COMMISSION_USD, DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, useOptionsStore } from "@/store/useOptionsStore";
 import type { CandidateSymbol } from "@/types/candidates";
-import type { ChecklistItem, OptionCloseExecution, PayoffPoint, RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } from "@/types/domain";
+import type { ChecklistItem, OptionCloseExecution, OptionEntryExecution, OptionLeg, PayoffPoint, RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } from "@/types/domain";
 import type { YearlyPerformanceIssue } from "@/domain/yearlyPerformance";
 
 export default function App() {
@@ -434,6 +434,160 @@ export default function App() {
           : "Saxo現在建玉から下書きを作成しました。Saxo取引履歴から補完できませんでした。履歴を再取得するか、不足項目だけ手入力してください。",
     );
   };
+
+  const linkSaxoPositionToExistingSimulation = (
+    position: SaxoApiPositionSnapshot,
+    target: TradeSimulation,
+    historyItems: SaxoHistoryDiscoveryItem[] = saxoHistoryCandidates,
+  ): boolean => {
+    if (position.kind !== "option" || (position.optionType !== "put" && position.optionType !== "call")) {
+      setQuoteStatus("Saxoの米国株オプション建玉だけを既存建玉へ紐づけできます。");
+      return false;
+    }
+    const saxoSide = position.side === "long" ? "buy" : position.side === "short" ? "sell" : undefined;
+    if (!saxoSide) {
+      setQuoteStatus("Saxo建玉の売買方向を判定できないため、既存建玉へ紐づけできません。");
+      return false;
+    }
+    const targetLeg =
+      target.optionLegs.find((leg) => leg.type === position.optionType && leg.side === saxoSide) ??
+      target.optionLegs.find((leg) => leg.type === position.optionType) ??
+      target.optionLegs[0];
+    if (!targetLeg) {
+      setQuoteStatus("紐づけ先のオプション脚が見つかりません。建玉入力のオプション脚を確認してください。");
+      return false;
+    }
+
+    const today = formatLocalDate(new Date());
+    const historyMatches = findEntryHistoryMatches(position, historyItems);
+    const bestHistory = historyMatches.length === 1 ? historyMatches[0].item : undefined;
+    const actualExpiry = position.expiry ?? targetLeg.expiryDate ?? target.expiryDate;
+    const actualStrike = position.strike ?? targetLeg.strikeUSD;
+    const actualPremium = bestHistory?.price ?? position.premiumOpenPrice ?? position.currentOptionPrice ?? targetLeg.premiumUSD;
+    const actualQuantity =
+      bestHistory?.quantity !== undefined
+        ? Math.max(1, Math.abs(bestHistory.quantity))
+        : position.quantity !== undefined
+          ? Math.max(1, Math.abs(position.quantity))
+          : targetLeg.quantity;
+    const actualTradeDate = bestHistory?.tradeDate ?? target.entryDate ?? today;
+    const accountCode = position.accountAssignment === "P" || position.accountAssignment === "N" ? position.accountAssignment : target.accountCode;
+    const isNAccount = accountCode === "N";
+    const historyMissingItems =
+      bestHistory === undefined
+        ? []
+        : isNAccount
+          ? [
+              actualPremium > 0 ? undefined : "プレミアムUSD",
+              bestHistory.transactionCost !== undefined ? undefined : "取引費用USD",
+            ].filter((item): item is string => Boolean(item))
+          : [
+              bestHistory.bookedAmount !== undefined || bestHistory.profitLossBase !== undefined ? undefined : "記帳額JPY",
+              bestHistory.premiumAmount !== undefined ? undefined : "プレミアムJPY",
+              bestHistory.transactionCost !== undefined ? undefined : "取引費用JPY",
+              bestHistory.exchangeRate !== undefined ? undefined : "為替レート",
+            ].filter((item): item is string => Boolean(item));
+    const historyCompletionStatus: OptionEntryExecution["historyCompletionStatus"] =
+      historyMatches.length === 1
+        ? historyMissingItems.length > 0
+          ? "manual"
+          : "matched"
+        : historyMatches.length > 1
+          ? "multiple"
+          : "unmatched";
+    const diffs = describeSaxoPositionLinkDiffs(position, target, targetLeg, actualPremium, actualQuantity);
+    const updatedLeg: OptionLeg = {
+      ...targetLeg,
+      type: position.optionType,
+      side: saxoSide,
+      strikeUSD: actualStrike,
+      premiumUSD: actualPremium,
+      quantity: actualQuantity,
+      expiryDate: actualExpiry,
+      isCovered: position.optionType === "call" ? true : targetLeg.isCovered,
+      marketPriceUSD: position.currentOptionPrice ?? targetLeg.marketPriceUSD,
+      brokerSymbol: position.instrumentCode ?? targetLeg.brokerSymbol,
+    };
+    const entryExecution: OptionEntryExecution = {
+      id: `saxo-entry-${position.id}-${Date.now()}`,
+      legId: targetLeg.id,
+      tradeDate: actualTradeDate,
+      contracts: actualQuantity,
+      fillPriceUSD: actualPremium,
+      settlementCurrency: isNAccount ? "USD" : "JPY",
+      brokerBookedAmountJPY: !isNAccount ? bestHistory?.bookedAmount ?? bestHistory?.profitLossBase : undefined,
+      brokerPremiumJPY: !isNAccount ? bestHistory?.premiumAmount : undefined,
+      brokerTransactionCostJPY: !isNAccount ? bestHistory?.transactionCost : undefined,
+      brokerFeeJPY: !isNAccount ? bestHistory?.feeAmount : undefined,
+      brokerExchangeFeeJPY: !isNAccount ? bestHistory?.exchangeFee : undefined,
+      brokerExchangeRateJPY: !isNAccount ? bestHistory?.exchangeRate : undefined,
+      brokerTaxIncludedFeeJPY: !isNAccount ? bestHistory?.taxIncludedFee : undefined,
+      commissionUSD: isNAccount ? Math.abs(bestHistory?.transactionCost ?? target.brokerCommissionUSD ?? DEFAULT_BROKER_COMMISSION_USD) : undefined,
+      referenceFxRateJPY: bestHistory?.exchangeRate ?? target.referenceFxRateJPY ?? target.fxRateJPY ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
+      inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
+      source: "saxo_api_estimate",
+      saxoSourceType: "current_position",
+      historyCompletionStatus,
+      historyCandidateIds: historyMatches.map((match) => match.item.id),
+      confirmed: false,
+      memo:
+        diffs.length > 0
+          ? `入力元: Saxo現在建玉。注文前入力との差分: ${diffs.join("、")}。正式保存時はSaxo実約定値を優先します。`
+          : "入力元: Saxo現在建玉。正式保存時はSaxo実約定値を優先します。",
+    };
+    const nextEntryExecutions = [
+      ...(target.optionEntryExecutions ?? []).filter((execution) => execution.legId !== targetLeg.id || execution.confirmed),
+      entryExecution,
+    ];
+    const dte = Math.max(0, Math.ceil((Date.parse(actualExpiry) - Date.parse(actualTradeDate)) / 86400000));
+    const nextSimulation: TradeSimulation = {
+      ...target,
+      status: "open",
+      strategyType: position.side === "long"
+        ? position.optionType === "put"
+          ? "long_put"
+          : "long_call"
+        : position.optionType === "put"
+          ? "short_put"
+          : "covered_call",
+      ticker: resolveSaxoPositionSymbol(position, simulations) ?? target.ticker,
+      accountCode,
+      accountEnvironment: isNAccount ? "PROD_N_USD_SETTLEMENT" : accountCode === "P" ? "PROD_P_JPY_SETTLEMENT" : target.accountEnvironment,
+      accountCurrency: isNAccount ? "USD" : "JPY",
+      entryDate: actualTradeDate,
+      expiryDate: actualExpiry,
+      dte,
+      optionLegs: target.optionLegs.map((leg) => (leg.id === targetLeg.id ? updatedLeg : leg)),
+      optionEntryExecutions: nextEntryExecutions,
+      referenceFxRateJPY: bestHistory?.exchangeRate ?? target.referenceFxRateJPY ?? target.fxRateJPY,
+      fixtureMeta: {
+        ...(target.fixtureMeta ?? {
+          source: activeWorkspace === "demo" ? "demo" : "live",
+          isRealMoney: activeWorkspace !== "demo",
+          broker: "SaxoBank",
+          purpose: "development-fixture",
+          createdAt: actualTradeDate,
+          notes: "",
+        }),
+        notes: "Saxo API read-onlyの約定済み現在建玉と注文前建玉を紐づけました。正式確認前に3-Aで内容確認が必要です。",
+        saxoAccountKey: position.accountKey,
+        saxoPositionId: position.positionId ?? position.id,
+        saxoInstrumentCode: position.instrumentCode,
+        saxoUic: position.uic,
+      },
+    };
+    upsertSimulation(nextSimulation);
+    selectSimulation(nextSimulation.id);
+    setIsEditorOpen(true);
+    setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() + Math.random() });
+    setQuoteStatus(
+      diffs.length > 0
+        ? `Saxo実約定値で注文前建玉を更新しました。差分: ${diffs.join("、")}。3-Aで確認して正式保存してください。`
+        : "Saxo実約定値で注文前建玉を更新しました。3-Aで確認して正式保存してください。",
+    );
+    return true;
+  };
+
   const getSaxoStockTransferShares = (position: SaxoApiPositionSnapshot) => {
     const value = position.shareQuantity ?? position.quantity;
     return value !== undefined && Number.isFinite(value) ? Math.abs(value) : 0;
@@ -953,6 +1107,7 @@ export default function App() {
                 onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
                 onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
                 onCreatePositionDraft={createSimulationFromSaxoPosition}
+                onLinkPositionToExisting={linkSaxoPositionToExistingSimulation}
                 onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
                 stockTransfers={stockTransfers}
                 onOpenLinkedSimulation={openSimulationEditorAt}
@@ -1150,6 +1305,7 @@ export default function App() {
                 onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
                 onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
                 onCreatePositionDraft={createSimulationFromSaxoPosition}
+                onLinkPositionToExisting={linkSaxoPositionToExistingSimulation}
                 onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
                 stockTransfers={stockTransfers}
                 onOpenLinkedSimulation={openSimulationEditorAt}
@@ -1625,6 +1781,31 @@ function getStockTransferForSimulation(simulation: TradeSimulation, stockTransfe
       transfer.toAccountCode === "N" &&
       Math.abs(transfer.shares - shares) <= 0.0001,
   );
+}
+
+function describeSaxoPositionLinkDiffs(
+  position: SaxoApiPositionSnapshot,
+  simulation: TradeSimulation,
+  leg: OptionLeg,
+  resolvedPremium: number,
+  resolvedQuantity: number,
+): string[] {
+  const diffs: string[] = [];
+  if (position.strike !== undefined && Number.isFinite(position.strike) && Math.abs(leg.strikeUSD - position.strike) > 0.001) {
+    diffs.push(`${leg.type.toUpperCase()}${formatNumber(leg.strikeUSD)}→${(position.optionType ?? leg.type).toUpperCase()}${formatNumber(position.strike)}`);
+  }
+  const appExpiry = (leg.expiryDate || simulation.expiryDate || "").slice(0, 10);
+  const saxoExpiry = position.expiry?.slice(0, 10);
+  if (appExpiry && saxoExpiry && appExpiry !== saxoExpiry) {
+    diffs.push(`満期 ${appExpiry}→${saxoExpiry}`);
+  }
+  if (Number.isFinite(resolvedPremium) && Math.abs(leg.premiumUSD - resolvedPremium) > 0.005) {
+    diffs.push(`${formatUSD(leg.premiumUSD)}→${formatUSD(resolvedPremium)}`);
+  }
+  if (Number.isFinite(resolvedQuantity) && Math.abs(leg.quantity - resolvedQuantity) > 0.0001) {
+    diffs.push(`${formatNumber(leg.quantity)}枚→${formatNumber(resolvedQuantity)}枚`);
+  }
+  return diffs;
 }
 
 function DemoWheelNotice() {

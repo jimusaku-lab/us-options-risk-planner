@@ -49,7 +49,7 @@ import {
   type SaxoPositionReconciliationRow,
 } from "@/features/saxo/saxoAccountSync";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
-import type { AccountState, SaxoAccountCode, StockTransferEvent, TradeSimulation } from "@/types/domain";
+import type { AccountState, OptionLeg, SaxoAccountCode, StockTransferEvent, TradeSimulation } from "@/types/domain";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 
 const SAXO_MAPPING_STORAGE_KEY = "us-options-saxo-account-mappings-v1";
@@ -107,6 +107,7 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft,
   onCreateAssignmentDraft,
   onCreatePositionDraft,
+  onLinkPositionToExisting,
   onCreateStockTransferFromPosition,
   stockTransfers = [],
   onOpenLinkedSimulation,
@@ -123,6 +124,7 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string } | void;
   onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string } | void;
   onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
+  onLinkPositionToExisting?: (position: SaxoApiPositionSnapshot, simulation: TradeSimulation, historyItems?: SaxoHistoryDiscoveryItem[]) => boolean | void;
   onCreateStockTransferFromPosition?: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
   stockTransfers?: StockTransferEvent[];
   onOpenLinkedSimulation?: (simulationId: string, anchorId?: string) => void;
@@ -1391,6 +1393,11 @@ export function SaxoReadOnlyPanel({
                     setMessage("既存建玉に紐づける候補がありません。新規下書きとして扱うか、今回は無視してください。");
                     return;
                   }
+                  const linkedByApp = onLinkPositionToExisting?.(
+                    row.position,
+                    row.simulation,
+                    historyEndpoints.flatMap((endpoint) => endpoint.items ?? []),
+                  );
                   setLinkedPositionIds((current) => (current.includes(row.position!.id) ? current : [...current, row.position!.id]));
                   setLinkedPositionTargets((current) => ({ ...current, [row.position!.id]: row.simulation!.id }));
                   setPositionActionErrors((current) => {
@@ -1398,7 +1405,11 @@ export function SaxoReadOnlyPanel({
                     delete next[row.position!.id];
                     return next;
                   });
-                  setMessage(`${row.simulation.name} にSaxo建玉候補を紐づけ済みにしました。既存建玉の手入力項目は自動上書きしていません。`);
+                  setMessage(
+                    linkedByApp
+                      ? `${row.simulation.name} にSaxo実約定値を反映し、3-A約定確認へ移動しました。正式保存前に内容を確認してください。`
+                      : `${row.simulation.name} にSaxo建玉候補を紐づけ済みにしました。既存建玉の手入力項目は自動上書きしていません。`,
+                  );
                 }}
                 onRepairLink={(row) => {
                   if (!row.position) return;
@@ -2781,26 +2792,10 @@ function PositionsPreview({
           未割当口座の建玉は照合対象外です。P/N/使わないをユーザー確認で割り当ててから再確認してください。
         </p>
       ) : null}
-      {stockTransferRows.length > 0 ? (
-        <NStockTransferCandidates
-          rows={stockTransferRows}
-          simulations={simulations}
-          stockTransfers={stockTransfers}
-          expandedPositionId={expandedPositionId}
-          highlightedPositionId={highlightedPositionId}
-          actionNoticeByPositionId={positionActionNotices}
-          onToggleDetails={onToggleDetails}
-          onIgnore={onIgnore}
-          onCreateStockTransfer={onCreateStockTransfer}
-          onOpenWheelManagement={onOpenWheelManagement}
-          onDownloadJson={onDownloadJson}
-          onOpenSimulationAt={onOpenSimulationAt}
-        />
-      ) : null}
       <div className="mt-3 overflow-x-auto">
         {regularRows.length === 0 ? (
           <p className="text-sm text-slate-500">
-            {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : "通常のオプション建玉候補はありません。N口座の現物株候補は上の専用カードで確認してください。"}
+            {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : "通常のオプション建玉候補はありません。N口座の現物株候補は下の専用カードで確認してください。"}
           </p>
         ) : (
           <table className="min-w-full text-sm">
@@ -2841,6 +2836,22 @@ function PositionsPreview({
           </table>
         )}
       </div>
+      {stockTransferRows.length > 0 ? (
+        <NStockTransferCandidates
+          rows={stockTransferRows}
+          simulations={simulations}
+          stockTransfers={stockTransfers}
+          expandedPositionId={expandedPositionId}
+          highlightedPositionId={highlightedPositionId}
+          actionNoticeByPositionId={positionActionNotices}
+          onToggleDetails={onToggleDetails}
+          onIgnore={onIgnore}
+          onCreateStockTransfer={onCreateStockTransfer}
+          onOpenWheelManagement={onOpenWheelManagement}
+          onDownloadJson={onDownloadJson}
+          onOpenSimulationAt={onOpenSimulationAt}
+        />
+      ) : null}
       {draft && draftPosition ? (
         <div className="mt-3 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3733,7 +3744,22 @@ function PositionRow({
   const linkedNeedsEntryConfirmation = linkedResolution.status === "linked" ? needsOptionEntryConfirmation(linkedResolution.simulation) : true;
   const canCreateDraft = Boolean(position && position.accountAssignment === "P" || position && position.accountAssignment === "N");
   const createDraftLabel = isNewCandidate ? "建玉入力へ下書き反映" : "新規建玉として下書き作成";
-  const linkReviewLabel = isReviewCandidate ? "候補を選んで紐づける" : "既存建玉に紐づける";
+  const isPlannedCoveredCallLink = Boolean(
+    position &&
+      row.simulation &&
+      row.simulation.status === "planned" &&
+      row.simulation.strategyType === "covered_call" &&
+      position.kind === "option" &&
+      position.accountAssignment === "N" &&
+      position.optionType === "call" &&
+      position.side === "short",
+  );
+  const linkReviewLabel = isPlannedCoveredCallLink
+    ? "注文前建玉に紐づけて3-Aへ進む"
+    : isReviewCandidate
+      ? "候補を選んで紐づける"
+      : "既存建玉に紐づける";
+  const saxoActualDiffs = position && row.simulation && row.leg ? getSaxoPositionPlannedDiffs(position, row.simulation, row.leg) : [];
   const currentPositionInfo = position
     ? [
         ["口座割当", formatPositionAccount(position)],
@@ -3807,7 +3833,11 @@ function PositionRow({
             詳細を見る
           </button>
           <button
-            className="inline-flex items-center gap-1 rounded border border-emerald-300 px-2 py-1 text-xs font-bold text-emerald-800 disabled:cursor-not-allowed disabled:opacity-40"
+            className={
+              isPlannedCoveredCallLink
+                ? "inline-flex items-center gap-1 rounded border border-sky-600 bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-700"
+                : "inline-flex items-center gap-1 rounded border border-emerald-300 px-2 py-1 text-xs font-bold text-emerald-800 disabled:cursor-not-allowed disabled:opacity-40"
+            }
             onClick={() => onLinkExisting(row)}
           >
             <Link2 size={13} />
@@ -3821,7 +3851,14 @@ function PositionRow({
             <Eye size={13} />
             詳細を見る
           </button>
-          <button className="inline-flex items-center gap-1 rounded border border-amber-300 px-2 py-1 text-xs font-bold text-amber-800" onClick={() => onLink(row)}>
+          <button
+            className={
+              isPlannedCoveredCallLink
+                ? "inline-flex items-center gap-1 rounded border border-sky-600 bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-700"
+                : "inline-flex items-center gap-1 rounded border border-amber-300 px-2 py-1 text-xs font-bold text-amber-800"
+            }
+            onClick={() => onLink(row)}
+          >
             <Link2 size={13} />
             {linkReviewLabel}
           </button>
@@ -3869,6 +3906,23 @@ function PositionRow({
             <p className="mt-1 max-w-[280px] rounded bg-amber-50 px-2 py-1 text-xs leading-5 text-amber-800">
               既存建玉と一致候補があります。内容を確認して、既存建玉へ反映するか、新規下書きとして扱うか選んでください。
             </p>
+          ) : null}
+          {isPlannedCoveredCallLink ? (
+            <div className="mt-1 max-w-[340px] rounded border border-sky-200 bg-sky-50 px-2 py-2 text-xs leading-5 text-sky-900">
+              <div className="font-bold text-sky-950">注文前カバードコール候補とSaxo約定済み建玉を照合しています</div>
+              <p className="mt-1">
+                注文前入力値とSaxo実約定値が違う場合、正式建玉はSaxoの約定済み建玉情報を優先します。
+              </p>
+              {saxoActualDiffs.length > 0 ? (
+                <ul className="mt-1 grid gap-1">
+                  {saxoActualDiffs.map((diff) => (
+                    <li key={diff}>{diff}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1">注文前入力値とSaxo実約定値に大きな差分はありません。</p>
+              )}
+            </div>
           ) : null}
           {linkStatus === "linked" ? (
             <div className="mt-1 max-w-[320px] rounded border border-emerald-200 bg-emerald-50 px-2 py-2 text-xs leading-5 text-emerald-900">
@@ -4246,6 +4300,38 @@ function formatDiff(currentValue: number | undefined, saxoValue: number | undefi
   if (currency === "USD") return `${diff > 0 ? "+" : ""}${formatUSD(diff)}`;
   if (currency === "%") return `${diff > 0 ? "+" : ""}${formatPct(diff)}`;
   return `${diff > 0 ? "+" : ""}${formatNumber(diff)}`;
+}
+
+function normalizeDisplayDate(value?: string): string {
+  return value?.slice(0, 10) ?? "";
+}
+
+function getSaxoPositionPlannedDiffs(position: SaxoApiPositionSnapshot, simulation: TradeSimulation, leg: OptionLeg): string[] {
+  const diffs: string[] = [];
+  if (position.optionType && position.optionType !== leg.type) {
+    diffs.push(`Put/Call: ${leg.type.toUpperCase()} → ${position.optionType.toUpperCase()}`);
+  }
+  const saxoSide = position.side === "long" ? "buy" : position.side === "short" ? "sell" : undefined;
+  if (saxoSide && saxoSide !== leg.side) {
+    diffs.push(`売買方向: ${leg.side} → ${saxoSide}`);
+  }
+  if (position.strike !== undefined && Number.isFinite(position.strike) && Math.abs(leg.strikeUSD - position.strike) > 0.001) {
+    diffs.push(`権利行使価格: ${leg.type.toUpperCase()}${formatNumber(leg.strikeUSD)} → ${position.optionType?.toUpperCase() ?? leg.type.toUpperCase()}${formatNumber(position.strike)}`);
+  }
+  const saxoExpiry = normalizeDisplayDate(position.expiry);
+  const appExpiry = normalizeDisplayDate(leg.expiryDate || simulation.expiryDate);
+  if (saxoExpiry && appExpiry && saxoExpiry !== appExpiry) {
+    diffs.push(`満期: ${appExpiry} → ${saxoExpiry}`);
+  }
+  const saxoPremium = position.premiumOpenPrice ?? position.currentOptionPrice;
+  if (saxoPremium !== undefined && Number.isFinite(saxoPremium) && Math.abs(leg.premiumUSD - saxoPremium) > 0.005) {
+    diffs.push(`プレミアム: ${formatUSD(leg.premiumUSD)} → ${formatUSD(saxoPremium)}`);
+  }
+  const saxoQuantity = position.quantity !== undefined && Number.isFinite(position.quantity) ? Math.abs(position.quantity) : undefined;
+  if (saxoQuantity !== undefined && Math.abs(leg.quantity - saxoQuantity) > 0.0001) {
+    diffs.push(`数量: ${formatNumber(leg.quantity)}枚 → ${formatNumber(saxoQuantity)}枚`);
+  }
+  return diffs;
 }
 
 function getMissingPositionDraftRequirements(position: SaxoApiPositionSnapshot): string[] {

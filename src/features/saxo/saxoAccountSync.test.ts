@@ -260,6 +260,64 @@ describe("Saxo read-only account sync", () => {
     expect(rows[0].simulation?.id).toBe(simulation.id);
   });
 
+  it("links an executed Saxo covered call to the existing planned covered call even when strike and premium differ", () => {
+    const simulation = createOpenPutSimulation({
+      id: "planned-covered-call",
+      status: "planned",
+      name: "NVDA covered call planned",
+      strategyType: "covered_call",
+      accountCode: "N",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      accountCurrency: "USD",
+      entryDate: "2026-06-18",
+      expiryDate: "2026-07-10",
+      denominatorMode: "stock_plus_margin",
+      stockPosition: {
+        shares: 100,
+        averageCostUSD: 207.5,
+        denominatorPriceMode: "average_cost",
+      },
+      optionLegs: [
+        {
+          id: "leg-call",
+          type: "call",
+          side: "sell",
+          strikeUSD: 230,
+          premiumUSD: 1.4,
+          quantity: 1,
+          expiryDate: "2026-07-10",
+          isCovered: true,
+        },
+      ],
+    });
+    const position: SaxoApiPositionSnapshot = {
+      id: "saxo-covered-call-225",
+      accountKey: "n-key",
+      accountAssignment: "N",
+      accountCode: "N",
+      symbol: "NVDA",
+      assetType: "StockOption",
+      kind: "option",
+      quantity: -1,
+      side: "short",
+      optionType: "call",
+      strike: 225,
+      expiry: "2026-07-10",
+      premiumOpenPrice: 1.83,
+      currentOptionPrice: 1.57,
+      currency: "USD",
+      missingFields: [],
+      fetchedAt: "2026-06-18T13:34:40.000Z",
+    };
+
+    const rows = reconcileSaxoPositions([simulation], [position]);
+
+    expect(rows[0].status).toBe("price_diff");
+    expect(rows[0].simulation?.id).toBe(simulation.id);
+    expect(rows[0].detail).toContain("権利行使価格差");
+    expect(rows[0].detail).toContain("価格差");
+  });
+
   it("resolves a missing Saxo position symbol from a unique matching app leg", () => {
     const simulation = createOpenPutSimulation();
     const position: SaxoApiPositionSnapshot = {

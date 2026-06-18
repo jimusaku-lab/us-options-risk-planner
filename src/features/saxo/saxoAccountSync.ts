@@ -537,7 +537,9 @@ export function reconcileSaxoPositions(
     }
 
     const candidates = findMatchingOptionLegs(activeSimulations, position);
-    if (candidates.length === 0) {
+    const fallbackCandidates = candidates.length === 0 ? findPlannedCoveredCallCandidates(activeSimulations, position) : [];
+    const effectiveCandidates = candidates.length > 0 ? candidates : fallbackCandidates;
+    if (effectiveCandidates.length === 0) {
       rows.push({
         id: `position-${position.id}`,
         status: "app_missing",
@@ -547,14 +549,15 @@ export function reconcileSaxoPositions(
       continue;
     }
 
-    const candidate = candidates[0];
+    const candidate = effectiveCandidates[0];
     matchedLegIds.add(`${candidate.simulation.id}:${candidate.leg.id}`);
     const quantityDiff = getQuantityDiff(position, candidate.leg);
     const priceDiff = getPriceDiff(position, candidate.leg);
+    const shapeDiff = hasOptionShapeDiff(position, candidate.leg);
     const status: SaxoPositionMatchStatus =
       quantityDiff !== undefined && Math.abs(quantityDiff) > 0.0001
         ? "quantity_diff"
-        : priceDiff !== undefined && Math.abs(priceDiff) > 0.01
+        : shapeDiff || (priceDiff !== undefined && Math.abs(priceDiff) > 0.01)
           ? "price_diff"
           : "matched";
     rows.push({
@@ -568,7 +571,17 @@ export function reconcileSaxoPositions(
           ? "既存建玉と一致しています。"
           : status === "quantity_diff"
             ? `数量差があります。Saxo ${formatComparableNumber(Math.abs(position.quantity ?? 0))} / アプリ ${formatComparableNumber(candidate.leg.quantity)}`
-            : `価格差があります。Saxo ${formatComparableNumber(position.premiumOpenPrice ?? position.currentOptionPrice)} / アプリ ${formatComparableNumber(candidate.leg.premiumUSD)}`,
+            : [
+                position.strike !== undefined && Math.abs(candidate.leg.strikeUSD - position.strike) > 0.001
+                  ? `権利行使価格差 Saxo ${formatComparableNumber(position.strike)} / アプリ ${formatComparableNumber(candidate.leg.strikeUSD)}`
+                  : undefined,
+                position.expiry && normalizeDate(candidate.leg.expiryDate) !== normalizeDate(position.expiry)
+                  ? `満期差 Saxo ${position.expiry} / アプリ ${candidate.leg.expiryDate}`
+                  : undefined,
+                priceDiff !== undefined && Math.abs(priceDiff) > 0.01
+                  ? `価格差 Saxo ${formatComparableNumber(position.premiumOpenPrice ?? position.currentOptionPrice)} / アプリ ${formatComparableNumber(candidate.leg.premiumUSD)}`
+                  : undefined,
+              ].filter(Boolean).join("、") || "Saxo実約定値と注文前入力値に差分があります。",
     });
   }
 
@@ -587,6 +600,36 @@ export function reconcileSaxoPositions(
   }
 
   return rows;
+}
+
+function findPlannedCoveredCallCandidates(
+  simulations: TradeSimulation[],
+  position: SaxoApiPositionSnapshot,
+): Array<{ simulation: TradeSimulation; leg: OptionLeg }> {
+  if (position.kind !== "option") return [];
+  if (position.accountAssignment !== "N") return [];
+  if (position.optionType !== "call") return [];
+  if (position.side !== "short") return [];
+  const resolvedSymbol = resolveSaxoPositionSymbol(position, simulations);
+  return simulations.flatMap((simulation) =>
+    simulation.optionLegs
+      .filter((leg) => {
+        if (simulation.status !== "planned") return false;
+        if (simulation.strategyType !== "covered_call") return false;
+        if (simulation.accountCode !== "N" || simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT") return false;
+        if (resolvedSymbol && normalizeSymbol(simulation.ticker) !== resolvedSymbol) return false;
+        if (leg.type !== "call" || leg.side !== "sell") return false;
+        if (position.quantity !== undefined && Math.abs(Math.abs(position.quantity) - leg.quantity) > 0.0001) return false;
+        return true;
+      })
+      .map((leg) => ({ simulation, leg })),
+  );
+}
+
+function hasOptionShapeDiff(position: SaxoApiPositionSnapshot, leg: OptionLeg): boolean {
+  if (position.strike !== undefined && Math.abs(leg.strikeUSD - position.strike) > 0.001) return true;
+  if (position.expiry && normalizeDate(leg.expiryDate) !== normalizeDate(position.expiry)) return true;
+  return false;
 }
 
 export function resolveSaxoPositionSymbol(position: SaxoApiPositionSnapshot, simulations: TradeSimulation[] = []): string | undefined {
