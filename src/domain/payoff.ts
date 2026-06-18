@@ -1,4 +1,4 @@
-import type { OptionLeg, PayoffPoint, PayoffSummary, TradeSimulation } from "@/types/domain";
+import type { OptionLeg, PayoffBreakeven, PayoffPoint, PayoffSummary, TradeSimulation } from "@/types/domain";
 import { calculateTotalFeesJPY } from "./calculations";
 
 const CONTRACT_SIZE = 100;
@@ -56,7 +56,8 @@ export function calculatePayoffSummary(simulation: TradeSimulation): PayoffSumma
   const totalQuantity = simulation.optionLegs.reduce((sum, leg) => sum + Math.max(0, leg.quantity), 0);
   const feePerContractJPY = totalQuantity > 0 ? calculateTotalFeesJPY(simulation) / totalQuantity : 0;
   const feePerContractUSD = feePerContractJPY / (simulation.fxRateJPY || 1);
-  const breakevens = simulation.optionLegs.flatMap((leg) => {
+  const coveredCallSummary = getCoveredCallPayoffSummary(simulation, feePerContractUSD);
+  const breakevens = coveredCallSummary?.breakevens ?? simulation.optionLegs.flatMap((leg) => {
     const feePerShareUSD = feePerContractUSD / CONTRACT_SIZE;
     if (leg.type === "call" && leg.side === "buy") {
       return [{ priceUSD: leg.strikeUSD + leg.premiumUSD + feePerShareUSD, label: `${legLabel(leg)} 損益分岐点` }];
@@ -82,10 +83,53 @@ export function calculatePayoffSummary(simulation: TradeSimulation): PayoffSumma
 
   return {
     breakevens,
+    secondaryBreakevens: coveredCallSummary?.secondaryBreakevens,
     maxLossLabel: hasShortCallWithoutStock ? "無制限（裸C売りの上昇側）" : formatPayoffJPY(minPnl),
+    maxLossTitle: coveredCallSummary ? "株価0ドル想定の最大評価損" : undefined,
+    maxLossNote: coveredCallSummary
+      ? "保有株込みの評価損です。株を売却しなければ実現損ではありません。この価格で自動売却されるという意味ではありません。"
+      : undefined,
     maxProfitLabel: hasLongCall ? "無制限（株価上昇側）" : formatPayoffJPY(maxPnl),
+    displayModeLabel: coveredCallSummary ? "保有株込み" : undefined,
+    displayModeOptions: coveredCallSummary ? ["保有株込み", "オプション単体", "機会損益"] : undefined,
     hasLongOption,
-    formulas: simulation.optionLegs.map((leg) => getBreakevenFormula(leg, feePerContractUSD)),
+    formulas: coveredCallSummary
+      ? coveredCallSummary.formulas
+      : simulation.optionLegs.map((leg) => getBreakevenFormula(leg, feePerContractUSD)),
+  };
+}
+
+function getCoveredCallPayoffSummary(
+  simulation: TradeSimulation,
+  feePerContractUSD: number,
+): { breakevens: PayoffBreakeven[]; secondaryBreakevens: PayoffBreakeven[]; formulas: string[] } | undefined {
+  if (simulation.strategyType !== "covered_call") return undefined;
+  const stock = simulation.stockPosition;
+  const callLeg = simulation.optionLegs.find((leg) => leg.type === "call" && leg.side === "sell");
+  if (!stock || !callLeg || stock.averageCostUSD <= 0 || callLeg.quantity <= 0) return undefined;
+  const coveredShares = Math.min(stock.shares, callLeg.quantity * CONTRACT_SIZE);
+  if (coveredShares <= 0) return undefined;
+  const feePerShareUSD = feePerContractUSD / CONTRACT_SIZE;
+  const premiumPerShareUSD = callLeg.premiumUSD;
+  const stockBreakevenUSD = Math.max(0, stock.averageCostUSD - premiumPerShareUSD + feePerShareUSD);
+  const shortCallBreakevenUSD = callLeg.strikeUSD + premiumPerShareUSD - feePerShareUSD;
+  return {
+    breakevens: [
+      {
+        priceUSD: stockBreakevenUSD,
+        label: "保有株込みの損益分岐点",
+      },
+    ],
+    secondaryBreakevens: [
+      {
+        priceUSD: shortCallBreakevenUSD,
+        label: "コール売り単体の上側損益分岐点",
+      },
+    ],
+    formulas: [
+      `保有株込み: 取得単価 ${formatPayoffUSD(stock.averageCostUSD)} - 受取プレミアム ${formatPayoffUSD(premiumPerShareUSD)} + 手数料按分 ${formatPayoffUSD(feePerShareUSD)} = ${formatPayoffUSD(stockBreakevenUSD)}`,
+      `コール売り単体の上側損益分岐点: 権利行使価格 ${formatPayoffUSD(callLeg.strikeUSD)} + 受取プレミアム ${formatPayoffUSD(premiumPerShareUSD)} - 手数料按分 ${formatPayoffUSD(feePerShareUSD)} = ${formatPayoffUSD(shortCallBreakevenUSD)}。保有株込みの損益分岐点ではありません。`,
+    ],
   };
 }
 

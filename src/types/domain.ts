@@ -400,8 +400,13 @@ export type PayoffBreakeven = {
 
 export type PayoffSummary = {
   breakevens: PayoffBreakeven[];
+  secondaryBreakevens?: PayoffBreakeven[];
   maxLossLabel: string;
+  maxLossTitle?: string;
+  maxLossNote?: string;
   maxProfitLabel: string;
+  displayModeLabel?: string;
+  displayModeOptions?: string[];
   hasLongOption: boolean;
   formulas: string[];
 };

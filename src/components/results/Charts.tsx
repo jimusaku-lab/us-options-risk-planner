@@ -25,6 +25,21 @@ export function PayoffChart({ simulation, points }: { simulation: TradeSimulatio
         横軸は満期時の株価、縦軸はその株価で満期を迎えた場合の概算損益です。
         0円ラインより上が利益、下が損失です。現在株価、権利行使価格、損益分岐点を線で表示します。
       </p>
+      {summary.displayModeOptions ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold">
+          <span className="text-slate-600">表示モード:</span>
+          {summary.displayModeOptions.map((mode) => (
+            <span
+              key={mode}
+              className={`rounded-full px-3 py-1 ${
+                mode === summary.displayModeLabel ? "bg-teal-700 text-white" : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {mode}
+            </span>
+          ))}
+        </div>
+      ) : null}
       {summary.hasLongOption ? (
         <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900">
           買いオプションでは、満期まで持つことを推奨する図ではありません。実際は満期前の反対売買決済を前提に確認します。
@@ -48,6 +63,9 @@ export function PayoffChart({ simulation, points }: { simulation: TradeSimulatio
             {summary.breakevens.map((breakeven, index) => (
               <ReferenceLine key={`${breakeven.label}-${index}`} x={breakeven.priceUSD} stroke="#7c3aed" label={`損益分岐点 ${breakeven.priceUSD.toFixed(2)}`} />
             ))}
+            {summary.secondaryBreakevens?.map((breakeven, index) => (
+              <ReferenceLine key={`${breakeven.label}-${index}`} x={breakeven.priceUSD} stroke="#94a3b8" strokeDasharray="5 5" label={`参考 ${breakeven.priceUSD.toFixed(2)}`} />
+            ))}
             <Area type="monotone" dataKey="profitJPY" stroke="#0f766e" fill="#10b981" fillOpacity={0.22} strokeWidth={0} dot={false} isAnimationActive={false} />
             <Area type="monotone" dataKey="lossJPY" stroke="#dc2626" fill="#ef4444" fillOpacity={0.18} strokeWidth={0} dot={false} isAnimationActive={false} />
             <Area type="monotone" dataKey="pnlJPY" stroke="#0f766e" fill="none" strokeWidth={2} dot={false} isAnimationActive={false} />
@@ -55,13 +73,20 @@ export function PayoffChart({ simulation, points }: { simulation: TradeSimulatio
         </ResponsiveContainer>
       </div>
       <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
-        <PayoffStat label="最大損失" value={summary.maxLossLabel} tone="red" />
+        <PayoffStat label={summary.maxLossTitle ?? "最大損失"} value={summary.maxLossLabel} tone="red" note={summary.maxLossNote} />
         <PayoffStat label="最大利益" value={summary.maxProfitLabel} tone="green" />
         <PayoffStat
           label="損益分岐点"
           value={summary.breakevens.length > 0 ? summary.breakevens.map((item) => formatUSD(item.priceUSD)).join(" / ") : "未計算"}
         />
       </div>
+      {summary.secondaryBreakevens && summary.secondaryBreakevens.length > 0 ? (
+        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+          <span className="font-bold text-slate-800">参考: </span>
+          {summary.secondaryBreakevens.map((item) => `${item.label} ${formatUSD(item.priceUSD)}`).join(" / ")}
+          <span className="ml-1">保有株込みの損益分岐点ではありません。</span>
+        </div>
+      ) : null}
       {summary.formulas.length > 0 ? (
         <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
           <div className="font-bold text-slate-800">損益分岐点の計算</div>
@@ -76,12 +101,13 @@ export function PayoffChart({ simulation, points }: { simulation: TradeSimulatio
   );
 }
 
-function PayoffStat({ label, value, tone }: { label: string; value: string; tone?: "green" | "red" }) {
+function PayoffStat({ label, value, tone, note }: { label: string; value: string; tone?: "green" | "red"; note?: string }) {
   const toneClass = tone === "green" ? "text-emerald-700" : tone === "red" ? "text-red-700" : "text-slate-950";
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
       <div className="text-xs font-semibold text-slate-500">{label}</div>
       <div className={`numeric-input mt-1 text-lg font-bold ${toneClass}`}>{value}</div>
+      {note ? <p className="mt-1 text-xs leading-5 text-slate-600">{note}</p> : null}
     </div>
   );
 }
