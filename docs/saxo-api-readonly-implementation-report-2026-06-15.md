@@ -1201,3 +1201,44 @@ Saxo N口座Stock候補から `P→N株式移管を記録` を押した後、候
 ## 残課題
 
 - この時点ではなし。
+
+---
+
+# 2026-06-18 Saxo未約定注文・出口注文取得UXの整理
+
+## 実装内容
+
+- Saxo未約定注文取得時の説明を、未約定注文は約定するまで建玉・決済実績・成績へ正式反映しない文言へ変更した。
+- N口座のWorking状態のCall売り注文を `未約定カバードコール売り注文` として分類し、`出口候補` と混同しないようにした。
+- 注文分類を `未約定カバードコール売り注文`、`決済・出口注文`、`取消済み・失効注文`、通常の `未約定注文` に分離した。
+- Working注文には「まだ約定していません。約定するまでは建玉・実績には反映しません。約定後にまとめて取得を実行し、建玉開始候補として確認してください。」と表示するようにした。
+- 未約定カバードコール売り注文の主操作を `注文内容を確認` にし、決済実績や建玉開始確認へ直接進む誤導線を出さないようにした。
+
+## 修正ファイル
+
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（15 files / 78 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-BDS0vs21.js`
+  - bundle内に `未約定カバードコール売り注文`、`未約定C売り`、`決済・出口注文`、`取消済み・失効注文`、`まだ約定していません。約定するまでは建玉・実績には反映しません` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: `6f83ea9`
+- Pages deploy commit hash: `eec937b`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-BDS0vs21.js` を参照することを確認した。公開bundle内に `未約定カバードコール売り注文`、`未約定C売り`、`決済・出口注文`、`取消済み・失効注文`、`まだ約定していません。約定するまでは建玉・実績には反映しません` が含まれることを確認した。
+
+## 残課題
+
+- この時点ではなし。
