@@ -738,7 +738,7 @@ export function SaxoReadOnlyPanel({
       const response = await fetchSaxoOrdersSnapshot();
       setOrders(response.orders);
       setOrdersFetchedAt(response.fetchedAt);
-      setMessage(`${response.orders.length}件の未約定注文を取得しました。出口注文候補として表示しますが、自動反映はしません。`);
+      setMessage(`${response.orders.length}件の未約定注文を取得しました。約定するまでは建玉・決済実績・成績へ正式反映しません。`);
       await refreshStatus();
     } catch (error) {
       await refreshStatus();
@@ -3094,23 +3094,28 @@ function OrdersPreview({
   const assignedP = orders.filter((order) => order.accountAssignment === "P").length;
   const assignedN = orders.filter((order) => order.accountAssignment === "N").length;
   const unassigned = orders.filter((order) => order.accountAssignment === "unassigned").length;
-  const exitCandidates = orders.filter((order) => order.isExitCandidate).length;
+  const coveredCallOpenOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "covered_call_open").length;
+  const exitCandidates = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "exit").length;
+  const inactiveOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "inactive").length;
   return (
     <div className="rounded-md border border-slate-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-bold text-slate-950">未約定注文・出口注文取得</h3>
           <p className="mt-1 text-xs leading-5 text-slate-600">
-            Saxoの未約定注文をread-onlyで取得します。決済指値・逆指値・OCO/IFD系は、アプリ側出口ルールとは別の「Saxo側候補」として表示します。
+            Saxoの未約定注文をread-onlyで取得します。未約定注文は、約定するまで建玉・決済実績・成績へ正式反映しません。
+            約定後にまとめて取得を実行し、Saxo履歴から建玉開始候補または決済実績候補として確認します。
           </p>
         </div>
       </div>
-      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-5">
+      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-6">
         <StatChip label="取得件数" value={`${orders.length}件`} />
         <StatChip label="P口座" value={`${assignedP}件`} />
         <StatChip label="N口座" value={`${assignedN}件`} />
         <StatChip label="未割当" value={`${unassigned}件`} />
-        <StatChip label="出口候補" value={`${exitCandidates}件`} />
+        <StatChip label="未約定C売り" value={`${coveredCallOpenOrders}件`} />
+        <StatChip label="決済・出口注文" value={`${exitCandidates}件`} />
+        <StatChip label="取消済み・失効" value={`${inactiveOrders}件`} />
       </div>
       <p className="mt-2 text-xs text-slate-500">最終取得: {fetchedAt ? new Date(fetchedAt).toLocaleString("ja-JP") : "未取得"}</p>
       <div className="mt-3 overflow-x-auto">
@@ -3151,13 +3156,16 @@ function OrderRow({
   expanded: boolean;
   onToggleDetails: (id: string) => void;
 }) {
+  const category = getSaxoOrderDisplayCategory(order);
   return (
     <>
       <tr className="border-b border-slate-100 align-top">
         <td className="py-2 pr-3">
           <div className="font-bold text-slate-950">{formatOrderLabel(order)}</div>
           <div className="mt-0.5 text-xs text-slate-500">{order.orderType ?? "注文種別未取得"} / {order.orderRelation ?? "関連注文未取得"}</div>
-          {order.isExitCandidate ? <div className="mt-1 inline-block rounded bg-sky-100 px-2 py-0.5 text-xs font-bold text-sky-800">Saxo側に設定あり</div> : null}
+          <div className={`mt-1 inline-block rounded px-2 py-0.5 text-xs font-bold ${getSaxoOrderCategoryBadgeClass(category)}`}>
+            {getSaxoOrderCategoryLabel(category)}
+          </div>
         </td>
         <td className="py-2 pr-3 text-xs font-semibold text-slate-700">{formatPositionAccount(order as unknown as SaxoApiPositionSnapshot)}</td>
         <td className="numeric-input py-2 pr-3 text-right">{formatMaybeValue(order.quantity)}</td>
@@ -3166,13 +3174,17 @@ function OrderRow({
         <td className="py-2">
           <button className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700" onClick={() => onToggleDetails(order.id)}>
             <Eye size={13} />
-            詳細を見る
+            {category === "covered_call_open" ? "注文内容を確認" : "詳細を見る"}
           </button>
         </td>
       </tr>
       {expanded ? (
         <tr className="border-b border-slate-100 bg-slate-50">
           <td colSpan={6} className="px-3 py-2">
+            <div className={`mb-2 rounded-md border px-3 py-2 text-xs leading-5 ${getSaxoOrderCategoryNoticeClass(category)}`}>
+              <div className="font-bold">{getSaxoOrderCategoryLabel(category)}</div>
+              <div>{getSaxoOrderCategoryNotice(order, category)}</div>
+            </div>
             <dl className="grid gap-1 text-xs text-slate-700 sm:grid-cols-3">
               <DraftRow label="Order ID" value={maskSaxoIdentifier(order.orderId)} />
               <DraftRow label="Account Key" value={maskSaxoIdentifier(order.accountKey)} />
@@ -4068,6 +4080,93 @@ function formatOrderLabel(order: SaxoApiOrderSnapshot): string {
   return `${order.symbol ?? "未取得"} / ${order.side ?? "unknown"}`;
 }
 
+type SaxoOrderDisplayCategory = "covered_call_open" | "exit" | "inactive" | "working" | "other";
+
+function getSaxoOrderDisplayCategory(order: SaxoApiOrderSnapshot): SaxoOrderDisplayCategory {
+  if (isInactiveSaxoOrder(order)) return "inactive";
+  if (isWorkingCoveredCallSellOrder(order)) return "covered_call_open";
+  if (order.isExitCandidate) return "exit";
+  if (isWorkingSaxoOrder(order)) return "working";
+  return "other";
+}
+
+function isWorkingCoveredCallSellOrder(order: SaxoApiOrderSnapshot): boolean {
+  return (
+    isWorkingSaxoOrder(order) &&
+    order.accountAssignment === "N" &&
+    order.assetType?.toLowerCase().includes("option") === true &&
+    order.optionType === "call" &&
+    order.side === "sell"
+  );
+}
+
+function isWorkingSaxoOrder(order: SaxoApiOrderSnapshot): boolean {
+  const status = order.status?.toLowerCase() ?? "";
+  return ["working", "open", "pending", "placed"].some((keyword) => status.includes(keyword));
+}
+
+function isInactiveSaxoOrder(order: SaxoApiOrderSnapshot): boolean {
+  const status = order.status?.toLowerCase() ?? "";
+  return ["cancel", "cancelled", "canceled", "expired", "rejected", "done for day"].some((keyword) => status.includes(keyword));
+}
+
+function getSaxoOrderCategoryLabel(category: SaxoOrderDisplayCategory): string {
+  switch (category) {
+    case "covered_call_open":
+      return "未約定カバードコール売り注文";
+    case "exit":
+      return "決済・出口注文";
+    case "inactive":
+      return "取消済み・失効注文";
+    case "working":
+      return "未約定注文";
+    default:
+      return "注文候補";
+  }
+}
+
+function getSaxoOrderCategoryBadgeClass(category: SaxoOrderDisplayCategory): string {
+  switch (category) {
+    case "covered_call_open":
+      return "bg-amber-100 text-amber-900";
+    case "exit":
+      return "bg-sky-100 text-sky-800";
+    case "inactive":
+      return "bg-slate-100 text-slate-700";
+    default:
+      return "bg-blue-100 text-blue-800";
+  }
+}
+
+function getSaxoOrderCategoryNoticeClass(category: SaxoOrderDisplayCategory): string {
+  switch (category) {
+    case "covered_call_open":
+      return "border-amber-200 bg-amber-50 text-amber-950";
+    case "exit":
+      return "border-sky-200 bg-sky-50 text-sky-950";
+    case "inactive":
+      return "border-slate-200 bg-slate-50 text-slate-700";
+    default:
+      return "border-blue-200 bg-blue-50 text-blue-950";
+  }
+}
+
+function getSaxoOrderCategoryNotice(order: SaxoApiOrderSnapshot, category: SaxoOrderDisplayCategory): string {
+  if (category === "covered_call_open") {
+    return "まだ約定していません。約定するまでは建玉・実績には反映しません。約定後にまとめて取得を実行し、建玉開始候補として確認してください。";
+  }
+  if (category === "exit") {
+    return "Saxo側にある決済・出口注文候補です。これはアプリ内の利確/損切りルールとは別物です。約定済み履歴が取得された場合だけ、決済実績確認へ進みます。";
+  }
+  if (category === "inactive") {
+    return "取消済みまたは失効した注文です。建玉・決済実績・成績には反映しません。";
+  }
+  if (isWorkingSaxoOrder(order)) {
+    return "まだ約定していません。約定するまでは建玉・実績には反映しません。約定後にまとめて取得を実行し、履歴候補で確認してください。";
+  }
+  return "注文内容の確認用表示です。未約定注文だけでは建玉開始・決済実績・成績に正式反映しません。";
+}
+
 function formatHistorySide(item: SaxoHistoryDiscoveryItem): string {
   const target = getSaxoHistoryCandidateTarget(item);
   if (target === "assignment") return "買 / 権利行使候補";
@@ -4405,7 +4504,9 @@ function createReflectionSummary({
   const newPositions = regularPositionRows.filter((row) => row.status === "app_missing").length;
   const matchedPositions = regularPositionRows.filter((row) => row.status === "matched").length;
   const unknownPositions = regularPositionRows.filter((row) => row.status === "unknown" || row.status === "quantity_diff" || row.status === "price_diff").length;
-  const exitOrders = orders.filter((order) => order.isExitCandidate).length;
+  const coveredCallOpenOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "covered_call_open").length;
+  const exitOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "exit").length;
+  const inactiveOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "inactive").length;
   const historyItems = historyEndpoints.flatMap((endpoint) => endpoint.items ?? []);
   const entryCandidates = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "entry").length;
   const closeCandidates = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "close").length;
@@ -4442,7 +4543,10 @@ function createReflectionSummary({
       actionable: positionActionable,
     },
     orderLine: {
-      detail: orders.length === 0 ? "0件" : `注文${orders.length}件 / 出口候補${exitOrders}件`,
+      detail:
+        orders.length === 0
+          ? "0件"
+          : `未約定C売り${coveredCallOpenOrders}件 / 決済・出口${exitOrders}件 / 取消・失効${inactiveOrders}件`,
       actionable: orderActionable,
     },
     historyLine: {
