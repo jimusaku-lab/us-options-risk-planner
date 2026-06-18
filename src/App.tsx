@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { BarChart3, ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
 import { calculatePendingAccountCashEffects, createAccountCashAdjustment } from "@/domain/accountCashEffects";
 import type { PendingAccountCashEffect } from "@/domain/accountCashEffects";
 import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
+import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { createOptionCloseExecutionDraft, sanitizeSaxoHistoryCloseExecutions } from "@/domain/optionCloseExecutions";
 import { createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
@@ -51,11 +52,11 @@ import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
 import { formatLocalDate } from "@/lib/date";
-import { formatJPY, formatNumber, formatUSD } from "@/lib/format";
+import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 import { useCandidatesStore } from "@/store/useCandidatesStore";
 import { DEFAULT_BROKER_COMMISSION_USD, DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, useOptionsStore } from "@/store/useOptionsStore";
 import type { CandidateSymbol } from "@/types/candidates";
-import type { OptionCloseExecution, RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } from "@/types/domain";
+import type { ChecklistItem, OptionCloseExecution, PayoffPoint, RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } from "@/types/domain";
 import type { YearlyPerformanceIssue } from "@/domain/yearlyPerformance";
 
 export default function App() {
@@ -1073,6 +1074,7 @@ export default function App() {
     taxResult,
     primaryWithNet,
   );
+  const orderPrepCoveredCallMode = selected.status === "planned" && selected.strategyType === "covered_call";
 
   return (
     <main className="min-h-screen bg-slate-100 text-slate-950">
@@ -1121,23 +1123,41 @@ export default function App() {
               onWarningAction={goToCloseDecision}
               onWorkflowTaskAction={goToWorkflowTask}
             />
-            <SaxoReadOnlyPanel
-              workspace={activeWorkspace}
-              accountInputs={accountInputs}
-              simulations={simulations}
-              onApplyAccountState={updateAccountState}
-              onOrdersChange={setSaxoOrderCandidates}
-              onHistoryCandidatesChange={setSaxoHistoryCandidates}
-              onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
-              onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
-              onCreatePositionDraft={createSimulationFromSaxoPosition}
-              onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
-              stockTransfers={stockTransfers}
-              onOpenLinkedSimulation={openSimulationEditorAt}
-              onOpenHistoryTarget={openSelectedSimulationHistoryTarget}
-              onOpenWheelManagement={openWheelManagement}
-              onDownloadJson={downloadJson}
-            />
+            {orderPrepCoveredCallMode ? (
+              <CoveredCallOrderPrepPanel
+                simulation={selectedWithAccount}
+                checklist={checklist}
+                onChecklistChange={updateChecklist}
+                onOpenOrderEditor={() => {
+                  setIsEditorOpen(true);
+                  setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() });
+                }}
+                payoff={payoff}
+              />
+            ) : null}
+            <CollapsibleSection
+              title={orderPrepCoveredCallMode ? "Saxo API詳細" : undefined}
+              subtitle={orderPrepCoveredCallMode ? "API接続・取得・反映待ちは必要時だけ確認します。" : undefined}
+              collapsed={orderPrepCoveredCallMode}
+            >
+              <SaxoReadOnlyPanel
+                workspace={activeWorkspace}
+                accountInputs={accountInputs}
+                simulations={simulations}
+                onApplyAccountState={updateAccountState}
+                onOrdersChange={setSaxoOrderCandidates}
+                onHistoryCandidatesChange={setSaxoHistoryCandidates}
+                onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
+                onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
+                onCreatePositionDraft={createSimulationFromSaxoPosition}
+                onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
+                stockTransfers={stockTransfers}
+                onOpenLinkedSimulation={openSimulationEditorAt}
+                onOpenHistoryTarget={openSelectedSimulationHistoryTarget}
+                onOpenWheelManagement={openWheelManagement}
+                onDownloadJson={downloadJson}
+              />
+            </CollapsibleSection>
             {isCandidatesOpen ? (
               <CandidatePanel
                 candidates={candidates}
@@ -1149,15 +1169,21 @@ export default function App() {
                 onCreateSimulation={createCandidateSimulation}
               />
             ) : null}
-            <AccountOverview
-              workspace={activeWorkspace}
-              accountInputs={accountInputs}
-              referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
-              pendingCashEffects={pendingCashEffects}
-              onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
-              onResolveCashEffect={goToPendingCashEffectSource}
-              onChange={updateAccountState}
-            />
+            <CollapsibleSection
+              title={orderPrepCoveredCallMode ? "口座全体の余力・証拠金詳細" : undefined}
+              subtitle={orderPrepCoveredCallMode ? "注文判断カードを確認した後、必要な場合だけ口座全体を確認します。" : undefined}
+              collapsed={orderPrepCoveredCallMode}
+            >
+              <AccountOverview
+                workspace={activeWorkspace}
+                accountInputs={accountInputs}
+                referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
+                pendingCashEffects={pendingCashEffects}
+                onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
+                onResolveCashEffect={goToPendingCashEffectSource}
+                onChange={updateAccountState}
+              />
+            </CollapsibleSection>
             {isEditorOpen ? (
               <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
                 <button
@@ -1218,19 +1244,25 @@ export default function App() {
               />
             ) : null}
             {!historyResultMode || showSelectedHistoryDetails ? (
-              <SummaryCards
-                simulation={taxSimulation}
-                primaryDenominator={primaryWithNet}
-                taxResult={taxResult}
-                blockingCount={countableWarnings.filter((warning) => warning.blocking).length}
-                coveredCallAssignmentPreview={historyResultMode ? null : coveredCallAssignmentPreview}
-                primaryWarning={countableWarnings.find((warning) => warning.blocking) ?? countableWarnings[0]}
-                onWarningAction={(warning) => goToCloseDecision(selected.id, warning)}
-                historyMode={showSelectedHistoryDetails}
-                stockHoldingMode={assignedPutStockHoldingMode}
-                denominatorFormula={assignedPutDenominatorFormula}
-                stockTransfer={selectedStockTransfer}
-              />
+              <CollapsibleSection
+                title={orderPrepCoveredCallMode ? "予定値サマリー詳細" : undefined}
+                subtitle={orderPrepCoveredCallMode ? "上部の注文判断カードと同じ予定値を、従来形式で確認します。" : undefined}
+                collapsed={orderPrepCoveredCallMode}
+              >
+                <SummaryCards
+                  simulation={taxSimulation}
+                  primaryDenominator={primaryWithNet}
+                  taxResult={taxResult}
+                  blockingCount={countableWarnings.filter((warning) => warning.blocking).length}
+                  coveredCallAssignmentPreview={historyResultMode ? null : coveredCallAssignmentPreview}
+                  primaryWarning={countableWarnings.find((warning) => warning.blocking) ?? countableWarnings[0]}
+                  onWarningAction={(warning) => goToCloseDecision(selected.id, warning)}
+                  historyMode={showSelectedHistoryDetails}
+                  stockHoldingMode={assignedPutStockHoldingMode}
+                  denominatorFormula={assignedPutDenominatorFormula}
+                  stockTransfer={selectedStockTransfer}
+                />
+              </CollapsibleSection>
             ) : null}
             {historyResultMode && !showSelectedHistoryDetails ? (
               <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600 shadow-sm">
@@ -1245,6 +1277,52 @@ export default function App() {
                 title="分母の参考比較"
                 subtitle="終了済み履歴では参考表示です。主な確認は実績分母を見ます。"
               />
+            ) : !historyResultMode && orderPrepCoveredCallMode ? (
+              <>
+                <CollapsibleSection title="注文前チェックリスト詳細" subtitle="上部のチェックリストと同じ内容です。リスク警告を含めて確認する場合に開きます。" collapsed>
+                  <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                </CollapsibleSection>
+                <DenominatorTable
+                  denominators={denominators}
+                  collapsible
+                  defaultOpen={false}
+                  title="分母比較"
+                  subtitle="注文前カバードコールでは、主表示は取得原価ベースです。必要時だけ比較します。"
+                />
+                <CollapsibleSection title="年率換算の計算根拠" subtitle="プレミアム年率や分母の計算式を確認します。" collapsed>
+                  <AnnualReturnFormula
+                    simulation={selectedWithAccount}
+                    primaryDenominator={primaryWithNet}
+                    taxResult={taxResult}
+                  />
+                </CollapsibleSection>
+                <CollapsibleSection title="税務・NISA等の参考情報" subtitle="注文前の予定値です。実績成績にはまだ含めません。" collapsed>
+                  <TaxComparisonCard
+                    taxResult={taxResult}
+                    nisaComparison={nisaComparison}
+                    stockSettlementTax={stockSettlementTax}
+                    taxBucketSummary={taxBucketSummary}
+                  />
+                </CollapsibleSection>
+                <CollapsibleSection title="上昇/レンジ/下落シナリオ" subtitle="必要時だけシナリオ別の満期想定を確認します。" collapsed>
+                  <ScenarioCards scenarios={scenarios} />
+                </CollapsibleSection>
+                <CollapsibleSection title="反対売買判断" subtitle="注文前では主表示にしません。建玉後や変更判断時に使います。" collapsed>
+                  <CloseDecisionCard
+                    simulation={selected}
+                    saxoOrderCandidates={saxoOrderCandidates}
+                    onChange={upsertSimulation}
+                    focusRequest={closeDecisionFocusRequest}
+                    onExecutionDraft={() => {
+                      setIsEditorOpen(true);
+                      setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
+                    }}
+                  />
+                </CollapsibleSection>
+                <CollapsibleSection title="分母チャート" subtitle="必要時だけ分母別の大きさを確認します。" collapsed>
+                  <DenominatorChart denominators={denominators} />
+                </CollapsibleSection>
+              </>
             ) : !historyResultMode ? (
               <>
                 <DenominatorTable denominators={denominators} />
@@ -1278,17 +1356,23 @@ export default function App() {
               </>
             ) : null}
             {activeWorkspace === "live" ? (
-              <WheelPanel
-                cycles={wheelCycles}
-                events={wheelEvents}
-                stockTransfers={stockTransfers}
-                simulations={simulations}
-                focusRequest={wheelFocusRequest}
-                onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
-                selectedTransferRecorded={selectedStockTransferRecorded}
-                onCreateTransferFromSelected={canCreateStockTransferFromSelected ? () => createStockTransferFromSimulation(selected) : undefined}
-                onCreateCoveredCallFromCycle={(cycle) => createCoveredCallFromWheelCycle(cycle.id)}
-              />
+              <CollapsibleSection
+                title={orderPrepCoveredCallMode ? "ホイール管理詳細" : undefined}
+                subtitle={orderPrepCoveredCallMode ? "注文前の主判断後、ホイール状態を確認する場合に開きます。" : undefined}
+                collapsed={orderPrepCoveredCallMode}
+              >
+                <WheelPanel
+                  cycles={wheelCycles}
+                  events={wheelEvents}
+                  stockTransfers={stockTransfers}
+                  simulations={simulations}
+                  focusRequest={wheelFocusRequest}
+                  onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
+                  selectedTransferRecorded={selectedStockTransferRecorded}
+                  onCreateTransferFromSelected={canCreateStockTransferFromSelected ? () => createStockTransferFromSimulation(selected) : undefined}
+                  onCreateCoveredCallFromCycle={(cycle) => createCoveredCallFromWheelCycle(cycle.id)}
+                />
+              </CollapsibleSection>
             ) : (
               <DemoWheelNotice />
             )}
@@ -1296,6 +1380,159 @@ export default function App() {
         )}
       </div>
     </main>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  subtitle,
+  collapsed,
+  children,
+}: {
+  title?: string;
+  subtitle?: string;
+  collapsed?: boolean;
+  children: ReactNode;
+}) {
+  if (!collapsed || !title) return <>{children}</>;
+  return (
+    <details className="rounded-lg border border-slate-200 bg-white shadow-sm">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-900">
+        {title}
+        {subtitle ? <span className="ml-2 font-normal text-slate-500">{subtitle}</span> : null}
+      </summary>
+      <div className="border-t border-slate-200 p-3">
+        {children}
+      </div>
+    </details>
+  );
+}
+
+function CoveredCallOrderPrepPanel({
+  simulation,
+  checklist,
+  onChecklistChange,
+  onOpenOrderEditor,
+  payoff,
+}: {
+  simulation: TradeSimulation;
+  checklist: ChecklistItem[];
+  onChecklistChange: (id: string, checked: boolean) => void;
+  onOpenOrderEditor: () => void;
+  payoff: PayoffPoint[];
+}) {
+  const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
+  const callLeg = simulation.optionLegs.find((leg) => leg.type === "call" && leg.side === "sell");
+  const assignment = premiumDisplay.coveredCallAssignmentEstimate;
+  const shares = simulation.stockPosition?.shares ?? 0;
+  const averageCost = simulation.stockPosition?.averageCostUSD ?? 0;
+  const coveredShares = callLeg ? Math.max(1, callLeg.quantity * 100) : Math.max(1, shares);
+  const premiumPerShare = premiumDisplay.premiumUSD / coveredShares;
+  const coveredCallBreakeven = averageCost > 0 ? averageCost - premiumPerShare : undefined;
+  const nextAction = callLeg
+    ? "注文内容を確認し、チェックリストを完了してからSaxoで発注します。約定後にまとめて取得し、建玉開始候補として確認します。"
+    : "C売り脚の満期日、権利行使価格、プレミアムを入力してください。";
+
+  return (
+    <section className="grid gap-3">
+      <div className="rounded-lg border border-teal-200 bg-teal-50 p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-teal-700">注文前モード</div>
+            <h2 className="mt-1 text-lg font-bold text-slate-950">
+              N口座で{simulation.ticker} {shares}株を保有中。{callLeg ? `C${formatNumber(callLeg.strikeUSD)}カバードコール注文前です。` : "カバードコール注文前です。"}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-teal-950">
+              注文前の予定値です。実績成績や税務集計には、約定確認・決済・株式譲渡を記録するまで混ぜません。
+            </p>
+          </div>
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-teal-800 ring-1 ring-teal-200">Read-only / 手入力確認</span>
+        </div>
+      </div>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-950">注文判断カード</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              今見るべき予定プレミアム、年率、権利行使時想定、損益分岐点をまとめています。
+            </p>
+          </div>
+          <button
+            type="button"
+            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
+            onClick={onOpenOrderEditor}
+          >
+            注文内容を確認
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <DecisionMetric label="予定プレミアム" value={formatUSD(premiumDisplay.premiumUSD)} note={premiumDisplay.effectiveFxRateJPY ? `参考 ${formatJPY(premiumDisplay.premiumJPY)}` : "参考JPY未計算"} />
+          <DecisionMetric label="手数料後プレミアム" value={formatUSD(premiumDisplay.netAfterFeesUSD ?? premiumDisplay.premiumUSD)} note={`DTE ${premiumDisplay.dte}日`} />
+          <DecisionMetric
+            label="プレミアム年率"
+            value={premiumDisplay.annualReturnPct !== undefined ? `予定 ${formatPct(premiumDisplay.annualReturnPct)}` : "未計算"}
+            note={premiumDisplay.netAnnualReturnPct !== undefined ? `手数料後 ${formatPct(premiumDisplay.netAnnualReturnPct)}` : "分母または満期日を確認"}
+          />
+          <DecisionMetric label="権利行使価格" value={callLeg ? formatUSD(callLeg.strikeUSD) : "未入力"} note={`保有取得単価 ${formatUSD(averageCost)}`} />
+          <DecisionMetric label="損益分岐点" value={coveredCallBreakeven !== undefined ? formatUSD(coveredCallBreakeven) : "未入力"} note="取得単価から1株あたり予定プレミアムを控除した下側目安" />
+          <DecisionMetric label="株式売却益" value={assignment ? formatUSD(assignment.stockSaleGainUSD) : "未計算"} note="権利行使された場合の株式部分" />
+          <DecisionMetric label="プレミアム込み想定益" value={assignment ? formatUSD(assignment.totalWithPremiumUSD) : "未計算"} note={assignment ? `手数料後 ${formatUSD(assignment.totalAfterFeesUSD)}` : "C売り条件を入力"} />
+          <DecisionMetric
+            label="権利行使時想定年率"
+            value={assignment?.annualReturnPct !== undefined ? formatPct(assignment.annualReturnPct) : "未計算"}
+            note={assignment?.netAnnualReturnPct !== undefined ? `手数料後 ${formatPct(assignment.netAnnualReturnPct)}` : "実績には含めません"}
+          />
+        </div>
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-950">
+          <span className="font-bold">次にやること: </span>{nextAction}
+        </div>
+      </section>
+
+      <PayoffChart simulation={simulation} points={payoff} />
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-950">注文前チェックリスト</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-600">注文内容を確認する直前に、未確認項目だけチェックします。</p>
+          </div>
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50"
+            onClick={onOpenOrderEditor}
+          >
+            注文内容を確認
+          </button>
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {checklist.map((item) => (
+            <label key={item.id} className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 text-sm">
+              <input
+                className="mt-0.5 h-5 w-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600"
+                type="checkbox"
+                checked={item.passed}
+                onChange={(event) => onChecklistChange(item.id, event.target.checked)}
+              />
+              <div>
+                <div className="font-semibold text-slate-900">{item.label}</div>
+                {!item.passed ? <div className="mt-1 text-slate-500">未確認です。注文前に確認してからチェックします。</div> : null}
+              </div>
+            </label>
+          ))}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function DecisionMetric({ label, value, note }: { label: string; value: string; note: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+      <div className="text-xs font-semibold text-slate-500">{label}</div>
+      <div className="numeric-input mt-1 text-xl font-bold text-slate-950">{value}</div>
+      <p className="mt-1 text-xs leading-5 text-slate-600">{note}</p>
+    </div>
   );
 }
 
