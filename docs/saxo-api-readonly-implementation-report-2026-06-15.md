@@ -60,6 +60,61 @@
 
 ---
 
+# 2026-06-18 Saxo約定済みカバードコール建玉の注文前候補紐づけ
+
+## 実装内容
+
+- Saxo現在建玉にN口座のC売り建玉が出た場合、N口座Stock候補より先に通常の建玉候補として表示するようにした。
+- 既存の注文前カバードコール候補がある場合、主ボタンを `注文前建玉に紐づけて3-Aへ進む` にした。
+- 注文前入力値とSaxo実約定値が異なる場合、候補行に差分を表示するようにした。
+  - 例: `C230 → C225`
+  - 例: `$1.40 → $1.83`
+- 紐づけ時に、既存の注文前下書きのオプション脚と3-A建玉開始確認下書きをSaxo実約定値で更新するようにした。
+- 紐づけ後は建玉入力カードを開き、`3-A. 建玉開始の約定確認` へ移動するようにした。
+- 正式保存時に確認対象となる値は、注文前の予定値ではなくSaxo実約定値を優先する。
+
+## 修正ファイル
+
+- `src/features/saxo/saxoAccountSync.ts`
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `src/App.tsx`
+- `src/features/saxo/saxoAccountSync.test.ts`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npx tsc --noEmit`: 通過
+- `npm test`: 通過（15 files / 81 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-4NauL3Xq.js`
+  - bundle内に `注文前建玉に紐づけて3-Aへ進む`、`Saxo実約定値を優先`、`注文前カバードコール候補` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: `720e103`
+- Pages deploy commit hash: `160d609`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-4NauL3Xq.js` を参照することを確認した。
+- 公開bundle内に `注文前建玉に紐づけて3-Aへ進む`、`Saxo実約定値を優先`、`注文前カバードコール候補` が含まれることを確認した。
+
+## 確認できたこと
+
+- 注文前にC230 / `$1.40` と入力していても、Saxo実建玉がC225 / `$1.83` であれば、C225 / `$1.83` を正式確認対象として3-Aへ進められる。
+- Saxo実約定建玉がある場合は、N口座Stock候補より先に通常の建玉候補として確認できる。
+- Saxo取得値は自動で正式保存せず、3-Aの確認を挟む導線を維持している。
+
+## 残課題
+
+- この時点ではなし。
+
+---
+
 # 2026-06-18 カバードコール損益図の最大損失・損益分岐点表示
 
 ## 実装内容
