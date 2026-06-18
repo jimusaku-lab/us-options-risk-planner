@@ -58,6 +58,50 @@
 
 - この時点ではなし。
 
+---
+
+# 2026-06-18 Saxo再取得後の記録済みP→N候補と履歴復旧候補の表示整理
+
+## 実装内容
+
+- Saxo再取得後に、既存の `StockTransferEvent` と一致するN口座Stockを未処理の `P→N移管候補` 件数へ含めないようにした。
+- 記録済みN口座Stockは `照合済みの現在保有確認` として表示し、`P→N株式移管を記録` と `今回は無視` を出さないようにした。
+- 記録済みN口座Stockの主操作を `N口座ホイールを確認` と `JSONバックアップを保存` に絞った。
+- 履歴候補の `broken` 状態を通常の未入力候補から分離し、`監査用の復旧候補` として表示するようにした。
+- `不足している反映候補をまとめて作成` は、新規作成が必要な履歴候補だけを対象にし、復旧候補は行ごとの再作成に限定した。
+- 6-A反映済み、P→N移管済み、正式反映済みの候補は、赤・黄色の未処理表示ではなく `反映済み / 追加操作不要` として扱うようにした。
+
+## 修正ファイル
+
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `docs/saxo-pn-wheel-upgrade-design-v2.md`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test`: 通過（15 files / 78 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-CdwoIQlh.js`
+  - bundle内に `P→N未処理候補`、`照合済みの現在保有確認`、`監査用の復旧候補`、`反映済み / 追加操作不要`、`不足している反映候補はありません` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: `0d7a2f1`
+- Pages deploy commit hash: `b2e4714`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-CdwoIQlh.js` を参照することを確認した。
+- 公開bundle内に `P→N未処理候補`、`照合済みの現在保有確認`、`監査用の復旧候補`、`反映済み / 追加操作不要`、`不足している反映候補はありません` が含まれることを確認した。
+
+## 残課題
+
+- この時点ではなし。
+
 # カバードコールの利回り表示分離 公開版反映報告 2026-06-17
 
 ## 対象
