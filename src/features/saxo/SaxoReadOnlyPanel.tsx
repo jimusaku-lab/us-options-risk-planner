@@ -329,11 +329,12 @@ export function SaxoReadOnlyPanel({
       accountInputs,
       positionRows,
       simulations,
+      stockTransfers,
       orders: mappedOrders,
       historyEndpoints,
       historyReflectionStates,
     }),
-    [accountInputs, historyEndpoints, historyReflectionStates, mappedOrders, mappedSnapshots, positionRows, simulations],
+    [accountInputs, historyEndpoints, historyReflectionStates, mappedOrders, mappedSnapshots, positionRows, simulations, stockTransfers],
   );
 
   function createHistoryDraft(item: SaxoHistoryDiscoveryItem, openAfterCreate = false): boolean {
@@ -406,10 +407,10 @@ export function SaxoReadOnlyPanel({
     const creatableItems = items.filter((item) => {
       const target = getSaxoHistoryCandidateTarget(item);
       const state = historyReflectionStates[item.id] ?? { status: "none" as const };
-      return target !== "unknown" && (state.status === "none" || state.status === "broken");
+      return target !== "unknown" && state.status === "none";
     });
     if (creatableItems.length === 0) {
-      setMessage("作成または復旧できる履歴候補はありません。確認済み、正式保存済み、無視済み、または要確認の候補だけです。");
+      setMessage("不足している反映候補はありません。監査用の復旧候補がある場合は、履歴候補の各行から必要なものだけ再作成してください。");
       return;
     }
     let entryCount = 0;
@@ -2743,6 +2744,12 @@ function PositionsPreview({
   const unassigned = positions.filter((position) => position.accountAssignment === "unassigned").length;
   const ignored = positions.filter((position) => position.accountAssignment === "ignored").length;
   const stockTransferRows = rows.filter((row) => isNAccountStockPosition(row.position));
+  const pendingStockTransferRows = stockTransferRows.filter(
+    (row) => row.position && !getRecordedStockTransferForPosition(row.position, simulations, stockTransfers),
+  );
+  const recordedStockTransferRows = stockTransferRows.filter(
+    (row) => row.position && getRecordedStockTransferForPosition(row.position, simulations, stockTransfers),
+  );
   const regularRows = rows.filter((row) => !isNAccountStockPosition(row.position));
   const draft = draftPosition ? createSaxoPositionDraftSummary(draftPosition, simulations) : null;
   return (
@@ -2760,8 +2767,13 @@ function PositionsPreview({
         <StatChip label="P口座" value={`${assignedP}件`} />
         <StatChip label="N口座" value={`${assignedN}件`} />
         <StatChip label="未割当" value={`${unassigned}件`} />
-        <StatChip label="P→N移管候補" value={`${stockTransferRows.length}件`} />
+        <StatChip label="P→N未処理候補" value={`${pendingStockTransferRows.length}件`} />
       </div>
+      {recordedStockTransferRows.length > 0 ? (
+        <p className="mt-1 text-xs font-semibold text-teal-700">
+          照合済みの現在保有確認: {recordedStockTransferRows.length}件。記録済みのN口座現物株は未処理のP→N移管候補には含めません。
+        </p>
+      ) : null}
       {ignored > 0 ? <p className="mt-2 text-xs text-slate-500">使わない口座: {ignored}件</p> : null}
       <p className="mt-2 text-xs text-slate-500">最終取得: {fetchedAt ? new Date(fetchedAt).toLocaleString("ja-JP") : "未取得"}</p>
       {unassigned > 0 ? (
@@ -2905,7 +2917,10 @@ function NStockTransferCandidates({
             これは新規オプション建玉ではありません。3-Aには進みません。
           </p>
         </div>
-        <span className="rounded bg-white px-2 py-1 text-xs font-bold text-teal-800">P→N移管候補 {rows.length}件</span>
+        <span className="rounded bg-white px-2 py-1 text-xs font-bold text-teal-800">
+          P→N未処理候補{" "}
+          {rows.filter((row) => row.position && !getRecordedStockTransferForPosition(row.position, simulations, stockTransfers)).length}件
+        </span>
       </div>
       <div className="mt-3 grid gap-3">
         {rows.map((row) => {
@@ -2926,7 +2941,7 @@ function NStockTransferCandidates({
               )
             : undefined;
           const wheelTicker = recordedTransfer?.ticker ?? primaryMatch?.ticker ?? normalizeStockTicker(position.symbol ?? position.underlyingName ?? position.instrumentCode);
-          const completedMessage = `P→N株式移管を記録しました。次は「N口座ホイールを確認」で、${wheelTicker || "対象銘柄"} ${formatMaybeValue(transferShares)}株がN株式保有になっていることを確認してください。確認後、JSONバックアップを保存してください。`;
+          const recordedMessage = `このN口座現物株は、保存済みのP→N株式移管記録と照合済みです。未処理のP→N移管候補ではありません。N口座ホイールで${wheelTicker || "対象銘柄"} ${formatMaybeValue(transferShares)}株の保有を確認し、JSONバックアップを保存してください。`;
           return (
             <div key={row.id} className={`rounded-md border bg-white p-3 ${highlighted || recordedTransfer ? "border-teal-500 ring-2 ring-teal-200" : "border-teal-200"}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2940,7 +2955,7 @@ function NStockTransferCandidates({
                   </p>
                 </div>
                 <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">
-                  {recordedTransfer ? "P→N株式移管を記録済み" : "P→N移管確認候補"}
+                  {recordedTransfer ? "照合済みの現在保有確認" : "P→N移管確認候補"}
                 </span>
               </div>
               <div className="mt-2 grid gap-2 text-xs sm:grid-cols-4">
@@ -2967,8 +2982,8 @@ function NStockTransferCandidates({
               )}
               {recordedTransfer ? (
                 <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-950">
-                  <div className="font-bold">P→N株式移管を記録済み</div>
-                  <p>{notice ?? completedMessage}</p>
+                  <div className="font-bold">反映済み / 追加操作不要</div>
+                  <p>{notice ?? recordedMessage}</p>
                   <p className="mt-1">
                     移管履歴: P口座からN口座へ{recordedTransfer.shares}株を移管 / 平均取得単価 {formatUSD(recordedTransfer.costBasisUSD)}
                   </p>
@@ -3026,14 +3041,16 @@ function NStockTransferCandidates({
                   <Eye size={15} />
                   {expanded ? "詳細を閉じる" : "詳細を見る"}
                 </button>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700"
-                  onClick={() => onIgnore(position)}
-                >
-                  <Ban size={15} />
-                  今回は無視
-                </button>
+                {!recordedTransfer ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700"
+                    onClick={() => onIgnore(position)}
+                  >
+                    <Ban size={15} />
+                    今回は無視
+                  </button>
+                ) : null}
               </div>
               {expanded ? (
                 <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
@@ -3216,8 +3233,9 @@ function HistoryDiscoveryPreview({
   };
   const creatableItems = actionableHistoryItems.filter((item) => {
     const state = reflectionStates[item.id] ?? { status: "none" as const };
-    return state.status === "none" || state.status === "broken";
+    return state.status === "none";
   });
+  const recoveryItems = actionableHistoryItems.filter((item) => reflectionStates[item.id]?.status === "broken");
   const hasCreatableItems = creatableItems.length > 0;
   const reflectedHistoryCount = actionableHistoryItems.filter(isActualReflection).length;
   const entryReflectedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "entry" && isActualReflection(item)).length;
@@ -3237,15 +3255,15 @@ function HistoryDiscoveryPreview({
   ).length;
   const firstReflectedCloseItem = historyItems.find((item) => getSaxoHistoryCandidateTarget(item) === "close" && isActualReflection(item));
   const firstReflectedAssignmentItem = historyItems.find(isPendingAssignmentReflection);
-  const brokenCount = historyItems.filter((item) => reflectionStates[item.id]?.status === "broken").length;
+  const brokenCount = recoveryItems.length;
   const ignoredCount = historyItems.filter((item) => reflectionStates[item.id]?.status === "ignored").length;
   const unknownCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "unknown").length;
   const statusLabel = !fetchedAt
     ? "未取得"
-    : historyItems.length > 0 && actionableHistoryItems.length === 0
+      : historyItems.length > 0 && actionableHistoryItems.length === 0
       ? "対象外または確認不要"
       : brokenCount > 0
-        ? "復旧が必要"
+        ? "監査用の復旧候補あり"
       : historyItems.length > 0 && !hasCreatableItems
         ? "反映候補作成済み"
         : "取得済み";
@@ -3254,7 +3272,7 @@ function HistoryDiscoveryPreview({
       ? "bg-slate-100 text-slate-700"
       : statusLabel === "反映候補作成済み" || statusLabel === "対象外または確認不要"
         ? "bg-teal-100 text-teal-800"
-        : statusLabel === "復旧が必要"
+        : statusLabel === "監査用の復旧候補あり"
           ? "bg-amber-100 text-amber-800"
         : "bg-blue-100 text-blue-800";
 
@@ -3296,7 +3314,7 @@ function HistoryDiscoveryPreview({
               ) : null}
               <p>
                 履歴候補があります。必要な候補を確認し、反映候補を作成してください。
-                {brokenCount > 0 ? ` 復旧が必要な候補が${brokenCount}件あります。` : ""}
+                {brokenCount > 0 ? ` 監査用の復旧候補が${brokenCount}件あります。通常の未入力候補とは分けて確認します。` : ""}
                 {unknownCount > 0 ? ` 対象外または確認不要の履歴候補が${unknownCount}件あります。Stock履歴は通常の3-A/7候補として自動反映しません。` : ""}
                 {ignoredCount > 0 ? ` 無視済みの履歴候補が${ignoredCount}件あります。` : ""}
               </p>
@@ -3312,7 +3330,9 @@ function HistoryDiscoveryPreview({
         ) : historyItems.length > 0 && actionableHistoryItems.length > 0 ? (
           <div className="grid gap-3">
             <p className="text-sm leading-6 text-slate-700">
-              履歴候補から反映候補を作成済みです。建玉開始の履歴は3-A、通常決済の履歴は7、P売り権利行使の履歴は6-A 現物株の取得記録で確認してください。
+              {brokenCount > 0
+                ? "監査用の復旧候補があります。通常の未入力候補とは分けて表示しています。必要な場合だけ各行から再作成してください。"
+                : "履歴候補から反映候補を作成済みです。建玉開始の履歴は3-A、通常決済の履歴は7、P売り権利行使の履歴は6-A 現物株の取得記録で確認してください。"}
             </p>
             {!hasCreatableItems ? (
               <div className="rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-bold text-teal-900">
@@ -3327,7 +3347,7 @@ function HistoryDiscoveryPreview({
               <div className="rounded bg-white px-3 py-2">決済実績の確認待ち: {closeReflectedCount}件</div>
               <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認待ち: {assignmentReflectedCount}件</div>
               {assignmentCompletedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認済み: {assignmentCompletedCount}件</div> : null}
-              {brokenCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">復旧が必要: {brokenCount}件（候補実体が見つかりません）</div> : null}
+              {brokenCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">監査用の復旧候補: {brokenCount}件（候補実体が見つかりません。必要な場合だけ行ごとに再作成します）</div> : null}
               {ignoredCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">無視済み: {ignoredCount}件（復旧対象から除外）</div> : null}
               {unknownCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">対象外または確認不要: {unknownCount}件（Stock履歴など。通常の3-A/7には自動反映しません）</div> : null}
             </div>
@@ -3380,7 +3400,7 @@ function HistoryDiscoveryPreview({
             const endpointBrokenCount = endpointItems.filter((item) => reflectionStates[item.id]?.status === "broken").length;
             const endpointStatus =
               endpointBrokenCount > 0
-                ? "復旧が必要"
+                ? "監査用の復旧候補あり"
                 :
               endpointItems.length > 0 && endpointReflectedCount === endpointItems.length
                 ? "反映候補作成済み"
@@ -3559,9 +3579,9 @@ function HistoryCandidateRow({
           </div>
         ) : reflectionState.status === "broken" ? (
           <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs leading-5 text-amber-950">
-            <div className="font-bold">候補の復旧が必要です</div>
+            <div className="font-bold">監査用の復旧候補です</div>
             <div>
-              この履歴は反映候補の記録だけが残っています。実際の入力候補が見つからないため、再作成が必要です。
+              この履歴は反映候補の記録だけが残っています。実際の入力候補が見つからないため、必要な場合だけ再作成します。
             </div>
             <div className="mt-0.5 text-amber-800">{reflectionState.reason}</div>
             <div className="mt-1 flex flex-wrap gap-1">
@@ -4299,6 +4319,26 @@ function findStockTransferForSimulation(
   );
 }
 
+function getRecordedStockTransferForPosition(
+  position: SaxoApiPositionSnapshot,
+  simulations: TradeSimulation[],
+  stockTransfers: StockTransferEvent[],
+): StockTransferEvent | undefined {
+  const matches = findPnTransferSourceSimulations(position, simulations);
+  const transferShares = getSaxoStockShares(position);
+  if (transferShares <= 0) return undefined;
+  return matches
+    .map((simulation) =>
+      stockTransfers.find(
+        (transfer) =>
+          transfer.sourceSimulationId === simulation.id &&
+          transfer.toAccountCode === "N" &&
+          Math.abs(transfer.shares - transferShares) <= 0.0001,
+      ),
+    )
+    .find((transfer): transfer is StockTransferEvent => Boolean(transfer));
+}
+
 function isCompletedAssignmentReflection(state: HistoryReflectionState | undefined): boolean {
   if (!state || (state.status !== "candidate" && state.status !== "official")) return false;
   return state.target === "assignment" && (state.assignmentCompleted === true || state.status === "official");
@@ -4314,6 +4354,7 @@ function createReflectionSummary({
   accountInputs,
   positionRows,
   simulations,
+  stockTransfers,
   orders,
   historyEndpoints,
   historyReflectionStates,
@@ -4322,6 +4363,7 @@ function createReflectionSummary({
   accountInputs: AccountInputs;
   positionRows: SaxoPositionReconciliationRow[];
   simulations: TradeSimulation[];
+  stockTransfers: StockTransferEvent[];
   orders: SaxoApiOrderSnapshot[];
   historyEndpoints: SaxoHistoryDiscoveryEndpoint[];
   historyReflectionStates: Record<string, HistoryReflectionState>;
@@ -4350,8 +4392,14 @@ function createReflectionSummary({
     };
   });
   const stockTransferCandidateRows = positionRows.filter((row) => isNAccountStockPosition(row.position));
+  const pendingStockTransferCandidateRows = stockTransferCandidateRows.filter(
+    (row) => row.position && !getRecordedStockTransferForPosition(row.position, simulations, stockTransfers),
+  );
+  const recordedStockTransferCandidateRows = stockTransferCandidateRows.filter(
+    (row) => row.position && getRecordedStockTransferForPosition(row.position, simulations, stockTransfers),
+  );
   const regularPositionRows = positionRows.filter((row) => !isNAccountStockPosition(row.position));
-  const stockTransferCandidates = stockTransferCandidateRows.filter((row) =>
+  const stockTransferCandidates = pendingStockTransferCandidateRows.filter((row) =>
     row.position ? findPnTransferSourceSimulations(row.position, simulations).length > 0 : false,
   ).length;
   const newPositions = regularPositionRows.filter((row) => row.status === "app_missing").length;
@@ -4369,14 +4417,15 @@ function createReflectionSummary({
     return state?.status === "candidate" || state?.status === "official";
   }).length;
   const brokenHistoryCount = historyItems.filter((item) => historyReflectionStates[item.id]?.status === "broken").length;
-  const creatableHistoryItems = actionableHistoryItems.filter((item) => {
+  const newCreatableHistoryItems = actionableHistoryItems.filter((item) => {
     const state = historyReflectionStates[item.id] ?? { status: "none" as const };
-    return state.status === "none" || state.status === "broken";
+    return state.status === "none";
   });
-  const createNeededHistoryCount = creatableHistoryItems.length;
+  const recoveryHistoryItems = actionableHistoryItems.filter((item) => historyReflectionStates[item.id]?.status === "broken");
+  const createNeededHistoryCount = newCreatableHistoryItems.length;
   const allHistoryReflected = actionableHistoryItems.length > 0 && reflectedHistoryCount === actionableHistoryItems.length;
   const anyHistoryReflected = reflectedHistoryCount > 0;
-  const positionActionable = newPositions > 0 || matchedPositions > 0 || unknownPositions > 0 || stockTransferCandidateRows.length > 0;
+  const positionActionable = newPositions > 0 || matchedPositions > 0 || unknownPositions > 0 || pendingStockTransferCandidateRows.length > 0;
   const orderActionable = orders.length > 0;
   const historyActionable = createNeededHistoryCount > 0;
   return {
@@ -4386,7 +4435,9 @@ function createReflectionSummary({
         positionRows.length === 0
           ? "未取得"
           : stockTransferCandidateRows.length > 0
-            ? `P→N移管候補${stockTransferCandidates}件${regularPositionRows.length > 0 ? ` / 通常建玉候補${regularPositionRows.length}件` : ""}`
+            ? pendingStockTransferCandidateRows.length > 0
+              ? `P→N移管候補${stockTransferCandidates}件${recordedStockTransferCandidateRows.length > 0 ? ` / 照合済み現在保有${recordedStockTransferCandidateRows.length}件` : ""}${regularPositionRows.length > 0 ? ` / 通常建玉候補${regularPositionRows.length}件` : ""}`
+              : `照合済みの現在保有確認${recordedStockTransferCandidateRows.length}件${regularPositionRows.length > 0 ? ` / 通常建玉候補${regularPositionRows.length}件` : ""}`
             : `新規${newPositions}件 / 既存候補${matchedPositions}件 / 要確認${unknownPositions}件`,
       actionable: positionActionable,
     },
@@ -4399,7 +4450,7 @@ function createReflectionSummary({
         historyItems.length === 0
           ? "未取得または0件"
           : brokenHistoryCount > 0
-            ? `復旧が必要${brokenHistoryCount}件 / 作成済み${reflectedHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
+            ? `監査用の復旧候補${recoveryHistoryItems.length}件 / 反映済み${reflectedHistoryCount}件 / 追加で作成が必要${createNeededHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
           : allHistoryReflected
             ? `反映済み${reflectedHistoryCount}件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要0件`
             : anyHistoryReflected
@@ -4410,7 +4461,7 @@ function createReflectionSummary({
       actionable: historyActionable,
       actionLabel: historyActionable
         ? brokenHistoryCount > 0
-          ? "復旧が必要な候補を確認"
+          ? "監査用の復旧候補を確認"
           : "履歴候補を確認"
         : "履歴候補は確認済み",
     },
