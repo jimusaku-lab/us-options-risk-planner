@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import type { TradeSimulation } from "@/types/domain";
-import { calculatePayoffAtExpiryJPY, calculatePayoffSummary } from "./payoff";
+import { calculatePayoffAtExpiryJPY, calculatePayoffSeries, calculatePayoffSummary } from "./payoff";
 
 function createLongOptionSimulation(type: "call" | "put"): TradeSimulation {
   return {
@@ -111,13 +111,56 @@ describe("payoff", () => {
       ],
     };
 
-    const summary = calculatePayoffSummary(simulation);
+    const summary = calculatePayoffSummary(simulation, "practical");
 
     expect(summary.breakevens[0].label).toBe("保有株込みの損益分岐点");
     expect(summary.breakevens[0].priceUSD).toBeCloseTo(206.1, 8);
     expect(summary.secondaryBreakevens?.[0].label).toBe("コール売り単体の上側損益分岐点");
     expect(summary.secondaryBreakevens?.[0].priceUSD).toBeCloseTo(231.4, 8);
-    expect(summary.maxLossTitle).toBe("株価0ドル想定の最大評価損");
-    expect(summary.maxLossNote).toContain("株を売却しなければ実現損ではありません");
+    expect(summary.displayModeLabel).toBe("実用レンジ");
+    expect(summary.maxLossTitle).toBe("表示レンジ下限の評価損");
+    expect(summary.maxLossNote).toContain("理論最大レンジで確認できます");
+  });
+
+  it("keeps covered call practical range away from zero and shows theoretical max only in theoretical mode", () => {
+    const simulation: TradeSimulation = {
+      ...sampleAmznSimulation,
+      strategyType: "covered_call",
+      currentPriceUSD: 220,
+      fxRateJPY: 1,
+      brokerCommissionUSD: 0,
+      brokerCommissionJPY: 0,
+      exchangeFeesJPY: 0,
+      fxConversionCostJPY: 0,
+      carryingCostJPY: 0,
+      stockPosition: {
+        shares: 100,
+        averageCostUSD: 207.5,
+        denominatorPriceMode: "average_cost",
+      },
+      optionEntryExecutions: [],
+      optionLegs: [
+        {
+          id: "short-call",
+          type: "call",
+          side: "sell",
+          strikeUSD: 230,
+          premiumUSD: 1.4,
+          quantity: 1,
+          expiryDate: "2026-06-24",
+          isCovered: true,
+        },
+      ],
+    };
+
+    const practicalSeries = calculatePayoffSeries(simulation, "practical");
+    const theoreticalSeries = calculatePayoffSeries(simulation, "theoretical");
+    const theoreticalSummary = calculatePayoffSummary(simulation, "theoretical");
+
+    expect(practicalSeries[0].stockPriceUSD).toBeGreaterThan(170);
+    expect(theoreticalSeries[0].stockPriceUSD).toBe(0);
+    expect(theoreticalSummary.displayModeLabel).toBe("理論最大レンジ");
+    expect(theoreticalSummary.maxLossTitle).toBe("理論上の最大評価損");
+    expect(theoreticalSummary.maxLossNote).toContain("株価0ドル想定");
   });
 });

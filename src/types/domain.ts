@@ -411,6 +411,8 @@ export type PayoffSummary = {
   formulas: string[];
 };
 
+export type PayoffDisplayMode = "practical" | "theoretical" | "option_only" | "opportunity";
+
 export type RiskWarning = {
   id: string;
   severity: RiskSeverity;

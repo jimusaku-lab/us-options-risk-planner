@@ -10,12 +10,16 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { DenominatorResult, PayoffPoint, TradeSimulation } from "@/types/domain";
-import { calculatePayoffSummary } from "@/domain/payoff";
+import { useState } from "react";
+import type { DenominatorResult, PayoffDisplayMode, PayoffPoint, TradeSimulation } from "@/types/domain";
+import { calculatePayoffSeries, calculatePayoffSummary, getPayoffDisplayModeFromLabel } from "@/domain/payoff";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 export function PayoffChart({ simulation, points }: { simulation: TradeSimulation; points: PayoffPoint[] }) {
-  const summary = calculatePayoffSummary(simulation);
+  const isCoveredCall = simulation.strategyType === "covered_call";
+  const [displayMode, setDisplayMode] = useState<PayoffDisplayMode>("practical");
+  const summary = calculatePayoffSummary(simulation, isCoveredCall ? displayMode : "theoretical");
+  const chartPoints = isCoveredCall ? calculatePayoffSeries(simulation, displayMode) : points;
   const calls = simulation.optionLegs.filter((leg) => leg.type === "call");
   const puts = simulation.optionLegs.filter((leg) => leg.type === "put");
   return (
@@ -29,14 +33,16 @@ export function PayoffChart({ simulation, points }: { simulation: TradeSimulatio
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold">
           <span className="text-slate-600">表示モード:</span>
           {summary.displayModeOptions.map((mode) => (
-            <span
+            <button
+              type="button"
               key={mode}
+              onClick={() => setDisplayMode(getPayoffDisplayModeFromLabel(mode))}
               className={`rounded-full px-3 py-1 ${
                 mode === summary.displayModeLabel ? "bg-teal-700 text-white" : "bg-slate-100 text-slate-600"
               }`}
             >
               {mode}
-            </span>
+            </button>
           ))}
         </div>
       ) : null}
@@ -47,7 +53,7 @@ export function PayoffChart({ simulation, points }: { simulation: TradeSimulatio
       ) : null}
       <div className="mt-4 h-80">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={points} margin={{ top: 10, right: 24, bottom: 0, left: 0 }}>
+          <AreaChart data={chartPoints} margin={{ top: 10, right: 24, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="stockPriceUSD" tickFormatter={(value) => `$${value}`} />
             <YAxis tickFormatter={(value) => `${Math.round(Number(value) / 10000)}万`} />
