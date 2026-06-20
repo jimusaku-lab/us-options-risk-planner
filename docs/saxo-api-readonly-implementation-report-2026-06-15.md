@@ -60,6 +60,36 @@
 
 ---
 
+# 2026-06-20 GitHub Pages白画面修正
+
+## 原因
+
+- `origin/gh-pages` の `index.html` が root-relative asset path を参照していた。
+- GitHub Pagesは `/us-options-risk-planner/` 配下で公開しているため、`/assets/...` ではJS/CSSを読み込めず、公開版が白画面になっていた。
+
+## 修正内容
+
+- `GITHUB_PAGES=true npm run build` でGitHub Pages用base付きの成果物を作成した。
+- `dist/index.html` が以下を参照することを確認した。
+  - `src="/us-options-risk-planner/assets/index-Cf2r9dC2.js"`
+  - `href="/us-options-risk-planner/assets/index-BGzDAO2Y.css"`
+- `src="/assets/..."`、`href="/assets/..."`、`dy>`、root/body/htmlの重複がないことを確認した。
+- 正しい成果物を `gh-pages` ブランチへ反映した。
+
+## 検証結果
+
+- `GITHUB_PAGES=true npm run build`: 通過
+- `origin/gh-pages:index.html`: `/us-options-risk-planner/assets/...` 参照へ修正済み
+- Chromeで `https://jimusaku-lab.github.io/us-options-risk-planner/` を開き、白画面ではなくアプリ画面が表示されることを確認した。
+- Chrome確認時、JS/CSSの404を示すコンソールエラーは出ていないことを確認した。
+
+## commit / push
+
+- Pages deploy commit hash: `297174e`
+- gh-pages push: 済み
+
+---
+
 # 2026-06-20 N口座保有株の現在評価額・含み損益表示
 
 ## 実装内容
