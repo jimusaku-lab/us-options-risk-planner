@@ -60,6 +60,53 @@
 
 ---
 
+# 2026-06-20 Saxo約定済みC売り候補から3-Aへ進まない問題
+
+## 実装内容
+
+- 既存の注文前カバードコール下書きが未完成で、数量が `0` または未確定に近い状態でも、N口座C売りのSaxo約定済み建玉と紐づけ候補にできるようにした。
+- 注文前下書きの数量未入力状態を、数量差分だけで `quantity_diff` 扱いにしないようにした。
+- `linkedPositionIds` だけが残っていて `linkedPositionTargets` が壊れている場合でも、現在の照合で有効な `row.simulation` がある場合は、壊れた紐づけ表示を優先しないようにした。
+- これにより、`既存建玉と一致候補があります` と `紐づけ先が見つかりません` が同時に出る矛盾表示を避けた。
+- `注文前建玉に紐づけて3-Aへ進む` または `新規下書きとして作成して3-Aへ進む` の押下後、建玉入力カードを開き、React再描画後にも `3-A. 建玉開始の約定確認` へ `scrollIntoView` する保険を追加した。
+- 紐づけ時は注文前の旧入力値ではなく、Saxo実約定値の `C225 / 2026-07-10 / 1.83 USD / 1枚` を優先して3-A確認下書きへ反映する導線を維持した。
+
+## 修正ファイル
+
+- `src/App.tsx`
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `src/features/saxo/saxoAccountSync.ts`
+- `src/features/saxo/saxoAccountSync.test.ts`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npm test -- src/features/saxo/saxoAccountSync.test.ts`: 通過（1 file / 27 tests）
+- `npm test`: 通過（15 files / 81 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-CYnWlxKd.js`
+  - bundle内に `注文前建玉に紐づけて3-Aへ進む`、`新規下書きとして作成して3-Aへ進む`、`Saxo実約定値を優先` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: `ca4d5f5`
+- Pages deploy commit hash: `f53ea06`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-CYnWlxKd.js` を参照することを確認した。
+- 公開bundle内に `注文前建玉に紐づけて3-Aへ進む`、`新規下書きとして作成して3-Aへ進む`、`Saxo実約定値を優先` が含まれることを確認した。
+
+## 残課題
+
+- この時点ではなし。
+
+---
+
 # 2026-06-18 Saxo約定済みカバードコール建玉の注文前候補紐づけ
 
 ## 実装内容
