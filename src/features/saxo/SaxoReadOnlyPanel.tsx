@@ -1582,6 +1582,37 @@ export function SaxoReadOnlyPanel({
                   onCreatePositionDraft?.(position, historyEndpoints.flatMap((endpoint) => endpoint.items ?? []));
                   setMessage(`壊れた紐づけを解除しました。${draftMessage}`);
                 }}
+                onRecreateDraftFromStaleFlag={(position) => {
+                  const missingItems = getMissingPositionDraftRequirements(position);
+                  if (missingItems.length > 0) {
+                    const message = `新しい3-A下書きを作成できませんでした。必須項目が不足しています。${missingItems.join("、")}を確認してください。`;
+                    setPositionActionErrors((current) => ({ ...current, [position.id]: message }));
+                    setMessage(message);
+                    return;
+                  }
+                  setLinkedPositionIds((current) => current.filter((id) => id !== position.id));
+                  setLinkedPositionTargets((current) => {
+                    const next = { ...current };
+                    delete next[position.id];
+                    return next;
+                  });
+                  setDraftedPositionIds((current) => current.filter((id) => id !== position.id));
+                  setPositionActionErrors((current) => {
+                    const next = { ...current };
+                    delete next[position.id];
+                    return next;
+                  });
+                  setDraftPosition(position);
+                  setDraftedPositionIds((current) => (current.includes(position.id) ? current : [...current, position.id]));
+                  const draftMessage =
+                    "Saxo現在建玉から下書きを作り直しました。内容を確認し、必要な手数料・為替などを補足してから正式保存してください。";
+                  setPositionActionNotices((current) => ({
+                    ...current,
+                    [position.id]: draftMessage,
+                  }));
+                  onCreatePositionDraft?.(position, historyEndpoints.flatMap((endpoint) => endpoint.items ?? []));
+                  setMessage(draftMessage);
+                }}
                 onDiscardDraft={(position) => {
                   setDraftPosition((current) => (current?.id === position.id ? null : current));
                   setDraftedPositionIds((current) => current.filter((id) => id !== position.id));
@@ -2771,6 +2802,7 @@ function PositionsPreview({
   onOpenLinked,
   onCreateDraft,
   onCreateDraftFromBroken,
+  onRecreateDraftFromStaleFlag,
   onDiscardDraft,
   onCreateStockTransfer,
   onOpenWheelManagement,
@@ -2800,6 +2832,7 @@ function PositionsPreview({
   onOpenLinked: (row: SaxoPositionReconciliationRow, anchorId?: string) => void;
   onCreateDraft: (position: SaxoApiPositionSnapshot) => void;
   onCreateDraftFromBroken: (position: SaxoApiPositionSnapshot) => void;
+  onRecreateDraftFromStaleFlag: (position: SaxoApiPositionSnapshot) => void;
   onDiscardDraft: (position: SaxoApiPositionSnapshot) => void;
   onCreateStockTransfer: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
   onOpenWheelManagement?: (ticker?: string) => void;
@@ -2900,6 +2933,7 @@ function PositionsPreview({
                   onOpenLinked={onOpenLinked}
                   onCreateDraft={onCreateDraft}
                   onCreateDraftFromBroken={onCreateDraftFromBroken}
+                  onRecreateDraftFromStaleFlag={onRecreateDraftFromStaleFlag}
                   onDiscardDraft={onDiscardDraft}
                   drafted={Boolean(row.position && draftedPositionIds.includes(row.position.id))}
                   actionError={row.position ? positionActionErrors[row.position.id] : undefined}
@@ -3790,6 +3824,7 @@ function PositionRow({
   onOpenLinked,
   onCreateDraft,
   onCreateDraftFromBroken,
+  onRecreateDraftFromStaleFlag,
   onDiscardDraft,
   drafted,
   actionError,
@@ -3808,6 +3843,7 @@ function PositionRow({
   onOpenLinked: (row: SaxoPositionReconciliationRow, anchorId?: string) => void;
   onCreateDraft: (position: SaxoApiPositionSnapshot) => void;
   onCreateDraftFromBroken: (position: SaxoApiPositionSnapshot) => void;
+  onRecreateDraftFromStaleFlag: (position: SaxoApiPositionSnapshot) => void;
   onDiscardDraft: (position: SaxoApiPositionSnapshot) => void;
   drafted: boolean;
   actionError?: string;
@@ -3826,6 +3862,7 @@ function PositionRow({
   const linkStatus = linkedResolution.status;
   const linkedNeedsEntryConfirmation = linkedResolution.status === "linked" ? needsOptionEntryConfirmation(linkedResolution.simulation) : true;
   const draftSimulationName = linkedResolution.status === "draft" && linkedResolution.simulation ? linkedResolution.simulation.name : undefined;
+  const hasDraftBody = linkedResolution.status === "draft" && Boolean(linkedResolution.simulation);
   const canCreateDraft = Boolean(position && position.accountAssignment === "P" || position && position.accountAssignment === "N");
   const createDraftLabel = isNewCandidate ? "建玉入力へ下書き反映" : "新規建玉として下書き作成";
   const isPlannedCoveredCallLink = Boolean(
@@ -3890,7 +3927,7 @@ function PositionRow({
         </>
       ) : linkStatus === "draft" ? (
         <>
-          {linkedResolution.simulation ? (
+          {hasDraftBody ? (
             <button
               className="inline-flex items-center gap-1 rounded border border-amber-600 bg-amber-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-600"
               onClick={() => onOpenLinked(row, "option-entry-executions")}
@@ -3898,15 +3935,30 @@ function PositionRow({
               <FilePlus2 size={13} />
               下書きを開いて3-Aで正式保存
             </button>
-          ) : null}
+          ) : (
+            <button
+              className="inline-flex items-center gap-1 rounded border border-amber-600 bg-amber-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-600"
+              onClick={() => onRecreateDraftFromStaleFlag(position)}
+            >
+              <RefreshCw size={13} />
+              古い下書きフラグを解除して3-A下書きを作り直す
+            </button>
+          )}
           <button className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700" onClick={() => onToggleDetails(position.id)}>
             <Eye size={13} />
             詳細を見る
           </button>
-          <button className="inline-flex items-center gap-1 rounded border border-orange-300 px-2 py-1 text-xs font-bold text-orange-800" onClick={() => onDiscardDraft(position)}>
-            <RefreshCw size={13} />
-            下書き状態を解除して作り直す
-          </button>
+          {hasDraftBody ? (
+            <button className="inline-flex items-center gap-1 rounded border border-orange-300 px-2 py-1 text-xs font-bold text-orange-800" onClick={() => onDiscardDraft(position)}>
+              <RefreshCw size={13} />
+              下書き状態を解除して作り直す
+            </button>
+          ) : (
+            <button className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700" onClick={() => onIgnore(position)}>
+              <Ban size={13} />
+              今回は無視
+            </button>
+          )}
         </>
       ) : linkStatus === "broken" ? (
         <>
@@ -4046,12 +4098,21 @@ function PositionRow({
           ) : null}
           {linkStatus === "draft" ? (
             <div className="mt-1 max-w-[340px] rounded border border-amber-200 bg-amber-50 px-2 py-2 text-xs leading-5 text-amber-900">
-              <div className="font-bold text-amber-950">下書き未正式保存</div>
-              <p className="mt-1">
-                {linkedResolution.reason}
-                {draftSimulationName ? ` 対象下書き: ${draftSimulationName}` : ""}
-              </p>
-              <p className="mt-1">新規下書きを重複作成せず、3-Aの下書きを開いて正式保存してください。</p>
+              <div className="font-bold text-amber-950">下書き未正式保存（{hasDraftBody ? "下書き本体あり" : "下書き本体なし"}）</div>
+              {hasDraftBody ? (
+                <>
+                  <p className="mt-1">
+                    {linkedResolution.reason}
+                    {draftSimulationName ? ` 対象下書き: ${draftSimulationName}` : ""}
+                  </p>
+                  <p className="mt-1">新規下書きを重複作成せず、3-Aの下書きを開いて正式保存してください。</p>
+                </>
+              ) : (
+                <p className="mt-1">
+                  下書きの記録だけが残っていますが、下書き本体が見つかりません。このままでは正式保存へ進めません。
+                  Saxoの現在建玉から新しい3-A下書きを作り直します。
+                </p>
+              )}
             </div>
           ) : null}
           {linkStatus === "broken" ? (
