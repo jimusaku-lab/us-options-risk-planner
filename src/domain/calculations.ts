@@ -234,12 +234,12 @@ export function calculatePutAssignmentCapitalTotalUSD(simulation: TradeSimulatio
   return getShortPutLegs(simulation).reduce((sum, leg) => sum + leg.strikeUSD * CONTRACT_SIZE * leg.quantity, 0);
 }
 
-export function calculateUncoveredCallShares(simulation: TradeSimulation): number {
+export function calculateUncoveredCallShares(simulation: TradeSimulation, coveredSharesOverride?: number): number {
   const requiredShares = getShortCallLegs(simulation).reduce(
     (sum, leg) => sum + leg.quantity * CONTRACT_SIZE,
     0,
   );
-  return Math.max(0, requiredShares - (simulation.stockPosition?.shares ?? 0));
+  return Math.max(0, requiredShares - (coveredSharesOverride ?? simulation.stockPosition?.shares ?? 0));
 }
 
 export function calculateCallHedgeBuyCapitalJPY(simulation: TradeSimulation): number {

@@ -422,6 +422,7 @@ export type RiskWarning = {
   actionLabel?: string;
   actionSimulationId?: string;
   actionAnchorId?: string;
+  actionWheelCycleId?: string;
   actionLegId?: string;
   actionLegType?: OptionType;
 };

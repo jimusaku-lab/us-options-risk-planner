@@ -13,6 +13,7 @@ import type {
   WheelPhase,
 } from "@/types/domain";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
+import { getCoveredCallRequiredShares } from "@/domain/coveredCallCoverage";
 import { getDefaultExitOrderPlan, normalizeExitOrderPlan, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
 import { normalizeOptionCloseExecutionsForStatus, sanitizeSaxoHistoryCloseExecutions } from "@/domain/optionCloseExecutions";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
@@ -90,6 +91,7 @@ type OptionsStore = {
   createWheelCycleFromSimulation: (simulation: TradeSimulation) => void;
   createStockTransferFromSimulation: (simulation: TradeSimulation) => void;
   createCoveredCallDraftFromWheelCycle: (cycleId: string) => string | undefined;
+  linkCoveredCallToWheelCycle: (simulationId: string, cycleId?: string) => void;
   updateSettings: (settings: Partial<AppSettings>) => void;
 };
 
@@ -915,6 +917,66 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
     });
     return targetId;
   },
+  linkCoveredCallToWheelCycle: (simulationId, cycleId) =>
+    set((state) => {
+      const simulation = state.simulationsByWorkspace[state.activeWorkspace].find((item) => item.id === simulationId);
+      if (!simulation || simulation.strategyType !== "covered_call") return {};
+      const requiredShares = getCoveredCallRequiredShares(simulation);
+      if (requiredShares <= 0) return {};
+      const targetCycle = state.wheelCyclesByWorkspace[state.activeWorkspace].find(
+        (cycle) =>
+          (cycleId ? cycle.id === cycleId : true) &&
+          cycle.ticker.toUpperCase() === simulation.ticker.toUpperCase() &&
+          cycle.currentAccountCode === "N" &&
+          ["n_stock_holding", "n_covered_call"].includes(cycle.currentPhase) &&
+          cycle.currentShares >= requiredShares,
+      );
+      if (!targetCycle) return {};
+
+      let wheelEvents = state.wheelEventsByWorkspace[state.activeWorkspace];
+      let eventIds = targetCycle.eventIds;
+      const alreadyOpened = wheelEvents.some(
+        (event) => event.type === "covered_call_opened" && event.linkedSimulationId === simulation.id,
+      );
+      const shouldOpenCoveredCall = hasConfirmedCoveredCallEntry(simulation) && targetCycle.currentPhase === "n_stock_holding";
+      if (shouldOpenCoveredCall && !alreadyOpened) {
+        const event: WheelEvent = {
+          id: `wheel-event-${state.activeWorkspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          wheelCycleId: targetCycle.id,
+          type: "covered_call_opened",
+          occurredAt: simulation.entryDate,
+          accountCode: "N",
+          description: `${simulation.ticker} N口座カバードコールを建玉開始`,
+          usdPnl: 0,
+          phaseAfter: "n_covered_call",
+          linkedSimulationId: simulation.id,
+        };
+        wheelEvents = [event, ...wheelEvents];
+        eventIds = [...eventIds, event.id];
+      }
+
+      const wheelCycles: WheelCycle[] = state.wheelCyclesByWorkspace[state.activeWorkspace].map((cycle) =>
+        cycle.id === targetCycle.id
+          ? {
+              ...cycle,
+              currentPhase: shouldOpenCoveredCall ? "n_covered_call" : cycle.currentPhase,
+              currentAccountCode: "N" as const,
+              eventIds,
+              linkedSimulationIds: Array.from(new Set([...cycle.linkedSimulationIds, simulation.id])),
+            }
+          : cycle,
+      );
+      const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: wheelCycles };
+      const wheelEventsByWorkspace = { ...state.wheelEventsByWorkspace, [state.activeWorkspace]: wheelEvents };
+      saveJson(WHEEL_KEY, wheelCyclesByWorkspace);
+      saveJson(WHEEL_EVENTS_KEY, wheelEventsByWorkspace);
+      return {
+        wheelCyclesByWorkspace,
+        wheelEventsByWorkspace,
+        wheelCycles,
+        wheelEvents,
+      };
+    }),
   updateSettings: (settings) =>
     set((state) => {
       const next = { ...state.settings, ...settings };

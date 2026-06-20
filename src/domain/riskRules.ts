@@ -1,4 +1,5 @@
 import type { ChecklistItem, OptionLeg, RiskWarning, TradeSimulation } from "@/types/domain";
+import type { CoveredCallCoverageResolution } from "./coveredCallCoverage";
 import {
   calculatePutAssignmentCapitalTotalJPY,
   calculatePutAssignmentCapitalTotalUSD,
@@ -26,10 +27,12 @@ function closeDecisionAction(simulation: TradeSimulation, leg: OptionLeg): Pick<
 
 export function generateRiskWarnings(
   simulation: TradeSimulation,
-  options: { stockTransferRecorded?: boolean } = {},
+  options: { stockTransferRecorded?: boolean; coveredCallCoverage?: CoveredCallCoverageResolution } = {},
 ): RiskWarning[] {
   const warnings: RiskWarning[] = [];
-  const uncoveredCallShares = calculateUncoveredCallShares(simulation);
+  const uncoveredCallShares = options.coveredCallCoverage
+    ? options.coveredCallCoverage.missingShares
+    : calculateUncoveredCallShares(simulation);
   const avoidPut = hasAvoidPut(simulation);
   const exitOrderPlan = getExitOrderPlan(simulation);
 
@@ -168,6 +171,24 @@ export function generateRiskWarnings(
           : `このC売りは完全にはカバーされていません。C売り対象株数と保有株数を分けて確認してください。未カバー株数は${uncoveredCallShares}株です。`,
       blocking: simulation.beginnerMode ?? true,
       ...(firstCall ? closeDecisionAction(simulation, firstCall) : {}),
+    });
+  }
+
+  if (
+    options.coveredCallCoverage?.linkNeeded &&
+    options.coveredCallCoverage.coveredShares >= options.coveredCallCoverage.requiredShares &&
+    simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+  ) {
+    warnings.push({
+      id: "n-covered-call-link-needed",
+      severity: "warning",
+      title: "N口座保有株との紐づけ確認が必要です",
+      message: `N口座で${simulation.ticker} ${options.coveredCallCoverage.coveredShares}株を保有しています。このC売り${Math.ceil(options.coveredCallCoverage.requiredShares / 100)}枚をN口座保有株に紐づけるとカバードコールとして確認できます。`,
+      blocking: false,
+      actionLabel: "N口座保有株に紐づける",
+      actionSimulationId: simulation.id,
+      actionAnchorId: "wheel-management",
+      actionWheelCycleId: options.coveredCallCoverage.wheelCycleId,
     });
   }
 

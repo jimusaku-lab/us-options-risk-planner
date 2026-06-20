@@ -4,6 +4,7 @@ import { calculatePendingAccountCashEffects, createAccountCashAdjustment } from 
 import type { PendingAccountCashEffect } from "@/domain/accountCashEffects";
 import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
+import { applyCoveredCallCoverageToSimulation, resolveCoveredCallCoverage } from "@/domain/coveredCallCoverage";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { createOptionCloseExecutionDraft, sanitizeSaxoHistoryCloseExecutions } from "@/domain/optionCloseExecutions";
 import { createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
@@ -98,6 +99,7 @@ export default function App() {
     createWheelCycleFromSimulation,
     createStockTransferFromSimulation,
     createCoveredCallDraftFromWheelCycle,
+    linkCoveredCallToWheelCycle,
     settings,
   } = useOptionsStore();
   const {
@@ -1066,6 +1068,13 @@ export default function App() {
   const goToCloseDecision = (simulationId: string, warning: RiskWarning) => {
     if (!warning.actionAnchorId) return;
     selectSimulation(simulationId);
+    if (warning.actionAnchorId === "wheel-management") {
+      linkCoveredCallToWheelCycle(simulationId, warning.actionWheelCycleId);
+      const target = simulations.find((simulation) => simulation.id === simulationId);
+      openWheelManagement(target?.ticker);
+      setQuoteStatus("N口座保有株に紐づけました。ホイール管理でNカバードコール中として確認してください。");
+      return;
+    }
     if (["option-entry-executions", "option-close-executions", "stock-acquisition-record", "stock-settlement-record"].includes(warning.actionAnchorId)) {
       setIsEditorOpen(true);
       setEditorFocusRequest({ anchorId: warning.actionAnchorId, requestId: Date.now() });
@@ -1245,7 +1254,7 @@ export default function App() {
   }
 
   const selectedSanitized = sanitizeSaxoHistoryCloseExecutions(selected);
-  const selectedWithAccount = {
+  const selectedWithAccountBase = {
     ...selectedSanitized,
     availableCashJPY:
       selectedSanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT"
@@ -1256,6 +1265,8 @@ export default function App() {
         ? accountInputs.N.marginUsagePercent
         : accountInputs.P.marginUsagePercent,
   };
+  const selectedCoveredCallCoverage = resolveCoveredCallCoverage(selectedWithAccountBase, { wheelCycles, stockTransfers });
+  const selectedWithAccount = applyCoveredCallCoverageToSimulation(selectedWithAccountBase, selectedCoveredCallCoverage);
   const historyPerformance = calculateHistoryPerformance(selectedWithAccount);
   const historyResultMode = historyPerformance.historyResultMode;
   const showSelectedHistoryDetails = historyResultMode && dashboardHistoryOpen;
@@ -1294,7 +1305,10 @@ export default function App() {
     expectedAnnualReturnPct: selected.nisaExpectedAnnualReturnPct ?? DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT,
     taxRatePct: taxProfile.taxRatePct,
   });
-  const warnings = generateRiskWarnings(selectedWithAccount, { stockTransferRecorded: selectedStockTransferRecorded });
+  const warnings = generateRiskWarnings(selectedWithAccount, {
+    stockTransferRecorded: selectedStockTransferRecorded,
+    coveredCallCoverage: selectedCoveredCallCoverage,
+  });
   const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
   const checklist = generateChecklist(selectedWithAccount).map((item) => ({
     ...item,
@@ -1351,10 +1365,11 @@ export default function App() {
           />
         ) : (
           <>
-            <Dashboard
-              simulations={simulations}
-              stockTransfers={stockTransfers}
-              selectedId={selected.id}
+              <Dashboard
+                simulations={simulations}
+                stockTransfers={stockTransfers}
+                wheelCycles={wheelCycles}
+                selectedId={selected.id}
               onSelect={selectOnly}
               onEdit={selectAndOpenEditor}
               onDelete={deleteSimulation}

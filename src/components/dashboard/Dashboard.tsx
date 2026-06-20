@@ -1,9 +1,10 @@
-import type { RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } from "@/types/domain";
+import type { RiskWarning, StockTransferEvent, TradeSimulation, WheelCycle, WorkflowTask } from "@/types/domain";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { Fragment } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
+import { applyCoveredCallCoverageToSimulation, resolveCoveredCallCoverage } from "@/domain/coveredCallCoverage";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
@@ -23,6 +24,7 @@ const endedStatuses = new Set(["closed", "assigned", "expired"]);
 export function Dashboard({
   simulations,
   stockTransfers = [],
+  wheelCycles = [],
   selectedId,
   onSelect,
   onEdit,
@@ -36,6 +38,7 @@ export function Dashboard({
 }: {
   simulations: TradeSimulation[];
   stockTransfers?: StockTransferEvent[];
+  wheelCycles?: WheelCycle[];
   selectedId: string;
   onSelect: (id: string) => void;
   onEdit: (id: string) => void;
@@ -110,7 +113,7 @@ export function Dashboard({
           </thead>
           <tbody>
             {visibleSimulations.map((simulation, index) => {
-              const simulationWithAccount = {
+              const simulationWithAccountBase = {
                 ...simulation,
                 availableCashJPY:
                   simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
@@ -121,6 +124,8 @@ export function Dashboard({
                     ? accountInputs.N.marginUsagePercent
                     : accountInputs.P.marginUsagePercent,
               };
+              const coveredCallCoverage = resolveCoveredCallCoverage(simulationWithAccountBase, { wheelCycles, stockTransfers });
+              const simulationWithAccount = applyCoveredCallCoverageToSimulation(simulationWithAccountBase, coveredCallCoverage);
               const isHistoryRow = endedStatuses.has(simulation.status);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
@@ -133,7 +138,10 @@ export function Dashboard({
                 historyPerformance?.primaryDenominator ??
                 getPrimaryDenominator(calculateDenominators(simulationWithAccount, premium));
               const stockTransfer = getStockTransferForSimulation(simulation, stockTransfers);
-              const warnings = generateRiskWarnings(simulationWithAccount, { stockTransferRecorded: Boolean(stockTransfer) });
+              const warnings = generateRiskWarnings(simulationWithAccount, {
+                stockTransferRecorded: Boolean(stockTransfer),
+                coveredCallCoverage,
+              });
               const workflowTasks = getWorkflowTasks(simulationWithAccount);
               const primaryTask = getPrimaryWorkflowTask(simulationWithAccount);
               const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
@@ -304,6 +312,14 @@ export function Dashboard({
                       >
                         {actionableWarning.actionLabel ?? "反対売買判断へ"}
                       </button>
+                    ) : null}
+                    {!isHistoryRow &&
+                    simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" &&
+                    coveredCallCoverage.coveredShares > 0 &&
+                    coveredCallCoverage.requiredShares > 0 ? (
+                      <span className="mt-2 block rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-4 text-emerald-800">
+                        カバー済み: N口座{coveredCallCoverage.coveredShares}株 / 必要{coveredCallCoverage.requiredShares}株
+                      </span>
                     ) : null}
                   </td>
                   <td className="py-3 pr-3">
