@@ -479,13 +479,25 @@ describe("Saxo read-only account sync", () => {
     ).toBe("entry");
     expect(
       getSaxoHistoryCandidateTarget({
-        id: "long-close-sell",
+        id: "unknown-sell-with-pnl",
         kind: "trade",
         assetType: "StockOption",
         buySell: "sell",
         profitLoss: 120,
       }),
-    ).toBe("close");
+    ).toBe("entry");
+    expect(
+      getSaxoHistoryCandidateTarget({
+        id: "covered-call-open-sell",
+        kind: "trade",
+        assetType: "StockOption",
+        symbol: "NVDA/10N26C225:XCBF",
+        buySell: "sell",
+        quantity: 1,
+        price: 1.83,
+        profitLoss: 183,
+      }),
+    ).toBe("entry");
     expect(
       getSaxoHistoryCandidateTarget({
         id: "stock-transfer-sell",

@@ -3374,6 +3374,7 @@ function HistoryDiscoveryPreview({
     return state.status === "none";
   });
   const recoveryItems = actionableHistoryItems.filter((item) => reflectionStates[item.id]?.status === "broken");
+  const completedOrOutOfScopeCount = Math.max(0, historyItems.length - creatableItems.length - recoveryItems.length);
   const hasCreatableItems = creatableItems.length > 0;
   const reflectedHistoryCount = actionableHistoryItems.filter(isActualReflection).length;
   const entryReflectedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "entry" && isActualReflection(item)).length;
@@ -3426,6 +3427,13 @@ function HistoryDiscoveryPreview({
         <span className={`rounded px-2 py-1 text-xs font-bold ${statusClass}`}>{statusLabel}</span>
       </div>
       <p className="mt-2 text-xs text-slate-500">最終確認: {fetchedAt ? new Date(fetchedAt).toLocaleString("ja-JP") : "未確認"}</p>
+      {fetchedAt && historyItems.length > 0 ? (
+        <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-700 sm:grid-cols-3">
+          <div className="rounded bg-slate-50 px-3 py-2">今ユーザーが処理する履歴候補: {creatableItems.length}件</div>
+          <div className="rounded bg-amber-50 px-3 py-2 text-amber-900">監査用の復旧候補: {recoveryItems.length}件</div>
+          <div className="rounded bg-teal-50 px-3 py-2 text-teal-900">確認済みまたは対象外: {completedOrOutOfScopeCount}件</div>
+        </div>
+      ) : null}
       <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
         {!fetchedAt ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -3719,23 +3727,23 @@ function HistoryCandidateRow({
           <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs leading-5 text-amber-950">
             <div className="font-bold">監査用の復旧候補です</div>
             <div>
-              この履歴は反映候補の記録だけが残っています。実際の入力候補が見つからないため、必要な場合だけ再作成します。
+              通常入力の不足ではありません。現在の正式保存済みデータと照合できない過去候補です。必要な場合だけ詳細を確認してください。
             </div>
             <div className="mt-0.5 text-amber-800">{reflectionState.reason}</div>
             <div className="mt-1 flex flex-wrap gap-1">
               <button
                 type="button"
-                className="rounded bg-amber-900 px-2 py-0.5 text-xs font-bold text-white"
-                onClick={() => onCreateDraftAndOpen(item)}
-              >
-                {target === "assignment" ? "推奨: 権利行使候補を作成して6-Aへ進む" : target === "close" ? "決済実績候補を作成して7へ進む" : "建玉開始候補を作成して3-Aへ進む"}
-              </button>
-              <button
-                type="button"
                 className="rounded border border-slate-300 bg-white px-2 py-0.5 text-xs font-bold text-slate-700"
                 onClick={onIgnore}
               >
-                今回は無視
+                今回は表示しない
+              </button>
+              <button
+                type="button"
+                className="rounded border border-amber-300 bg-white px-2 py-0.5 text-xs font-bold text-amber-900"
+                onClick={() => onCreateDraftAndOpen(item)}
+              >
+                手動で再作成する
               </button>
             </div>
           </div>
