@@ -60,6 +60,56 @@
 
 ---
 
+# 2026-06-20 N口座保有株の現在評価額・含み損益表示
+
+## 実装内容
+
+- `StockHoldingEvaluation` 表示用ヘルパーを追加し、N口座保有株の取得原価、現在評価額、含み損益、含み損益率をUSDと参考JPYで計算するようにした。
+- 現在株価の優先順位を、Saxo現在建玉APIの `currentPrice/currentStockPrice/marketValue`、アプリの現在株価、未取得の順にした。
+- Saxoの `marketValue` と `unrealizedPnl` が取得できる場合はSaxo値を優先し、アプリ計算との差がある場合は差分を併記するようにした。
+- 履歴実績モードの黄色い現在状態カード直下に `N口座保有株の現在評価` カードを追加した。
+- ホイール管理カードにも同じ `N口座保有株の現在評価` カードを表示し、`未実現株式評価` に具体的な含み損益USDを表示するようにした。
+- 含み損益は未売却の時価評価であり、オプション実績・当年成績には含めない旨を明記した。
+
+## 修正ファイル
+
+- `src/domain/stockHoldingEvaluation.ts`
+- `src/domain/stockHoldingEvaluation.test.ts`
+- `src/components/results/StockHoldingEvaluationCard.tsx`
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `src/components/wheel/WheelPanel.tsx`
+- `src/App.tsx`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npx tsc --noEmit`: 通過
+- `npm test -- src/domain/stockHoldingEvaluation.test.ts`: 通過（1 file / 3 tests）
+- `npm test`: 通過（16 files / 84 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- build成果物確認:
+  - `dist/assets/index-Cf2r9dC2.js`
+  - bundle内に `N口座保有株の現在評価`、`含み損益`、`オプション実績・当年成績には含めません` が含まれることを確認した。
+
+## commit / push
+
+- 実装commit hash: `e50da31`
+- Pages deploy commit hash: `3d44cc5`
+- main push: 済み
+- gh-pages push: 済み
+
+## 公開URL確認
+
+- `https://jimusaku-lab.github.io/us-options-risk-planner/` のHTMLが新bundle `assets/index-Cf2r9dC2.js` を参照することを確認した。
+- 公開bundle内に `N口座保有株の現在評価`、`含み損益`、`オプション実績・当年成績には含めません` が含まれることを確認した。
+
+## 残課題
+
+- この時点ではなし。
+
+---
+
 # 2026-06-20 Saxo約定済みC売り候補から3-Aへ進まない問題
 
 ## 実装内容
