@@ -619,7 +619,7 @@ function findPlannedCoveredCallCandidates(
         if (simulation.accountCode !== "N" || simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT") return false;
         if (resolvedSymbol && normalizeSymbol(simulation.ticker) !== resolvedSymbol) return false;
         if (leg.type !== "call" || leg.side !== "sell") return false;
-        if (position.quantity !== undefined && Math.abs(Math.abs(position.quantity) - leg.quantity) > 0.0001) return false;
+        if (position.quantity !== undefined && leg.quantity > 0 && Math.abs(Math.abs(position.quantity) - leg.quantity) > 0.0001) return false;
         return true;
       })
       .map((leg) => ({ simulation, leg })),
@@ -965,6 +965,7 @@ function simulationOptionShapeMatchesPosition(simulation: TradeSimulation, posit
 
 function getQuantityDiff(position: SaxoApiPositionSnapshot, leg: OptionLeg): number | undefined {
   if (position.quantity === undefined) return undefined;
+  if (leg.quantity <= 0) return undefined;
   return Math.abs(position.quantity) - leg.quantity;
 }
 

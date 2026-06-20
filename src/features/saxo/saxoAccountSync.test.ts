@@ -284,7 +284,7 @@ describe("Saxo read-only account sync", () => {
           side: "sell",
           strikeUSD: 230,
           premiumUSD: 1.4,
-          quantity: 1,
+          quantity: 0,
           expiryDate: "2026-07-10",
           isCovered: true,
         },

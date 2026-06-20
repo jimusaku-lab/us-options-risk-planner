@@ -424,6 +424,9 @@ export default function App() {
     selectSimulation(simulation.id);
     setIsEditorOpen(true);
     setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() });
+    window.setTimeout(() => {
+      document.getElementById("option-entry-executions")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
     setQuoteStatus(
       historyCompletionStatus === "matched"
         ? "Saxo現在建玉から下書きを作成し、Saxo取引履歴1件で建玉開始確認を補完しました。正式保存前に確認してください。"
@@ -580,6 +583,9 @@ export default function App() {
     selectSimulation(nextSimulation.id);
     setIsEditorOpen(true);
     setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() + Math.random() });
+    window.setTimeout(() => {
+      document.getElementById("option-entry-executions")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
     setQuoteStatus(
       diffs.length > 0
         ? `Saxo実約定値で注文前建玉を更新しました。差分: ${diffs.join("、")}。3-Aで確認して正式保存してください。`

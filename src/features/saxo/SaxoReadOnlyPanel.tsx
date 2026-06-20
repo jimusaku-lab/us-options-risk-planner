@@ -306,6 +306,9 @@ export function SaxoReadOnlyPanel({
     if (!hasLinkedId && !storedSimulationId) {
       return { status: "unlinked" };
     }
+    if (row.simulation && row.status !== "app_missing" && (!storedSimulationId || !simulations.some((item) => item.id === storedSimulationId))) {
+      return { status: "unlinked" };
+    }
     const fallbackSimulationId = hasLinkedId ? row.simulation?.id : undefined;
     const simulationId = storedSimulationId ?? fallbackSimulationId;
     if (!simulationId) {
