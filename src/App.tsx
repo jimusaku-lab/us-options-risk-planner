@@ -16,6 +16,7 @@ import { calculateTaxBucketSummary } from "@/domain/taxBucketSummary";
 import { createSimulationFromCandidate } from "@/domain/candidateConversion";
 import { calculateYearlyPerformanceSummary } from "@/domain/yearlyPerformance";
 import { getStatusLabel } from "@/domain/strategyLabels";
+import { calculateStockHoldingEvaluation, type StockHoldingEvaluation } from "@/domain/stockHoldingEvaluation";
 import { CandidatePanel } from "@/components/candidates/CandidatePanel";
 import { AccountOverview } from "@/components/dashboard/AccountOverview";
 import { Dashboard } from "@/components/dashboard/Dashboard";
@@ -46,6 +47,7 @@ import { DenominatorTable } from "@/components/results/DenominatorTable";
 import { RiskPanel } from "@/components/results/RiskPanel";
 import { ScenarioCards } from "@/components/results/ScenarioCards";
 import { SummaryCards } from "@/components/results/SummaryCards";
+import { StockHoldingEvaluationCard } from "@/components/results/StockHoldingEvaluationCard";
 import { TaxComparisonCard } from "@/components/results/TaxComparisonCard";
 import { SimulationEditor } from "@/components/wizard/SimulationEditor";
 import { WheelPanel } from "@/components/wheel/WheelPanel";
@@ -74,6 +76,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<"positions" | "performance">("positions");
   const [dashboardHistoryOpen, setDashboardHistoryOpen] = useState(false);
   const [saxoOrderCandidates, setSaxoOrderCandidates] = useState<SaxoApiOrderSnapshot[]>([]);
+  const [saxoPositionCandidates, setSaxoPositionCandidates] = useState<SaxoApiPositionSnapshot[]>([]);
   const [saxoHistoryCandidates, setSaxoHistoryCandidates] = useState<SaxoHistoryDiscoveryItem[]>([]);
   const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
   const {
@@ -609,6 +612,49 @@ export default function App() {
     if (saxoOptionMatch?.[1]) return saxoOptionMatch[1];
     return normalizeTicker(normalized);
   };
+  const findSaxoNStockPosition = (ticker: string, shares?: number, averageCostUSD?: number) => {
+    const normalizedTicker = normalizeStockTransferTicker(ticker);
+    const stockPositions = saxoPositionCandidates.filter((position) => position.kind === "stock" && position.accountAssignment === "N");
+    const scored = stockPositions
+      .map((position) => {
+        let score = 0;
+        const positionTicker = normalizeStockTransferTicker(position.symbol ?? position.underlyingName ?? position.instrumentCode);
+        if (normalizedTicker && positionTicker && normalizedTicker === positionTicker) score += 4;
+        const positionShares = getSaxoStockTransferShares(position);
+        if (shares !== undefined && positionShares > 0 && Math.abs(positionShares - shares) <= 0.0001) score += 3;
+        const positionAverage = getSaxoStockTransferAveragePrice(position);
+        if (averageCostUSD !== undefined && positionAverage !== undefined && Math.abs(positionAverage - averageCostUSD) <= 0.05) score += 2;
+        if (!positionTicker && shares !== undefined && positionShares > 0 && Math.abs(positionShares - shares) <= 0.0001) score += 1;
+        return { position, score };
+      })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score);
+    return scored[0]?.position;
+  };
+  const createNStockEvaluation = (params: {
+    ticker: string;
+    shares: number;
+    averageCostUSD: number;
+    appCurrentPriceUSD?: number;
+    fxRateJPY?: number;
+    saxoPosition?: SaxoApiPositionSnapshot;
+  }) =>
+    calculateStockHoldingEvaluation({
+      ticker: params.ticker,
+      shares: params.shares,
+      averageCostUSD: params.averageCostUSD,
+      appCurrentPriceUSD: params.appCurrentPriceUSD,
+      fxRateJPY: params.fxRateJPY,
+      saxoPosition: params.saxoPosition
+        ? {
+            currentPrice: params.saxoPosition.currentPrice,
+            currentStockPrice: params.saxoPosition.currentStockPrice,
+            marketValue: params.saxoPosition.marketValue,
+            unrealizedPnl: params.saxoPosition.unrealizedPnl,
+            fetchedAt: params.saxoPosition.fetchedAt,
+          }
+        : undefined,
+    });
   const findPnStockTransferSourceSimulation = (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => {
     const latestState = useOptionsStore.getState();
     const latestSimulations = latestState.simulations;
@@ -1054,6 +1100,28 @@ export default function App() {
     window.localStorage.setItem("us-options-first-run-notice-accepted", "true");
     setHasAcceptedNotice(true);
   };
+  const stockEvaluationsByWheelId = Object.fromEntries(
+    wheelCycles
+      .filter((cycle) => ["n_stock_holding", "n_covered_call", "n_called_away"].includes(cycle.currentPhase))
+      .map((cycle) => {
+        const relatedSimulation =
+          simulations.find((simulation) => cycle.linkedSimulationIds.includes(simulation.id)) ??
+          simulations.find((simulation) => normalizeTicker(simulation.ticker) === normalizeTicker(cycle.ticker));
+        const saxoPosition = findSaxoNStockPosition(cycle.ticker, cycle.currentShares, cycle.averageCostUSD);
+        return [
+          cycle.id,
+          createNStockEvaluation({
+            ticker: cycle.ticker,
+            shares: cycle.currentShares,
+            averageCostUSD: cycle.averageCostUSD,
+            appCurrentPriceUSD: relatedSimulation?.currentPriceUSD,
+            fxRateJPY: cycle.referenceFxRateJPY ?? relatedSimulation?.referenceFxRateJPY ?? relatedSimulation?.fxRateJPY,
+            saxoPosition,
+          }),
+        ];
+      })
+      .filter((entry): entry is [string, StockHoldingEvaluation] => Boolean(entry[1])),
+  );
 
   if (!selected) {
     return (
@@ -1109,6 +1177,7 @@ export default function App() {
                 simulations={simulations}
                 onApplyAccountState={updateAccountState}
                 onOrdersChange={setSaxoOrderCandidates}
+                onPositionsChange={setSaxoPositionCandidates}
                 onHistoryCandidatesChange={setSaxoHistoryCandidates}
                 onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
                 onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
@@ -1161,6 +1230,7 @@ export default function App() {
                   events={wheelEvents}
                   stockTransfers={stockTransfers}
                   simulations={simulations}
+                  stockEvaluationsByCycleId={stockEvaluationsByWheelId}
                   focusRequest={wheelFocusRequest}
                   onCreateCoveredCallFromCycle={(cycle) => createCoveredCallFromWheelCycle(cycle.id)}
                 />
@@ -1191,6 +1261,17 @@ export default function App() {
   const showSelectedHistoryDetails = historyResultMode && dashboardHistoryOpen;
   const assignedShortPutLeg = historyPerformance.assignedShortPutLeg;
   const assignedPutStockHoldingMode = historyPerformance.assignedPutStockHoldingMode;
+  const selectedStockHoldingEvaluation =
+    assignedPutStockHoldingMode && selectedStockTransfer
+      ? createNStockEvaluation({
+          ticker: selectedWithAccount.ticker,
+          shares: selectedStockTransfer.shares,
+          averageCostUSD: selectedStockTransfer.costBasisUSD,
+          appCurrentPriceUSD: selectedWithAccount.currentPriceUSD,
+          fxRateJPY: selectedWithAccount.referenceFxRateJPY ?? selectedWithAccount.fxRateJPY,
+          saxoPosition: findSaxoNStockPosition(selectedWithAccount.ticker, selectedStockTransfer.shares, selectedStockTransfer.costBasisUSD),
+        })
+      : undefined;
   const assignedDenominatorFx = historyPerformance.assignedPutDenominatorFx ?? 0;
   const assignedDenominatorShares = historyPerformance.assignedPutDenominatorShares ?? 0;
   const assignedPutDenominatorJPY = historyPerformance.assignedPutDenominatorJPY;
@@ -1307,6 +1388,7 @@ export default function App() {
                 simulations={simulations}
                 onApplyAccountState={updateAccountState}
                 onOrdersChange={setSaxoOrderCandidates}
+                onPositionsChange={setSaxoPositionCandidates}
                 onHistoryCandidatesChange={setSaxoHistoryCandidates}
                 onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
                 onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
@@ -1403,6 +1485,7 @@ export default function App() {
                 assignedPutLeg={assignedShortPutLeg}
                 denominatorFormula={assignedPutDenominatorFormula}
                 stockTransfer={selectedStockTransfer}
+                stockEvaluation={selectedStockHoldingEvaluation}
               />
             ) : null}
             {!historyResultMode || showSelectedHistoryDetails ? (
@@ -1528,6 +1611,7 @@ export default function App() {
                   events={wheelEvents}
                   stockTransfers={stockTransfers}
                   simulations={simulations}
+                  stockEvaluationsByCycleId={stockEvaluationsByWheelId}
                   focusRequest={wheelFocusRequest}
                   onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
                   selectedTransferRecorded={selectedStockTransferRecorded}
@@ -1704,12 +1788,14 @@ function HistoryStatusCard({
   assignedPutLeg,
   denominatorFormula,
   stockTransfer,
+  stockEvaluation,
 }: {
   simulation: TradeSimulation;
   stockHoldingMode: boolean;
   assignedPutLeg?: TradeSimulation["optionLegs"][number];
   denominatorFormula?: string;
   stockTransfer?: StockTransferEvent;
+  stockEvaluation?: StockHoldingEvaluation;
 }) {
   const acquisition = simulation.stockAcquisition;
   const ticker = simulation.ticker || simulation.underlyingName || "対象銘柄";
@@ -1772,6 +1858,11 @@ function HistoryStatusCard({
               <div>現在保有: N口座 / USD / {stockTransfer.shares}株 / 平均取得単価 {formatUSD(stockTransfer.costBasisUSD)}</div>
             </>
           ) : null}
+        </div>
+      ) : null}
+      {stockHoldingMode && stockEvaluation ? (
+        <div className="mt-3">
+          <StockHoldingEvaluationCard evaluation={stockEvaluation} />
         </div>
       ) : null}
     </section>

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { StockTransferEvent, TradeSimulation, WheelCycle, WheelEvent, WheelPhase } from "@/types/domain";
+import type { StockHoldingEvaluation } from "@/domain/stockHoldingEvaluation";
+import { StockHoldingEvaluationCard } from "@/components/results/StockHoldingEvaluationCard";
 import { formatJPY, formatUSD } from "@/lib/format";
 
 const phaseLabels: Record<WheelPhase, string> = {
@@ -23,6 +25,7 @@ export function WheelPanel({
   events = [],
   stockTransfers = [],
   simulations = [],
+  stockEvaluationsByCycleId = {},
   focusRequest,
   onCreateFromSelected,
   onCreateTransferFromSelected,
@@ -33,6 +36,7 @@ export function WheelPanel({
   events?: WheelEvent[];
   stockTransfers?: StockTransferEvent[];
   simulations?: TradeSimulation[];
+  stockEvaluationsByCycleId?: Record<string, StockHoldingEvaluation>;
   focusRequest?: { ticker?: string; requestId: number } | null;
   onCreateFromSelected?: () => void;
   onCreateTransferFromSelected?: () => void;
@@ -110,6 +114,7 @@ export function WheelPanel({
               events={events.filter((event) => event.wheelCycleId === cycle.id)}
               stockTransfers={stockTransfers.filter((transfer) => transfer.destinationWheelCycleId === cycle.id)}
               simulations={simulations}
+              stockEvaluation={stockEvaluationsByCycleId[cycle.id]}
               onCreateCoveredCallFromCycle={onCreateCoveredCallFromCycle}
               highlighted={Boolean(highlightedTicker) && cycle.ticker.toUpperCase() === highlightedTicker}
             />
@@ -125,6 +130,7 @@ function WheelCycleCard({
   events,
   stockTransfers,
   simulations,
+  stockEvaluation,
   onCreateCoveredCallFromCycle,
   highlighted,
 }: {
@@ -132,6 +138,7 @@ function WheelCycleCard({
   events: WheelEvent[];
   stockTransfers: StockTransferEvent[];
   simulations: TradeSimulation[];
+  stockEvaluation?: StockHoldingEvaluation;
   onCreateCoveredCallFromCycle?: (cycle: WheelCycle) => void;
   highlighted?: boolean;
 }) {
@@ -173,9 +180,17 @@ function WheelCycleCard({
         />
         <Metric label="現在株数" value={`${cycle.currentShares}株`} />
         <Metric label="平均取得単価" value={formatUSD(cycle.averageCostUSD)} />
-        <Metric label="未実現株式評価" value="実現損益に未反映" />
+        <Metric
+          label="未実現株式評価"
+          value={stockEvaluation?.unrealizedPnlUSD === undefined ? "未計算" : `${stockEvaluation.unrealizedPnlUSD >= 0 ? "+" : ""}${formatUSD(stockEvaluation.unrealizedPnlUSD)}`}
+        />
         <Metric label="次の候補" value={nextActionLabel(cycle.currentPhase)} />
       </div>
+      {stockEvaluation ? (
+        <div className="mt-3">
+          <StockHoldingEvaluationCard evaluation={stockEvaluation} compact />
+        </div>
+      ) : null}
       <PhaseStepper route={route} currentPhase={cycle.currentPhase} />
       {canStartCoveredCall ? (
         <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-950">

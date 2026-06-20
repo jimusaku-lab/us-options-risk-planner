@@ -103,6 +103,7 @@ export function SaxoReadOnlyPanel({
   simulations,
   onApplyAccountState,
   onOrdersChange,
+  onPositionsChange,
   onHistoryCandidatesChange,
   onCreateHistoryDraft,
   onCreateAssignmentDraft,
@@ -120,6 +121,7 @@ export function SaxoReadOnlyPanel({
   simulations: TradeSimulation[];
   onApplyAccountState: (accountCode: SaxoAccountCode, patch: Partial<AccountState>) => void;
   onOrdersChange?: (orders: SaxoApiOrderSnapshot[]) => void;
+  onPositionsChange?: (positions: SaxoApiPositionSnapshot[]) => void;
   onHistoryCandidatesChange?: (items: SaxoHistoryDiscoveryItem[]) => void;
   onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string } | void;
   onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string } | void;
@@ -282,6 +284,10 @@ export function SaxoReadOnlyPanel({
   useEffect(() => {
     onOrdersChange?.(mappedOrders);
   }, [mappedOrders, onOrdersChange]);
+
+  useEffect(() => {
+    onPositionsChange?.(mappedPositions);
+  }, [mappedPositions, onPositionsChange]);
 
   useEffect(() => {
     onHistoryCandidatesChange?.(historyEndpoints.flatMap((endpoint) => endpoint.items ?? []));
