@@ -166,4 +166,45 @@ describe("covered call coverage resolution", () => {
     expect(coverage.linkedToSimulation).toBe(true);
     expect(coverage.linkNeeded).toBe(false);
   });
+
+  it("uses N-phase wheel shares even when legacy currentAccountCode is stale", () => {
+    const simulation = createNAccountCoveredCall();
+    const coverage = resolveCoveredCallCoverage(simulation, {
+      wheelCycles: [
+        createWheelCycle({
+          currentPhase: "n_stock_holding",
+          currentAccountCode: "P",
+          currentShares: 100,
+          averageCostUSD: 207.5,
+        }),
+      ],
+      stockTransfers: [],
+    });
+    const displaySimulation = applyCoveredCallCoverageToSimulation(simulation, coverage);
+    const warnings = generateRiskWarnings(displaySimulation, { coveredCallCoverage: coverage });
+
+    expect(coverage.coveredShares).toBe(100);
+    expect(coverage.missingShares).toBe(0);
+    expect(warnings.some((warning) => warning.id === "n-covered-call-share-shortage")).toBe(false);
+    expect(warnings.some((warning) => warning.id === "missing-call-hedge")).toBe(false);
+    expect(calculateStockDenominatorForSimulationUSD(displaySimulation)).toBeCloseTo(20_750, 8);
+  });
+
+  it("does not use p_to_n_transfer_pending stock as N account covered call coverage", () => {
+    const simulation = createNAccountCoveredCall();
+    const coverage = resolveCoveredCallCoverage(simulation, {
+      wheelCycles: [
+        createWheelCycle({
+          currentPhase: "p_to_n_transfer_pending",
+          currentAccountCode: "P",
+          currentShares: 100,
+          averageCostUSD: 207.5,
+        }),
+      ],
+      stockTransfers: [],
+    });
+
+    expect(coverage.coveredShares).toBe(0);
+    expect(coverage.missingShares).toBe(100);
+  });
 });

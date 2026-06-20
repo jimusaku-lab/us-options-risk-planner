@@ -230,10 +230,10 @@ type LegacyWheelCycle = Partial<WheelCycle> & {
 };
 
 function normalizeWheelCycle(cycle: LegacyWheelCycle): WheelCycle {
-  if ("currentPhase" in cycle) return cycle as WheelCycle;
   const legacyPhase = cycle.phase ?? "short_put";
-  const currentPhase: WheelPhase =
-    legacyPhase === "covered_call"
+  const currentPhase: WheelPhase = cycle.currentPhase
+    ? cycle.currentPhase
+    : legacyPhase === "covered_call"
       ? "n_covered_call"
       : legacyPhase === "assigned_stock"
         ? "n_stock_holding"
@@ -245,23 +245,30 @@ function normalizeWheelCycle(cycle: LegacyWheelCycle): WheelCycle {
   const premiumUSD = cycle.cumulativePremiumJPY && cycle.referenceFxRateJPY ? cycle.cumulativePremiumJPY / cycle.referenceFxRateJPY : 0;
   const stockPnlUSD =
     cycle.cumulativeRealizedPnlJPY && cycle.referenceFxRateJPY ? cycle.cumulativeRealizedPnlJPY / cycle.referenceFxRateJPY : 0;
+  const currentAccountCode: SaxoAccountCode = currentPhase.startsWith("n_")
+    ? "N"
+    : currentPhase.startsWith("p_")
+      ? "P"
+      : cycle.currentAccountCode ?? "N";
   return {
     id: cycle.id,
     ticker: cycle.ticker,
     primaryAccountCode: "N",
     currentPhase,
-    currentAccountCode: "N",
+    currentAccountCode,
     currentShares: cycle.currentShares ?? 0,
-    averageCostUSD: cycle.currentCostBasisUSD ?? 0,
-    usdCashImpact: premiumUSD + stockPnlUSD,
-    cumulativePremiumUSD: premiumUSD,
-    cumulativeStockRealizedPnlUSD: stockPnlUSD,
-    cumulativeFeesUSD: 0,
-    cumulativeTotalPnlUSD: premiumUSD + stockPnlUSD,
+    averageCostUSD: cycle.averageCostUSD ?? cycle.currentCostBasisUSD ?? 0,
+    usdCashImpact: cycle.usdCashImpact ?? premiumUSD + stockPnlUSD,
+    cumulativePremiumUSD: cycle.cumulativePremiumUSD ?? premiumUSD,
+    cumulativeStockRealizedPnlUSD: cycle.cumulativeStockRealizedPnlUSD ?? stockPnlUSD,
+    cumulativeFeesUSD: cycle.cumulativeFeesUSD ?? 0,
+    cumulativeTotalPnlUSD: cycle.cumulativeTotalPnlUSD ?? premiumUSD + stockPnlUSD,
     referenceFxRateJPY: cycle.referenceFxRateJPY,
-    eventIds: [],
-    linkedSimulationIds: cycle.trades ?? [],
-    openedAt: formatLocalDate(),
+    eventIds: cycle.eventIds ?? [],
+    linkedSimulationIds: cycle.linkedSimulationIds ?? cycle.trades ?? [],
+    openedAt: cycle.openedAt ?? formatLocalDate(),
+    closedAt: cycle.closedAt,
+    memo: cycle.memo,
   };
 }
 
@@ -277,7 +284,7 @@ function repairWheelCyclePhase(cycle: WheelCycle, simulations: TradeSimulation[]
   const hasPAccountLink = linkedSimulations.some(
     (simulation) => simulation.accountEnvironment === "PROD_P_JPY_SETTLEMENT",
   );
-  const hasTransferToN = cycle.eventIds.length > 0 && cycle.currentPhase.startsWith("n_");
+  const hasTransferToN = cycle.currentPhase.startsWith("n_");
 
   if (hasPAccountLink && !hasNAccountLink && !hasTransferToN) {
     return {
@@ -927,7 +934,6 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
         (cycle) =>
           (cycleId ? cycle.id === cycleId : true) &&
           cycle.ticker.toUpperCase() === simulation.ticker.toUpperCase() &&
-          cycle.currentAccountCode === "N" &&
           ["n_stock_holding", "n_covered_call"].includes(cycle.currentPhase) &&
           cycle.currentShares >= requiredShares,
       );

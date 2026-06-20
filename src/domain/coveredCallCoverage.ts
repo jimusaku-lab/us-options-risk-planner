@@ -117,7 +117,6 @@ export function resolveCoveredCallCoverage(
     .filter(
       (cycle) =>
         cycle.ticker.trim().toUpperCase() === normalizedTicker &&
-        cycle.currentAccountCode === "N" &&
         N_COVER_PHASES.has(cycle.currentPhase) &&
         cycle.currentShares > 0,
     )

@@ -1169,6 +1169,7 @@ export default function App() {
               <Dashboard
                 simulations={simulations}
                 stockTransfers={stockTransfers}
+                wheelCycles={wheelCycles}
                 selectedId=""
                 onSelect={selectOnly}
                 onEdit={selectAndOpenEditor}
