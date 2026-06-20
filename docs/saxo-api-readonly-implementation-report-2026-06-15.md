@@ -60,6 +60,41 @@
 
 ---
 
+# 2026-06-20 Saxo建玉候補分類と3-A確認済みUX修正
+
+## 実装内容
+
+- Saxo現在建玉候補のサマリー表示を、`今回Saxoから取得`、`処理が必要`、`照合済みの現在保有` に分けた。
+- N口座の現物株がP→N移管済みで、ホイール管理のN株式保有として照合できる場合は、反映待ち候補に含めないようにした。
+- 照合済みN口座100株には、`新しく反映する必要はありません` と表示し、処理対象に見える `下書き反映` や `今回は無視` 導線を出さない状態に整理した。
+- Saxo約定済みC売りなど、通常オプション建玉だけを `処理が必要` として目立たせる表示にした。
+- 3-A. 建玉開始の約定確認が確認済みの場合、`建玉開始を確認済みにする` と `確認して正式保存する` の再確認ボタンを出さず、`反対売買判断へ進む` と `入力欄を閉じて俯瞰へ戻る` の次アクションだけを表示するようにした。
+
+## 修正ファイル
+
+- `src/features/saxo/SaxoReadOnlyPanel.tsx`
+- `src/components/wizard/SimulationEditor.tsx`
+- `docs/saxo-api-readonly-implementation-report-2026-06-15.md`
+
+## 検証結果
+
+- `npx tsc --noEmit`: 通過
+- `npm test`: 通過（16 files / 84 tests）
+- `npm run build`: 通過
+- `GITHUB_PAGES=true npm run build`: 通過
+- `dist/index.html`: `/us-options-risk-planner/assets/index-BYlAmmbf.js` と `/us-options-risk-planner/assets/index-BGzDAO2Y.css` を参照することを確認した。
+- Chromeで `https://jimusaku-lab.github.io/us-options-risk-planner/` を開き、白画面ではなくアプリ画面が表示されることを確認した。
+- Chrome確認時、React実行時エラーやJS/CSS 404を示すコンソールエラーは出ていないことを確認した。
+
+## commit / push
+
+- 実装commit hash: `87b758a`
+- Pages deploy commit hash: `d6883e2`
+- main push: 済み
+- gh-pages push: 済み
+
+---
+
 # 2026-06-20 GitHub Pages白画面修正
 
 ## 原因
