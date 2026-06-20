@@ -86,7 +86,8 @@ const SAXO_LOCAL_API_SUCCESS_LOG = "Saxo read-only local API listening on http:/
 type SaxoPanelConnectionState = NonNullable<SaxoApiStatus["connectionState"]> | "disconnected" | "local_api_down";
 type LocalApiReachability = "unknown" | "checking" | "down" | "cors_or_pna_blocked" | "up";
 type LinkedSimulationResolution =
-  | { status: "linked"; simulation: TradeSimulation; simulationId: string }
+  | { status: "linked"; simulation: TradeSimulation; simulationId: string; repaired?: boolean }
+  | { status: "draft"; simulation?: TradeSimulation; simulationId?: string; reason: string }
   | { status: "broken"; reason: string; simulationId?: string }
   | { status: "unlinked" };
 
@@ -302,6 +303,23 @@ export function SaxoReadOnlyPanel({
     [historyEndpoints, ignoredHistoryIds, simulations, reflectedHistoryIds, stockTransfers],
   );
 
+  useEffect(() => {
+    const repairs: Record<string, string> = {};
+    for (const row of positionRows) {
+      if (!row.position?.id || row.position.kind !== "option") continue;
+      const formalMatch = findStableSavedSimulationForSaxoPosition(row.position, simulations);
+      if (!formalMatch) continue;
+      if (linkedPositionTargets[row.position.id] !== formalMatch.simulation.id) {
+        repairs[row.position.id] = formalMatch.simulation.id;
+      }
+    }
+    const repairIds = Object.keys(repairs);
+    if (repairIds.length === 0) return;
+    setLinkedPositionTargets((current) => ({ ...current, ...repairs }));
+    setLinkedPositionIds((current) => Array.from(new Set([...current, ...repairIds])));
+    setDraftedPositionIds((current) => current.filter((id) => !repairIds.includes(id)));
+  }, [linkedPositionTargets, positionRows, simulations]);
+
   function resolveLinkedSimulation(row: SaxoPositionReconciliationRow): LinkedSimulationResolution {
     const positionId = row.position?.id;
     if (!positionId) {
@@ -309,29 +327,56 @@ export function SaxoReadOnlyPanel({
     }
     const hasLinkedId = linkedPositionIds.includes(positionId);
     const storedSimulationId = linkedPositionTargets[positionId];
+    if (storedSimulationId) {
+      const simulation = simulations.find((item) => item.id === storedSimulationId);
+      if (simulation) {
+        return isSaxoPositionDraftOrPendingSave(simulation)
+          ? {
+              status: "draft",
+              simulation,
+              simulationId: simulation.id,
+              reason: "このC売りは下書き反映済みですが、正式保存済みの建玉としてはまだ確認されていません。",
+            }
+          : { status: "linked", simulation, simulationId: simulation.id };
+      }
+    }
+
+    const formalMatch = row.position ? findStableSavedSimulationForSaxoPosition(row.position, simulations) : undefined;
+    if (formalMatch) {
+      return { status: "linked", simulation: formalMatch.simulation, simulationId: formalMatch.simulation.id, repaired: true };
+    }
+
+    const draftMatch = row.position ? findStableDraftSimulationForSaxoPosition(row.position, simulations) : undefined;
+    if (draftMatch) {
+      return {
+        status: "draft",
+        simulation: draftMatch.simulation,
+        simulationId: draftMatch.simulation.id,
+        reason: "このC売りは下書き反映済みですが、正式保存済みの建玉としては見つかりません。3-Aの下書きを開いて、内容を確認して正式保存してください。",
+      };
+    }
+
+    if (draftedPositionIds.includes(positionId)) {
+      return {
+        status: "draft",
+        reason: "このC売りは下書き反映済みですが、下書き本体が現在の建玉一覧に見つかりません。下書き状態を解除して作り直せます。",
+      };
+    }
+
     if (!hasLinkedId && !storedSimulationId) {
       return { status: "unlinked" };
     }
-    if (row.simulation && row.status !== "app_missing" && (!storedSimulationId || !simulations.some((item) => item.id === storedSimulationId))) {
-      return { status: "unlinked" };
-    }
-    const fallbackSimulationId = hasLinkedId ? row.simulation?.id : undefined;
-    const simulationId = storedSimulationId ?? fallbackSimulationId;
-    if (!simulationId) {
+    if (!storedSimulationId) {
       return {
         status: "broken",
         reason: "linkedPositionIdsにはありますが、紐づけ先の建玉IDが保存されていません。",
       };
     }
-    const simulation = simulations.find((item) => item.id === simulationId);
-    if (!simulation) {
-      return {
-        status: "broken",
-        simulationId,
-        reason: "保存済みの紐づけ先建玉が見つかりません。",
-      };
-    }
-    return { status: "linked", simulation, simulationId };
+    return {
+      status: "broken",
+      simulationId: storedSimulationId,
+      reason: "保存済みの紐づけ先建玉が見つかりません。",
+    };
   }
 
   const reflectionSummary = useMemo(
@@ -1443,7 +1488,7 @@ export function SaxoReadOnlyPanel({
                 }}
                 onOpenLinked={(row, anchorId) => {
                   const resolved = resolveLinkedSimulation(row);
-                  if (resolved.status !== "linked") {
+                  if ((resolved.status !== "linked" && resolved.status !== "draft") || !resolved.simulation) {
                     if (row.position) {
                       setPositionActionErrors((current) => ({
                         ...current,
@@ -1462,9 +1507,11 @@ export function SaxoReadOnlyPanel({
                   });
                   onOpenLinkedSimulation?.(resolved.simulation.id, anchorId);
                   if (anchorId === "option-entry-executions") {
-                    const needsEntryConfirmation = needsOptionEntryConfirmation(resolved.simulation);
+                    const needsEntryConfirmation = resolved.status === "draft" || needsOptionEntryConfirmation(resolved.simulation);
                     setMessage(
-                      needsEntryConfirmation
+                      resolved.status === "draft"
+                        ? "下書きを開きました。3-Aで内容を確認し、正式保存してください。"
+                        : needsEntryConfirmation
                         ? "このSaxo建玉は既存建玉と一致しています。約定確認を完了してください。"
                         : "このSaxo建玉は既存建玉と一致しており、建玉開始の約定確認も完了しています。確認済みの3-Aを開きました。",
                     );
@@ -2771,7 +2818,13 @@ function PositionsPreview({
     (row) => row.position && getRecordedStockTransferForPosition(row.position, simulations, stockTransfers),
   );
   const regularRows = rows.filter((row) => !isNAccountStockPosition(row.position));
-  const actionRequiredRows = regularRows.length + pendingStockTransferRows.length;
+  const linkedRegularRows = regularRows.filter((row) => row.position && resolveLinkedSimulation(row).status === "linked");
+  const actionRequiredRegularRows = regularRows.filter((row) => {
+    if (!row.position) return false;
+    return resolveLinkedSimulation(row).status !== "linked";
+  });
+  const actionRequiredRows = actionRequiredRegularRows.length + pendingStockTransferRows.length;
+  const confirmedCurrentHoldingRows = linkedRegularRows.length + recordedStockTransferRows.length;
   const draft = draftPosition ? createSaxoPositionDraftSummary(draftPosition, simulations) : null;
   return (
     <div className="rounded-md border border-slate-200 p-3">
@@ -2786,7 +2839,7 @@ function PositionsPreview({
       <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-5">
         <StatChip label="今回Saxoから取得" value={`${positions.length}件`} />
         <StatChip label="処理が必要" value={`${actionRequiredRows}件`} />
-        <StatChip label="照合済みの現在保有" value={`${recordedStockTransferRows.length}件`} />
+        <StatChip label="照合済みの現在保有" value={`${confirmedCurrentHoldingRows}件`} />
         <StatChip label="P口座" value={`${assignedP}件`} />
         <StatChip label="N口座" value={`${assignedN}件`} />
       </div>
@@ -2795,14 +2848,14 @@ function PositionsPreview({
           {actionRequiredRows > 0
             ? `今回処理が必要なのは、Saxoで約定済みまたは未反映の建玉${actionRequiredRows}件です。`
             : "今回追加で反映が必要なSaxo建玉はありません。"}
-          {recordedStockTransferRows.length > 0
-            ? " N口座の現物株は、すでにホイール管理のN株式保有として照合済みです。新しく反映する必要はありません。"
+          {confirmedCurrentHoldingRows > 0
+            ? " 照合済みの現在保有は、新しく反映する必要はありません。"
             : ""}
         </p>
       ) : null}
-      {recordedStockTransferRows.length > 0 ? (
+      {confirmedCurrentHoldingRows > 0 ? (
         <p className="mt-1 text-xs font-semibold text-teal-700">
-          照合済みの現在保有確認: {recordedStockTransferRows.length}件。記録済みのN口座現物株は未処理のP→N移管候補には含めません。
+          照合済みの現在保有確認: {confirmedCurrentHoldingRows}件。正式保存済みのSaxo建玉と記録済みのN口座現物株は、未処理候補には含めません。
         </p>
       ) : null}
       {unassigned > 0 ? <p className="mt-1 text-xs text-amber-700">未割当口座: {unassigned}件</p> : null}
@@ -2847,6 +2900,7 @@ function PositionsPreview({
                   onOpenLinked={onOpenLinked}
                   onCreateDraft={onCreateDraft}
                   onCreateDraftFromBroken={onCreateDraftFromBroken}
+                  onDiscardDraft={onDiscardDraft}
                   drafted={Boolean(row.position && draftedPositionIds.includes(row.position.id))}
                   actionError={row.position ? positionActionErrors[row.position.id] : undefined}
                   actionNotice={row.position ? positionActionNotices[row.position.id] : undefined}
@@ -3736,6 +3790,7 @@ function PositionRow({
   onOpenLinked,
   onCreateDraft,
   onCreateDraftFromBroken,
+  onDiscardDraft,
   drafted,
   actionError,
   actionNotice,
@@ -3753,6 +3808,7 @@ function PositionRow({
   onOpenLinked: (row: SaxoPositionReconciliationRow, anchorId?: string) => void;
   onCreateDraft: (position: SaxoApiPositionSnapshot) => void;
   onCreateDraftFromBroken: (position: SaxoApiPositionSnapshot) => void;
+  onDiscardDraft: (position: SaxoApiPositionSnapshot) => void;
   drafted: boolean;
   actionError?: string;
   actionNotice?: string;
@@ -3769,6 +3825,7 @@ function PositionRow({
   const isReviewCandidate = row.status === "quantity_diff" || row.status === "price_diff" || row.status === "unknown";
   const linkStatus = linkedResolution.status;
   const linkedNeedsEntryConfirmation = linkedResolution.status === "linked" ? needsOptionEntryConfirmation(linkedResolution.simulation) : true;
+  const draftSimulationName = linkedResolution.status === "draft" && linkedResolution.simulation ? linkedResolution.simulation.name : undefined;
   const canCreateDraft = Boolean(position && position.accountAssignment === "P" || position && position.accountAssignment === "N");
   const createDraftLabel = isNewCandidate ? "建玉入力へ下書き反映" : "新規建玉として下書き作成";
   const isPlannedCoveredCallLink = Boolean(
@@ -3829,6 +3886,26 @@ function PositionRow({
           <button className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700" onClick={() => onToggleDetails(position.id)}>
             <Eye size={13} />
             詳細を見る
+          </button>
+        </>
+      ) : linkStatus === "draft" ? (
+        <>
+          {linkedResolution.simulation ? (
+            <button
+              className="inline-flex items-center gap-1 rounded border border-amber-600 bg-amber-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-600"
+              onClick={() => onOpenLinked(row, "option-entry-executions")}
+            >
+              <FilePlus2 size={13} />
+              下書きを開いて3-Aで正式保存
+            </button>
+          ) : null}
+          <button className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700" onClick={() => onToggleDetails(position.id)}>
+            <Eye size={13} />
+            詳細を見る
+          </button>
+          <button className="inline-flex items-center gap-1 rounded border border-orange-300 px-2 py-1 text-xs font-bold text-orange-800" onClick={() => onDiscardDraft(position)}>
+            <RefreshCw size={13} />
+            下書き状態を解除して作り直す
           </button>
         </>
       ) : linkStatus === "broken" ? (
@@ -3907,10 +3984,12 @@ function PositionRow({
           詳細を見る
         </button>
       ) : null}
-      <button className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700" onClick={() => onIgnore(position)}>
-        <Ban size={13} />
-        今回は無視
-      </button>
+      {linkStatus !== "linked" && linkStatus !== "draft" ? (
+        <button className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700" onClick={() => onIgnore(position)}>
+          <Ban size={13} />
+          今回は無視
+        </button>
+      ) : null}
     </div>
   ) : (
     <div className="text-xs text-slate-500">Saxo建玉候補がないため操作できません。</div>
@@ -3927,9 +4006,11 @@ function PositionRow({
         <td className="numeric-input py-2 pr-3 text-right">{formatMaybeValue(position?.currentPrice ?? position?.currentOptionPrice, position?.currency)}</td>
         <td className="numeric-input py-2 pr-3 text-right">{formatMaybeValue(position?.unrealizedPnl, position?.unrealizedPnlCurrency)}</td>
         <td className="py-2 pr-3">
-          <span className={`rounded px-2 py-1 text-xs font-bold ${getMatchStatusClass(row.status)}`}>{getMatchStatusLabel(row.status)}</span>
+          <span className={`rounded px-2 py-1 text-xs font-bold ${getResolvedPositionStatusClass(linkedResolution, row.status)}`}>
+            {getResolvedPositionStatusLabel(linkedResolution, row.status)}
+          </span>
           <p className="mt-1 max-w-[280px] text-xs leading-5 text-slate-500">{row.detail}</p>
-          {row.simulation && position && linkStatus !== "linked" ? (
+          {row.simulation && position && linkStatus !== "linked" && linkStatus !== "draft" ? (
             <p className="mt-1 max-w-[280px] rounded bg-amber-50 px-2 py-1 text-xs leading-5 text-amber-800">
               既存建玉と一致候補があります。内容を確認して、既存建玉へ反映するか、新規下書きとして扱うか選んでください。
             </p>
@@ -3956,10 +4037,21 @@ function PositionRow({
               <div className="font-bold text-emerald-950">既存建玉と一致しています</div>
               <p className="mt-1">
                 このSaxo建玉は、すでにアプリ内の建玉に紐づいています。新規作成は不要です。
+                {linkedResolution.repaired ? "保存済みIDが古い状態だったため、安定属性で紐づけを自動修復しました。" : ""}
                 {linkedNeedsEntryConfirmation
                   ? "次に、既存建玉の約定確認を完了してください。"
                   : "建玉開始の約定確認は完了済みです。必要に応じて確認済みの3-Aを開けます。"}
               </p>
+            </div>
+          ) : null}
+          {linkStatus === "draft" ? (
+            <div className="mt-1 max-w-[340px] rounded border border-amber-200 bg-amber-50 px-2 py-2 text-xs leading-5 text-amber-900">
+              <div className="font-bold text-amber-950">下書き未正式保存</div>
+              <p className="mt-1">
+                {linkedResolution.reason}
+                {draftSimulationName ? ` 対象下書き: ${draftSimulationName}` : ""}
+              </p>
+              <p className="mt-1">新規下書きを重複作成せず、3-Aの下書きを開いて正式保存してください。</p>
             </div>
           ) : null}
           {linkStatus === "broken" ? (
@@ -4278,6 +4370,32 @@ function getMatchStatusLabel(status: SaxoPositionReconciliationRow["status"]): s
   }
 }
 
+function getResolvedPositionStatusLabel(resolution: LinkedSimulationResolution, fallbackStatus: SaxoPositionReconciliationRow["status"]): string {
+  switch (resolution.status) {
+    case "linked":
+      return "照合済み";
+    case "draft":
+      return "下書き未正式保存";
+    case "broken":
+      return "紐づけ切れ";
+    case "unlinked":
+      return getMatchStatusLabel(fallbackStatus);
+  }
+}
+
+function getResolvedPositionStatusClass(resolution: LinkedSimulationResolution, fallbackStatus: SaxoPositionReconciliationRow["status"]): string {
+  switch (resolution.status) {
+    case "linked":
+      return "bg-emerald-100 text-emerald-800";
+    case "draft":
+      return "bg-amber-100 text-amber-800";
+    case "broken":
+      return "bg-orange-100 text-orange-800";
+    case "unlinked":
+      return getMatchStatusClass(fallbackStatus);
+  }
+}
+
 function getMatchStatusClass(status: SaxoPositionReconciliationRow["status"]): string {
   switch (status) {
     case "matched":
@@ -4377,6 +4495,114 @@ function getPositionDraftCreatedMessage(position: SaxoApiPositionSnapshot, simul
   return hasSymbol
     ? "Saxo建玉候補から3-Aの下書きを作成しました。約定履歴で補完できる項目を確認し、最後に『確認して正式保存する』を押してください。"
     : "Saxo建玉候補から3-Aの下書きを作成しました。銘柄は未取得のため、建玉入力の1.銘柄・価格で銘柄ティッカーを入力し、3-Aで約定確認を完了してください。";
+}
+
+function findStableSavedSimulationForSaxoPosition(
+  position: SaxoApiPositionSnapshot,
+  simulations: TradeSimulation[],
+): { simulation: TradeSimulation; leg: OptionLeg } | undefined {
+  return findStableSaxoPositionSimulation(position, simulations, "saved");
+}
+
+function findStableDraftSimulationForSaxoPosition(
+  position: SaxoApiPositionSnapshot,
+  simulations: TradeSimulation[],
+): { simulation: TradeSimulation; leg: OptionLeg } | undefined {
+  return findStableSaxoPositionSimulation(position, simulations, "draft");
+}
+
+function findStableSaxoPositionSimulation(
+  position: SaxoApiPositionSnapshot,
+  simulations: TradeSimulation[],
+  targetState: "saved" | "draft",
+): { simulation: TradeSimulation; leg: OptionLeg } | undefined {
+  if (position.kind !== "option") return undefined;
+  if (position.accountAssignment !== "P" && position.accountAssignment !== "N") return undefined;
+  const targetSide = position.side === "short" ? "sell" : position.side === "long" ? "buy" : undefined;
+  if (!position.optionType || !targetSide) return undefined;
+  const resolvedSymbol = normalizeSaxoPanelSymbol(resolveSaxoPositionSymbol(position, simulations) ?? "");
+  const matches = simulations
+    .flatMap((simulation) =>
+      simulation.optionLegs.map((leg) => ({ simulation, leg })),
+    )
+    .filter(({ simulation, leg }) => {
+      if (targetState === "saved" && !isSaxoPositionFormallySaved(simulation)) return false;
+      if (targetState === "draft" && !isSaxoPositionDraftOrPendingSave(simulation)) return false;
+      if (simulation.status !== "planned" && simulation.status !== "open") return false;
+      if (simulation.accountCode !== position.accountAssignment) return false;
+      if (position.accountAssignment === "N" && simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT") return false;
+      if (position.accountAssignment === "P" && simulation.accountEnvironment !== "PROD_P_JPY_SETTLEMENT") return false;
+      if (position.optionType === "call" && targetSide === "sell" && simulation.strategyType !== "covered_call") return false;
+      if (resolvedSymbol && normalizeSaxoPanelSymbol(simulation.ticker) !== resolvedSymbol) return false;
+      if (leg.type !== position.optionType) return false;
+      if (leg.side !== targetSide) return false;
+      if (position.strike === undefined || Math.abs(leg.strikeUSD - position.strike) > 0.001) return false;
+      if (!position.expiry || normalizeSaxoPanelDate(leg.expiryDate) !== normalizeSaxoPanelDate(position.expiry)) return false;
+      if (position.quantity !== undefined && Math.abs(Math.abs(position.quantity) - leg.quantity) > 0.0001) return false;
+      return saxoPositionPriceMatches(position, simulation, leg);
+    })
+    .sort((left, right) => getStableSaxoPositionMatchScore(position, right) - getStableSaxoPositionMatchScore(position, left));
+  return matches[0];
+}
+
+function isSaxoPositionFormallySaved(simulation: TradeSimulation): boolean {
+  const notes = simulation.fixtureMeta?.notes ?? "";
+  return notes.includes("正式保存しました") || (simulation.optionEntryExecutions ?? []).some((execution) => execution.confirmed);
+}
+
+function isSaxoPositionDraftOrPendingSave(simulation: TradeSimulation): boolean {
+  if (isSaxoPositionFormallySaved(simulation)) return false;
+  const notes = simulation.fixtureMeta?.notes ?? "";
+  return (
+    simulation.id.startsWith("saxo-position-draft-") ||
+    simulation.name.includes("API取込下書き") ||
+    notes.includes("Saxo API read-onlyの現在建玉候補から作成した下書き") ||
+    (simulation.optionEntryExecutions ?? []).some(
+      (execution) => !execution.confirmed && (execution.saxoSourceType === "current_position" || execution.source === "saxo_api_estimate"),
+    )
+  );
+}
+
+function saxoPositionPriceMatches(position: SaxoApiPositionSnapshot, simulation: TradeSimulation, leg: OptionLeg): boolean {
+  const saxoPrice = position.premiumOpenPrice ?? position.currentOptionPrice;
+  if (saxoPrice === undefined || !Number.isFinite(saxoPrice) || saxoPrice <= 0) return true;
+  const appPrices = [
+    leg.premiumUSD,
+    ...(simulation.optionEntryExecutions ?? [])
+      .filter((execution) => execution.legId === leg.id)
+      .map((execution) => execution.fillPriceUSD),
+  ].filter((value): value is number => value !== undefined && Number.isFinite(value) && value > 0);
+  if (appPrices.length === 0) return true;
+  return appPrices.some((value) => Math.abs(value - saxoPrice) <= 0.025);
+}
+
+function getStableSaxoPositionMatchScore(
+  position: SaxoApiPositionSnapshot,
+  match: { simulation: TradeSimulation; leg: OptionLeg },
+): number {
+  let score = 0;
+  const saxoPrice = position.premiumOpenPrice ?? position.currentOptionPrice;
+  if (saxoPrice !== undefined && Number.isFinite(saxoPrice)) {
+    const prices = [
+      match.leg.premiumUSD,
+      ...(match.simulation.optionEntryExecutions ?? [])
+        .filter((execution) => execution.legId === match.leg.id)
+        .map((execution) => execution.fillPriceUSD),
+    ].filter((value): value is number => value !== undefined && Number.isFinite(value));
+    const bestDiff = Math.min(...prices.map((value) => Math.abs(value - saxoPrice)), Number.POSITIVE_INFINITY);
+    if (Number.isFinite(bestDiff)) score += Math.max(0, 20 - bestDiff * 100);
+  }
+  if (isSaxoPositionFormallySaved(match.simulation)) score += 50;
+  if ((match.simulation.optionEntryExecutions ?? []).some((execution) => execution.legId === match.leg.id)) score += 10;
+  return score;
+}
+
+function normalizeSaxoPanelSymbol(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9.]/g, "");
+}
+
+function normalizeSaxoPanelDate(value: string): string {
+  return value.replace(/\//g, "-").slice(0, 10);
 }
 
 function createHistoryReflectionStates(
