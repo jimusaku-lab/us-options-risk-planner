@@ -2771,6 +2771,7 @@ function PositionsPreview({
     (row) => row.position && getRecordedStockTransferForPosition(row.position, simulations, stockTransfers),
   );
   const regularRows = rows.filter((row) => !isNAccountStockPosition(row.position));
+  const actionRequiredRows = regularRows.length + pendingStockTransferRows.length;
   const draft = draftPosition ? createSaxoPositionDraftSummary(draftPosition, simulations) : null;
   return (
     <div className="rounded-md border border-slate-200 p-3">
@@ -2783,18 +2784,29 @@ function PositionsPreview({
         </div>
       </div>
       <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-5">
-        <StatChip label="取得件数" value={`${positions.length}件`} />
+        <StatChip label="今回Saxoから取得" value={`${positions.length}件`} />
+        <StatChip label="処理が必要" value={`${actionRequiredRows}件`} />
+        <StatChip label="照合済みの現在保有" value={`${recordedStockTransferRows.length}件`} />
         <StatChip label="P口座" value={`${assignedP}件`} />
         <StatChip label="N口座" value={`${assignedN}件`} />
-        <StatChip label="未割当" value={`${unassigned}件`} />
-        <StatChip label="P→N未処理候補" value={`${pendingStockTransferRows.length}件`} />
       </div>
+      {positions.length > 0 ? (
+        <p className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
+          {actionRequiredRows > 0
+            ? `今回処理が必要なのは、Saxoで約定済みまたは未反映の建玉${actionRequiredRows}件です。`
+            : "今回追加で反映が必要なSaxo建玉はありません。"}
+          {recordedStockTransferRows.length > 0
+            ? " N口座の現物株は、すでにホイール管理のN株式保有として照合済みです。新しく反映する必要はありません。"
+            : ""}
+        </p>
+      ) : null}
       {recordedStockTransferRows.length > 0 ? (
         <p className="mt-1 text-xs font-semibold text-teal-700">
           照合済みの現在保有確認: {recordedStockTransferRows.length}件。記録済みのN口座現物株は未処理のP→N移管候補には含めません。
         </p>
       ) : null}
-      {ignored > 0 ? <p className="mt-2 text-xs text-slate-500">使わない口座: {ignored}件</p> : null}
+      {unassigned > 0 ? <p className="mt-1 text-xs text-amber-700">未割当口座: {unassigned}件</p> : null}
+      {ignored > 0 ? <p className="mt-1 text-xs text-slate-500">使わない口座: {ignored}件</p> : null}
       <p className="mt-2 text-xs text-slate-500">最終取得: {fetchedAt ? new Date(fetchedAt).toLocaleString("ja-JP") : "未取得"}</p>
       {unassigned > 0 ? (
         <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
@@ -2804,7 +2816,7 @@ function PositionsPreview({
       <div className="mt-3 overflow-x-auto">
         {regularRows.length === 0 ? (
           <p className="text-sm text-slate-500">
-            {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : "通常のオプション建玉候補はありません。N口座の現物株候補は下の専用カードで確認してください。"}
+            {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : "通常のオプション建玉候補はありません。N口座の現物株確認は下の専用カードで確認してください。"}
           </p>
         ) : (
           <table className="min-w-full text-sm">
@@ -2931,10 +2943,10 @@ function NStockTransferCandidates({
     <div className="mt-3 rounded-md border border-teal-300 bg-teal-50 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h4 className="text-sm font-bold text-teal-950">N口座の現物株候補</h4>
+          <h4 className="text-sm font-bold text-teal-950">N口座の現物株確認</h4>
           <p className="mt-1 text-xs leading-5 text-teal-900">
-            SaxoではN口座に現物株が確認されました。P口座で権利行使取得した株式のN口座移管候補として確認します。
-            これは新規オプション建玉ではありません。3-Aには進みません。
+            SaxoではN口座に現物株が確認されました。これは新規オプション建玉ではありません。3-Aには進みません。
+            既にP→N移管済みの株式は照合済みの現在保有として扱い、追加反映は不要です。
           </p>
         </div>
         <span className="rounded bg-white px-2 py-1 text-xs font-bold text-teal-800">
@@ -2971,7 +2983,11 @@ function NStockTransferCandidates({
                   </div>
                   <p className="mt-1 text-xs leading-5 text-slate-600">
                     SaxoではN口座に{formatMaybeValue(getSaxoStockShares(position))}株があります。
-                    {hasAutoAssignmentCorrelation(position) ? " AutoAssignmentがあるため、P売り権利行使由来の移管候補として扱います。" : " 既存のP口座取得株と照合して移管候補として確認します。"}
+                    {recordedTransfer
+                      ? " すでにホイール管理のN株式保有として照合済みです。新しく反映する必要はありません。"
+                      : hasAutoAssignmentCorrelation(position)
+                        ? " AutoAssignmentがあるため、P売り権利行使由来の移管候補として扱います。"
+                        : " 既存のP口座取得株と照合して移管候補として確認します。"}
                   </p>
                 </div>
                 <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">
@@ -2986,7 +3002,9 @@ function NStockTransferCandidates({
               </div>
               {primaryMatch ? (
                 <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-900">
-                  <div className="font-bold">対応するP口座の権利行使済み建玉候補があります</div>
+                  <div className="font-bold">
+                    {recordedTransfer ? "対応するP口座の権利行使済み建玉と照合済みです" : "対応するP口座の権利行使済み建玉候補があります"}
+                  </div>
                   <div>
                     {primaryMatch.ticker} / {primaryMatch.stockAcquisition?.shares ?? primaryMatch.stockPosition?.shares ?? 0}株 @ {formatMaybeValue(primaryMatch.stockAcquisition?.priceUSD ?? primaryMatch.stockPosition?.averageCostUSD, "USD")}
                   </div>

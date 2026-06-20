@@ -1074,7 +1074,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                   約定確認を追加
                 </button>
               ) : null}
-              {optionEntryExecutions.length > 0 ? (
+              {optionEntryExecutions.some((execution) => !execution.confirmed) ? (
                 <button
                   className="rounded-md border border-emerald-300 bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
                   type="button"
@@ -1105,8 +1105,10 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           {entryExecutionsConfirmed && simulation.status === "open" ? (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-950">
               <div>
-                <div className="font-semibold">建玉開始の確認が完了しました。</div>
-                <div className="mt-1 text-xs text-sky-800">次は、途中決済を検討する場合は反対売買判断へ進みます。入力欄を閉じると俯瞰画面に戻れます。</div>
+                <div className="font-semibold">建玉開始は確認済みです。</div>
+                <div className="mt-1 text-xs text-sky-800">
+                  次は、必要に応じて反対売買判断へ進むか、入力欄を閉じて俯瞰へ戻ってください。
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -1173,14 +1175,19 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                       >
                         履歴候補を選ぶ
                       </button>
-                      <button
-                        className="rounded-md border border-emerald-300 bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-200 disabled:text-slate-500"
-                        type="button"
-                        disabled={execution.confirmed}
-                        onClick={() => confirmEntryExecutionAndMaybeDraft(execution.id)}
-                      >
-                        確認して正式保存する
-                      </button>
+                      {!execution.confirmed ? (
+                        <button
+                          className="rounded-md border border-emerald-300 bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-700"
+                          type="button"
+                          onClick={() => confirmEntryExecutionAndMaybeDraft(execution.id)}
+                        >
+                          確認して正式保存する
+                        </button>
+                      ) : (
+                        <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800">
+                          確認済み
+                        </span>
+                      )}
                       <button
                         className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-50"
                         type="button"
