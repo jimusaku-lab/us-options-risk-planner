@@ -59,6 +59,14 @@ export type YearlyPerformanceOptionBreakdown = {
   label: string;
   date: string;
   amountJPY: number;
+  amountUSD?: number;
+  referenceJPY?: number;
+  currency: "JPY" | "USD";
+  denominatorJPY?: number;
+  denominatorUSD?: number;
+  days?: number;
+  annualReturnPct?: number;
+  annualReturnMissingReason?: string;
 };
 
 export type YearlyPerformanceSummary = {
@@ -68,6 +76,10 @@ export type YearlyPerformanceSummary = {
   stockPnlJPY: number;
   nOptionPnlUSD: number;
   nReferencePnlJPY: number;
+  optionCapitalDaysJPY: number;
+  optionAnnualReturnPct?: number;
+  nOptionCapitalDaysUSD: number;
+  nOptionAnnualReturnPct?: number;
   optionCount: number;
   stockSettlementCount: number;
   nOptionCount: number;
@@ -88,7 +100,27 @@ type AggregationEvent = {
   amountUSD?: number;
   referenceJPY?: number;
   label?: string;
+  denominatorJPY?: number;
+  denominatorUSD?: number;
+  days?: number;
 };
+
+function calculateAnnualReturnPct(amount: number, denominator: number | undefined, days: number | undefined): number | undefined {
+  if (denominator === undefined || denominator <= 0 || days === undefined || days <= 0) return undefined;
+  return (amount / denominator / days) * 365 * 100;
+}
+
+function annualizeFromCapitalDays(amount: number, capitalDays: number): number | undefined {
+  if (capitalDays <= 0) return undefined;
+  return (amount / capitalDays) * 100;
+}
+
+function getMissingAnnualReturnReason(denominator: number | undefined, days: number | undefined): string | undefined {
+  if (denominator === undefined || denominator <= 0 || days === undefined || days <= 0) {
+    return "使用分母または日数が不足";
+  }
+  return undefined;
+}
 
 function isNAccount(accountEnvironment: AccountEnvironment): boolean {
   return accountEnvironment === "PROD_N_USD_SETTLEMENT";
@@ -265,6 +297,8 @@ export function calculateYearlyPerformanceSummary(
   let stockPnlJPY = 0;
   let nOptionPnlUSD = 0;
   let nReferencePnlJPY = 0;
+  let optionCapitalDaysJPY = 0;
+  let nOptionCapitalDaysUSD = 0;
   let optionCount = 0;
   let nOptionCount = 0;
   let stockSettlementCount = 0;
@@ -282,6 +316,37 @@ export function calculateYearlyPerformanceSummary(
       nOptionPnlUSD += event.amountUSD;
       nReferencePnlJPY += event.referenceJPY ?? 0;
       nOptionCount += 1;
+      if (event.denominatorUSD !== undefined && event.denominatorUSD > 0 && event.days !== undefined && event.days > 0) {
+        nOptionCapitalDaysUSD += (event.denominatorUSD * event.days) / 365;
+      }
+      const annualReturnMissingReason = getMissingAnnualReturnReason(event.denominatorUSD, event.days);
+      optionBreakdowns.push({
+        id: `${event.simulation.id}-${event.date}-n-${nOptionCount}`,
+        simulationId: event.simulation.id,
+        ticker,
+        label: event.label ?? "確認済みN口座オプション損益",
+        date: event.date,
+        amountJPY: 0,
+        amountUSD: event.amountUSD,
+        referenceJPY: event.referenceJPY,
+        currency: "USD",
+        denominatorUSD: event.denominatorUSD,
+        denominatorJPY: event.denominatorJPY,
+        days: event.days,
+        annualReturnPct: calculateAnnualReturnPct(event.amountUSD, event.denominatorUSD, event.days),
+        annualReturnMissingReason,
+      });
+      if (annualReturnMissingReason) {
+        issues.push({
+          id: `${event.simulation.id}-${event.date}-n-annual-missing`,
+          simulationId: event.simulation.id,
+          ticker,
+          label: "年率未計算",
+          detail: `${event.label ?? "N口座オプション損益"} の実績年率を計算できません。理由: ${annualReturnMissingReason}。`,
+          severity: "warning",
+          targetAnchor: "option-close-executions",
+        });
+      }
       row.nOptionUSD += event.amountUSD;
       row.nReferenceJPY += event.referenceJPY ?? 0;
       addTickerSummary(tickerMap, ticker, {
@@ -295,6 +360,10 @@ export function calculateYearlyPerformanceSummary(
     if (event.kind === "option") {
       optionPnlJPY += event.amountJPY;
       optionCount += 1;
+      if (event.denominatorJPY !== undefined && event.denominatorJPY > 0 && event.days !== undefined && event.days > 0) {
+        optionCapitalDaysJPY += (event.denominatorJPY * event.days) / 365;
+      }
+      const annualReturnMissingReason = getMissingAnnualReturnReason(event.denominatorJPY, event.days);
       optionBreakdowns.push({
         id: `${event.simulation.id}-${event.date}-${optionCount}`,
         simulationId: event.simulation.id,
@@ -302,7 +371,23 @@ export function calculateYearlyPerformanceSummary(
         label: event.label ?? "確認済みオプション損益",
         date: event.date,
         amountJPY: event.amountJPY,
+        currency: "JPY",
+        denominatorJPY: event.denominatorJPY,
+        days: event.days,
+        annualReturnPct: calculateAnnualReturnPct(event.amountJPY, event.denominatorJPY, event.days),
+        annualReturnMissingReason,
       });
+      if (annualReturnMissingReason) {
+        issues.push({
+          id: `${event.simulation.id}-${event.date}-${optionCount}-annual-missing`,
+          simulationId: event.simulation.id,
+          ticker,
+          label: "年率未計算",
+          detail: `${event.label ?? "オプション損益"} の実績年率を計算できません。理由: ${annualReturnMissingReason}。`,
+          severity: "warning",
+          targetAnchor: "option-close-executions",
+        });
+      }
       row.optionJPY += event.amountJPY;
       row.totalJPY += event.amountJPY;
       addTickerSummary(tickerMap, ticker, {
@@ -352,6 +437,9 @@ export function calculateYearlyPerformanceSummary(
             amountUSD: result.realizedPnlUSD,
             referenceJPY: result.realizedPnlJPY,
             label: "反対売買決済",
+            denominatorUSD: result.denominatorUSD,
+            denominatorJPY: result.denominatorJPY,
+            days: result.holdingDays,
           });
         } else {
           addEvent({
@@ -360,17 +448,26 @@ export function calculateYearlyPerformanceSummary(
             kind: "option",
             amountJPY: result.realizedPnlJPY,
             label: "反対売買決済",
+            denominatorJPY: result.denominatorJPY,
+            days: result.holdingDays,
           });
         }
       });
 
     if (hasConfirmedAssignedShortPutPremium(simulation)) {
+      const assignedPut = getShortPutLegs(simulation)[0];
+      const fx = simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
+      const shares = assignedPut ? Math.abs(assignedPut.quantity) * 100 : simulation.stockAcquisition?.shares;
+      const denominatorJPY =
+        assignedPut && shares && fx > 0 ? assignedPut.strikeUSD * shares * fx : undefined;
       addEvent({
         simulation,
         date: getAssignedShortPutPremiumDate(simulation),
         kind: "option",
         amountJPY: calculateNetInitialPremiumJPY(simulation),
         label: "P売り権利行使プレミアム",
+        denominatorJPY,
+        days: simulation.dte > 0 ? simulation.dte : undefined,
       });
     }
 
@@ -401,6 +498,10 @@ export function calculateYearlyPerformanceSummary(
     stockPnlJPY,
     nOptionPnlUSD,
     nReferencePnlJPY,
+    optionCapitalDaysJPY,
+    optionAnnualReturnPct: annualizeFromCapitalDays(optionPnlJPY, optionCapitalDaysJPY),
+    nOptionCapitalDaysUSD,
+    nOptionAnnualReturnPct: annualizeFromCapitalDays(nOptionPnlUSD, nOptionCapitalDaysUSD),
     optionCount,
     stockSettlementCount,
     nOptionCount,

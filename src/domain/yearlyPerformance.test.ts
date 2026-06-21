@@ -202,6 +202,10 @@ describe("yearly performance summary", () => {
     expect(summary.optionPnlJPY).toBe(0);
     expect(summary.nOptionPnlUSD).toBe(100);
     expect(summary.nReferencePnlJPY).toBe(15_000);
+    expect(summary.optionAnnualReturnPct).toBeUndefined();
+    expect(summary.nOptionAnnualReturnPct).toBeDefined();
+    expect(summary.optionBreakdowns[0].currency).toBe("USD");
+    expect(summary.optionBreakdowns[0].amountUSD).toBe(100);
   });
 
   it("aggregates monthly results by realization date", () => {
@@ -282,5 +286,29 @@ describe("yearly performance summary", () => {
     expect(summary.optionCount).toBe(2);
     expect(summary.monthly[5].optionJPY).toBe(34_283);
     expect(summary.tickerSummaries.find((item) => item.ticker === "NVDA")?.optionJPY).toBe(34_283);
+    expect(summary.optionAnnualReturnPct).toBeDefined();
+    expect(summary.optionCapitalDaysJPY).toBeGreaterThan(0);
+    const annualizedFromCapitalDays = (summary.optionPnlJPY / summary.optionCapitalDaysJPY) * 100;
+    expect(summary.optionAnnualReturnPct).toBeCloseTo(annualizedFromCapitalDays, 6);
+    const individualAverage =
+      summary.optionBreakdowns.reduce((sum, item) => sum + (item.annualReturnPct ?? 0), 0) /
+      summary.optionBreakdowns.length;
+    expect(summary.optionAnnualReturnPct).not.toBeCloseTo(individualAverage, 6);
+    expect(summary.optionBreakdowns.every((item) => item.annualReturnPct !== undefined)).toBe(true);
+  });
+
+  it("marks annual return as uncalculated when denominator or days are missing", () => {
+    const summary = calculateYearlyPerformanceSummary([
+      assignedPutSimulation({
+        fxRateJPY: 0,
+        referenceFxRateJPY: undefined,
+      }),
+    ], 2026);
+
+    expect(summary.optionPnlJPY).toBe(18_792);
+    expect(summary.optionAnnualReturnPct).toBeUndefined();
+    expect(summary.optionBreakdowns[0].annualReturnPct).toBeUndefined();
+    expect(summary.optionBreakdowns[0].annualReturnMissingReason).toBe("使用分母または日数が不足");
+    expect(summary.issues.some((issue) => issue.label === "年率未計算")).toBe(true);
   });
 });

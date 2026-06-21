@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import { AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import type { YearlyPerformanceIssue, YearlyPerformanceSummary } from "@/domain/yearlyPerformance";
-import { formatJPY, formatUSD } from "@/lib/format";
+import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 
 export function YearlyPerformanceSummaryCard({
   summary,
@@ -66,7 +66,7 @@ export function YearlyPerformanceSummaryCard({
         ) : null}
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         <MetricCard
           label="当年実現損益合計"
           value={formatJPY(summary.realizedPnlJPY, { signed: true })}
@@ -80,6 +80,16 @@ export function YearlyPerformanceSummaryCard({
           tone={summary.optionPnlJPY >= 0 ? "green" : "red"}
         />
         <MetricCard
+          label="実績年率（年利換算）"
+          value={summary.optionAnnualReturnPct !== undefined ? formatPct(summary.optionAnnualReturnPct) : "年率未計算"}
+          subLabel={
+            summary.optionAnnualReturnPct !== undefined
+              ? "P/DEMOオプションの資金日数加重"
+              : "理由: 使用分母または日数が不足"
+          }
+          tone={summary.optionAnnualReturnPct === undefined ? "amber" : summary.optionAnnualReturnPct >= 0 ? "green" : "red"}
+        />
+        <MetricCard
           label="株式譲渡損益"
           value={formatJPY(summary.stockPnlJPY, { signed: true })}
           subLabel={`${summary.stockSettlementCount}件`}
@@ -88,7 +98,11 @@ export function YearlyPerformanceSummaryCard({
         <MetricCard
           label="N口座USD損益"
           value={formatUSD(summary.nOptionPnlUSD)}
-          subLabel={hasNUsd ? `参考 ${formatJPY(summary.nReferencePnlJPY, { signed: true })}` : "USD主帳簿 / JPYは参考"}
+          subLabel={
+            hasNUsd
+              ? `実績年率 ${summary.nOptionAnnualReturnPct !== undefined ? formatPct(summary.nOptionAnnualReturnPct) : "未計算"} / 参考 ${formatJPY(summary.nReferencePnlJPY, { signed: true })}`
+              : "USD主帳簿 / JPYは参考"
+          }
           tone={summary.nOptionPnlUSD >= 0 ? "green" : "red"}
         />
         <MetricCard
@@ -113,6 +127,27 @@ export function YearlyPerformanceSummaryCard({
                   <span className="numeric-input font-bold text-emerald-700">{formatJPY(item.amountJPY, { signed: true })}</span>
                 </div>
                 <div className="mt-1 text-xs text-slate-500">{item.date}</div>
+                <div className="mt-2 rounded-md bg-slate-50 px-2 py-1 text-xs leading-5 text-slate-600">
+                  {item.currency === "USD" ? (
+                    <>
+                      実現損益: {formatUSD(item.amountUSD ?? 0)}
+                      {item.referenceJPY !== undefined ? ` / 参考 ${formatJPY(item.referenceJPY, { signed: true })}` : ""}
+                      <br />
+                      使用分母: {item.denominatorUSD !== undefined && item.denominatorUSD > 0 ? formatUSD(item.denominatorUSD) : "未入力"} / 日数: {item.days ? `${formatNumber(item.days)}日` : "未入力"} / 実績年率:{" "}
+                      {item.annualReturnPct !== undefined ? formatPct(item.annualReturnPct) : "年率未計算"}
+                    </>
+                  ) : (
+                    <>
+                      実現損益: {formatJPY(item.amountJPY, { signed: true })}
+                      <br />
+                      使用分母: {item.denominatorJPY !== undefined && item.denominatorJPY > 0 ? formatJPY(item.denominatorJPY) : "未入力"} / 日数: {item.days ? `${formatNumber(item.days)}日` : "未入力"} / 実績年率:{" "}
+                      {item.annualReturnPct !== undefined ? formatPct(item.annualReturnPct) : "年率未計算"}
+                    </>
+                  )}
+                  {item.annualReturnMissingReason ? (
+                    <div className="mt-1 font-semibold text-amber-700">理由: {item.annualReturnMissingReason}</div>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
