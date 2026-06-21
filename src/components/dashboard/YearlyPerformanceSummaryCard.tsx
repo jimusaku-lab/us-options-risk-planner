@@ -30,6 +30,8 @@ export function YearlyPerformanceSummaryCard({
   const [isOpen, setIsOpen] = useState(false);
   const showDetails = detailsMode === "always" || isOpen;
   const hasNUsd = Math.abs(summary.nOptionPnlUSD) > 0.0001 || summary.nOptionCount > 0;
+  const optionAnnualReturnTargetLabel = `年率計算対象 ${summary.optionAnnualReturnIncludedCount}/${summary.optionCount}件`;
+  const nOptionAnnualReturnTargetLabel = `年率計算対象 ${summary.nOptionAnnualReturnIncludedCount}/${summary.nOptionCount}件`;
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -84,8 +86,10 @@ export function YearlyPerformanceSummaryCard({
           value={summary.optionAnnualReturnPct !== undefined ? formatPct(summary.optionAnnualReturnPct) : "年率未計算"}
           subLabel={
             summary.optionAnnualReturnPct !== undefined
-              ? "P/DEMOオプションの資金日数加重"
-              : "理由: 使用分母または日数が不足"
+              ? `${optionAnnualReturnTargetLabel} / 資金日数加重`
+              : summary.annualReturnMissingCount > 0
+                ? `年率未計算 ${summary.annualReturnMissingCount}件。内訳で不足項目を確認してください。`
+                : "年率計算対象なし"
           }
           tone={summary.optionAnnualReturnPct === undefined ? "amber" : summary.optionAnnualReturnPct >= 0 ? "green" : "red"}
         />
@@ -100,15 +104,15 @@ export function YearlyPerformanceSummaryCard({
           value={formatUSD(summary.nOptionPnlUSD)}
           subLabel={
             hasNUsd
-              ? `実績年率 ${summary.nOptionAnnualReturnPct !== undefined ? formatPct(summary.nOptionAnnualReturnPct) : "未計算"} / 参考 ${formatJPY(summary.nReferencePnlJPY, { signed: true })}`
+              ? `実績年率 ${summary.nOptionAnnualReturnPct !== undefined ? formatPct(summary.nOptionAnnualReturnPct) : "未計算"} / ${nOptionAnnualReturnTargetLabel} / 参考 ${formatJPY(summary.nReferencePnlJPY, { signed: true })}`
               : "USD主帳簿 / JPYは参考"
           }
           tone={summary.nOptionPnlUSD >= 0 ? "green" : "red"}
         />
         <MetricCard
-          label="未確認・未入力"
+          label="確認が必要"
           value={`${summary.unconfirmedCount}件`}
-          subLabel="下書き・結果状態の不足"
+          subLabel={`取引未確認 ${summary.transactionUnconfirmedCount}件 / 年率未計算 ${summary.annualReturnMissingCount}件`}
           tone={summary.unconfirmedCount > 0 ? "amber" : "slate"}
         />
       </div>
@@ -242,7 +246,7 @@ export function YearlyPerformanceSummaryCard({
           </div>
 
           <section className="rounded-md border border-slate-200 p-3">
-            <h3 className="text-sm font-bold text-slate-950">未確認・未入力リスト</h3>
+            <h3 className="text-sm font-bold text-slate-950">確認が必要な項目</h3>
             {summary.issues.length > 0 ? (
               <div className="mt-3 grid gap-2">
                 {summary.issues.map((issue) => (
@@ -265,7 +269,7 @@ export function YearlyPerformanceSummaryCard({
               </div>
             ) : (
               <p className="mt-3 rounded-md bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">
-                未確認・未入力の結果記録はありません。
+                取引未確認や年率計算情報不足はありません。
               </p>
             )}
           </section>

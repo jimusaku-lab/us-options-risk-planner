@@ -284,11 +284,13 @@ describe("yearly performance summary", () => {
     expect(summary.stockPnlJPY).toBe(0);
     expect(summary.stockSettlementCount).toBe(0);
     expect(summary.optionCount).toBe(2);
+    expect(summary.optionAnnualReturnIncludedCount).toBe(2);
+    expect(summary.optionAnnualReturnExcludedCount).toBe(0);
     expect(summary.monthly[5].optionJPY).toBe(34_283);
     expect(summary.tickerSummaries.find((item) => item.ticker === "NVDA")?.optionJPY).toBe(34_283);
     expect(summary.optionAnnualReturnPct).toBeDefined();
     expect(summary.optionCapitalDaysJPY).toBeGreaterThan(0);
-    const annualizedFromCapitalDays = (summary.optionPnlJPY / summary.optionCapitalDaysJPY) * 100;
+    const annualizedFromCapitalDays = (summary.optionAnnualReturnProfitJPY / summary.optionCapitalDaysJPY) * 100;
     expect(summary.optionAnnualReturnPct).toBeCloseTo(annualizedFromCapitalDays, 6);
     const individualAverage =
       summary.optionBreakdowns.reduce((sum, item) => sum + (item.annualReturnPct ?? 0), 0) /
@@ -297,18 +299,114 @@ describe("yearly performance summary", () => {
     expect(summary.optionBreakdowns.every((item) => item.annualReturnPct !== undefined)).toBe(true);
   });
 
+  it("uses only calculable events for the aggregate annual return", () => {
+    const summary = calculateYearlyPerformanceSummary([
+      closedPutSimulation({
+        id: "closed-200p",
+        ticker: "NVDA",
+        accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+        accountCode: "P",
+        accountCurrency: "JPY",
+        optionCloseExecutions: [
+          {
+            id: "close-200p",
+            legId: "put-test",
+            closeKind: "buyback",
+            confirmed: true,
+            closeDate: "2026-06-02",
+            contracts: 1,
+            closePriceUSD: 0.13,
+            commissionUSD: 0,
+            settlementCurrency: "JPY",
+            brokerRealizedPnlJPY: 15_491,
+            source: "manual",
+          },
+        ],
+      }),
+      assignedPutSimulation({
+        fxRateJPY: 0,
+        referenceFxRateJPY: undefined,
+        optionEntryExecutions: [
+          {
+            id: "entry-2075-no-fx",
+            legId: "put-2075",
+            tradeDate: "2026-06-02",
+            contracts: 1,
+            fillPriceUSD: 1.21,
+            settlementCurrency: "JPY",
+            brokerBookedAmountJPY: 18_792,
+            source: "broker_statement",
+            confirmed: true,
+          },
+        ],
+      }),
+    ], 2026);
+
+    expect(summary.optionPnlJPY).toBe(34_283);
+    expect(summary.optionAnnualReturnIncludedCount).toBe(1);
+    expect(summary.optionAnnualReturnExcludedCount).toBe(1);
+    expect(summary.optionAnnualReturnProfitJPY).toBe(15_491);
+    expect(summary.optionAnnualReturnPct).toBeCloseTo((15_491 / summary.optionCapitalDaysJPY) * 100, 6);
+    expect(summary.annualReturnMissingCount).toBe(1);
+    expect(summary.transactionUnconfirmedCount).toBe(0);
+    expect(summary.optionBreakdowns.find((item) => item.label === "P売り権利行使プレミアム")?.annualReturnMissingReason).toBe("USD/JPYが未取得");
+    expect(summary.issues.some((issue) => issue.detail === "この権利行使プレミアムはUSD/JPYが未取得のため年率を計算できません。")).toBe(true);
+  });
+
+  it("calculates assigned short put denominator from Saxo entry execution fx", () => {
+    const summary = calculateYearlyPerformanceSummary([
+      assignedPutSimulation({
+        fxRateJPY: 0,
+        referenceFxRateJPY: undefined,
+        optionEntryExecutions: [
+          {
+            id: "entry-2075-fx",
+            legId: "put-2075",
+            tradeDate: "2026-06-02",
+            contracts: 1,
+            fillPriceUSD: 1.21,
+            settlementCurrency: "JPY",
+            brokerExchangeRateJPY: 160.16,
+            brokerBookedAmountJPY: 18_792,
+            brokerPremiumJPY: 18_792,
+            source: "broker_statement",
+            confirmed: true,
+          },
+        ],
+      }),
+    ], 2026);
+
+    expect(summary.optionBreakdowns[0].denominatorJPY).toBeCloseTo(207.5 * 100 * 160.16, 2);
+    expect(summary.optionBreakdowns[0].annualReturnPct).toBeDefined();
+    expect(summary.optionAnnualReturnIncludedCount).toBe(1);
+    expect(summary.optionAnnualReturnExcludedCount).toBe(0);
+  });
+
   it("marks annual return as uncalculated when denominator or days are missing", () => {
     const summary = calculateYearlyPerformanceSummary([
       assignedPutSimulation({
         fxRateJPY: 0,
         referenceFxRateJPY: undefined,
+        optionEntryExecutions: [
+          {
+            id: "entry-2075-no-fx",
+            legId: "put-2075",
+            tradeDate: "2026-06-02",
+            contracts: 1,
+            fillPriceUSD: 1.21,
+            settlementCurrency: "JPY",
+            brokerBookedAmountJPY: 18_792,
+            source: "broker_statement",
+            confirmed: true,
+          },
+        ],
       }),
     ], 2026);
 
     expect(summary.optionPnlJPY).toBe(18_792);
     expect(summary.optionAnnualReturnPct).toBeUndefined();
     expect(summary.optionBreakdowns[0].annualReturnPct).toBeUndefined();
-    expect(summary.optionBreakdowns[0].annualReturnMissingReason).toBe("使用分母または日数が不足");
+    expect(summary.optionBreakdowns[0].annualReturnMissingReason).toBe("USD/JPYが未取得");
     expect(summary.issues.some((issue) => issue.label === "年率未計算")).toBe(true);
   });
 });

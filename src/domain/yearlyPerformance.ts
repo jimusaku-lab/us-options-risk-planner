@@ -77,13 +77,21 @@ export type YearlyPerformanceSummary = {
   nOptionPnlUSD: number;
   nReferencePnlJPY: number;
   optionCapitalDaysJPY: number;
+  optionAnnualReturnProfitJPY: number;
+  optionAnnualReturnIncludedCount: number;
+  optionAnnualReturnExcludedCount: number;
   optionAnnualReturnPct?: number;
   nOptionCapitalDaysUSD: number;
+  nOptionAnnualReturnProfitUSD: number;
+  nOptionAnnualReturnIncludedCount: number;
+  nOptionAnnualReturnExcludedCount: number;
   nOptionAnnualReturnPct?: number;
   optionCount: number;
   stockSettlementCount: number;
   nOptionCount: number;
   unconfirmedCount: number;
+  transactionUnconfirmedCount: number;
+  annualReturnMissingCount: number;
   monthly: YearlyPerformanceMonthlyRow[];
   taxBuckets: YearlyPerformanceTaxBucket[];
   tickerSummaries: YearlyPerformanceTickerSummary[];
@@ -102,7 +110,9 @@ type AggregationEvent = {
   label?: string;
   denominatorJPY?: number;
   denominatorUSD?: number;
+  denominatorMissingReason?: string;
   days?: number;
+  annualReturnIssueTarget?: YearlyPerformanceIssueTarget;
 };
 
 function calculateAnnualReturnPct(amount: number, denominator: number | undefined, days: number | undefined): number | undefined {
@@ -115,9 +125,34 @@ function annualizeFromCapitalDays(amount: number, capitalDays: number): number |
   return (amount / capitalDays) * 100;
 }
 
-function getMissingAnnualReturnReason(denominator: number | undefined, days: number | undefined): string | undefined {
-  if (denominator === undefined || denominator <= 0 || days === undefined || days <= 0) {
-    return "使用分母または日数が不足";
+function isPositiveFinite(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value) && value > 0;
+}
+
+function getMissingAnnualReturnReason(event: Pick<AggregationEvent, "denominatorJPY" | "denominatorUSD" | "denominatorMissingReason" | "days">): string | undefined {
+  const denominator = event.denominatorUSD ?? event.denominatorJPY;
+  const reasons: string[] = [];
+  if (!isPositiveFinite(denominator)) reasons.push(event.denominatorMissingReason ?? "使用分母が不足");
+  if (!isPositiveFinite(event.days)) reasons.push("日数が不足");
+  return reasons.length > 0 ? reasons.join(" / ") : undefined;
+}
+
+function getPositiveFx(...values: Array<number | undefined>): number | undefined {
+  return values.find(isPositiveFinite);
+}
+
+function getAssignedShortPutFxRate(simulation: TradeSimulation): number | undefined {
+  const directFx = getPositiveFx(simulation.referenceFxRateJPY, simulation.fxRateJPY);
+  if (directFx) return directFx;
+  const entryExecutions = simulation.optionEntryExecutions ?? [];
+  for (const execution of entryExecutions) {
+    const executionFx = getPositiveFx(execution.brokerExchangeRateJPY, execution.referenceFxRateJPY);
+    if (executionFx) return executionFx;
+  }
+  for (const execution of entryExecutions) {
+    const premiumUSD = Math.abs((execution.fillPriceUSD ?? 0) * 100 * Math.max(1, execution.contracts || 1));
+    const premiumJPY = Math.abs(execution.brokerPremiumJPY ?? 0);
+    if (premiumUSD > 0 && premiumJPY > 0) return premiumJPY / premiumUSD;
   }
   return undefined;
 }
@@ -298,7 +333,13 @@ export function calculateYearlyPerformanceSummary(
   let nOptionPnlUSD = 0;
   let nReferencePnlJPY = 0;
   let optionCapitalDaysJPY = 0;
+  let optionAnnualReturnProfitJPY = 0;
+  let optionAnnualReturnIncludedCount = 0;
+  let optionAnnualReturnExcludedCount = 0;
   let nOptionCapitalDaysUSD = 0;
+  let nOptionAnnualReturnProfitUSD = 0;
+  let nOptionAnnualReturnIncludedCount = 0;
+  let nOptionAnnualReturnExcludedCount = 0;
   let optionCount = 0;
   let nOptionCount = 0;
   let stockSettlementCount = 0;
@@ -318,8 +359,12 @@ export function calculateYearlyPerformanceSummary(
       nOptionCount += 1;
       if (event.denominatorUSD !== undefined && event.denominatorUSD > 0 && event.days !== undefined && event.days > 0) {
         nOptionCapitalDaysUSD += (event.denominatorUSD * event.days) / 365;
+        nOptionAnnualReturnProfitUSD += event.amountUSD;
+        nOptionAnnualReturnIncludedCount += 1;
+      } else {
+        nOptionAnnualReturnExcludedCount += 1;
       }
-      const annualReturnMissingReason = getMissingAnnualReturnReason(event.denominatorUSD, event.days);
+      const annualReturnMissingReason = getMissingAnnualReturnReason(event);
       optionBreakdowns.push({
         id: `${event.simulation.id}-${event.date}-n-${nOptionCount}`,
         simulationId: event.simulation.id,
@@ -344,7 +389,7 @@ export function calculateYearlyPerformanceSummary(
           label: "年率未計算",
           detail: `${event.label ?? "N口座オプション損益"} の実績年率を計算できません。理由: ${annualReturnMissingReason}。`,
           severity: "warning",
-          targetAnchor: "option-close-executions",
+          targetAnchor: event.annualReturnIssueTarget ?? "option-close-executions",
         });
       }
       row.nOptionUSD += event.amountUSD;
@@ -362,8 +407,12 @@ export function calculateYearlyPerformanceSummary(
       optionCount += 1;
       if (event.denominatorJPY !== undefined && event.denominatorJPY > 0 && event.days !== undefined && event.days > 0) {
         optionCapitalDaysJPY += (event.denominatorJPY * event.days) / 365;
+        optionAnnualReturnProfitJPY += event.amountJPY;
+        optionAnnualReturnIncludedCount += 1;
+      } else {
+        optionAnnualReturnExcludedCount += 1;
       }
-      const annualReturnMissingReason = getMissingAnnualReturnReason(event.denominatorJPY, event.days);
+      const annualReturnMissingReason = getMissingAnnualReturnReason(event);
       optionBreakdowns.push({
         id: `${event.simulation.id}-${event.date}-${optionCount}`,
         simulationId: event.simulation.id,
@@ -378,14 +427,18 @@ export function calculateYearlyPerformanceSummary(
         annualReturnMissingReason,
       });
       if (annualReturnMissingReason) {
+        const detail =
+          annualReturnMissingReason === "USD/JPYが未取得"
+            ? "この権利行使プレミアムはUSD/JPYが未取得のため年率を計算できません。"
+            : `${event.label ?? "オプション損益"} の実績年率を計算できません。理由: ${annualReturnMissingReason}。`;
         issues.push({
           id: `${event.simulation.id}-${event.date}-${optionCount}-annual-missing`,
           simulationId: event.simulation.id,
           ticker,
           label: "年率未計算",
-          detail: `${event.label ?? "オプション損益"} の実績年率を計算できません。理由: ${annualReturnMissingReason}。`,
+          detail,
           severity: "warning",
-          targetAnchor: "option-close-executions",
+          targetAnchor: event.annualReturnIssueTarget ?? "option-close-executions",
         });
       }
       row.optionJPY += event.amountJPY;
@@ -456,10 +509,12 @@ export function calculateYearlyPerformanceSummary(
 
     if (hasConfirmedAssignedShortPutPremium(simulation)) {
       const assignedPut = getShortPutLegs(simulation)[0];
-      const fx = simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
+      const fx = getAssignedShortPutFxRate(simulation);
       const shares = assignedPut ? Math.abs(assignedPut.quantity) * 100 : simulation.stockAcquisition?.shares;
       const denominatorJPY =
-        assignedPut && shares && fx > 0 ? assignedPut.strikeUSD * shares * fx : undefined;
+        assignedPut && shares && fx && fx > 0 ? assignedPut.strikeUSD * shares * fx : undefined;
+      const denominatorMissingReason =
+        assignedPut && shares && (!fx || fx <= 0) ? "USD/JPYが未取得" : undefined;
       addEvent({
         simulation,
         date: getAssignedShortPutPremiumDate(simulation),
@@ -467,7 +522,9 @@ export function calculateYearlyPerformanceSummary(
         amountJPY: calculateNetInitialPremiumJPY(simulation),
         label: "P売り権利行使プレミアム",
         denominatorJPY,
+        denominatorMissingReason,
         days: simulation.dte > 0 ? simulation.dte : undefined,
+        annualReturnIssueTarget: "stock-acquisition-record",
       });
     }
 
@@ -499,13 +556,21 @@ export function calculateYearlyPerformanceSummary(
     nOptionPnlUSD,
     nReferencePnlJPY,
     optionCapitalDaysJPY,
-    optionAnnualReturnPct: annualizeFromCapitalDays(optionPnlJPY, optionCapitalDaysJPY),
+    optionAnnualReturnProfitJPY,
+    optionAnnualReturnIncludedCount,
+    optionAnnualReturnExcludedCount,
+    optionAnnualReturnPct: annualizeFromCapitalDays(optionAnnualReturnProfitJPY, optionCapitalDaysJPY),
     nOptionCapitalDaysUSD,
-    nOptionAnnualReturnPct: annualizeFromCapitalDays(nOptionPnlUSD, nOptionCapitalDaysUSD),
+    nOptionAnnualReturnProfitUSD,
+    nOptionAnnualReturnIncludedCount,
+    nOptionAnnualReturnExcludedCount,
+    nOptionAnnualReturnPct: annualizeFromCapitalDays(nOptionAnnualReturnProfitUSD, nOptionCapitalDaysUSD),
     optionCount,
     stockSettlementCount,
     nOptionCount,
     unconfirmedCount: issues.length,
+    transactionUnconfirmedCount: issues.filter((issue) => issue.label !== "年率未計算").length,
+    annualReturnMissingCount: issues.filter((issue) => issue.label === "年率未計算").length,
     monthly,
     taxBuckets: [
       {
