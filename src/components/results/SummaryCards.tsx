@@ -23,6 +23,10 @@ type SummaryCardsProps = {
   stockHoldingMode?: boolean;
   denominatorFormula?: string;
   stockTransfer?: StockTransferEvent;
+  hidePutAssignmentCard?: boolean;
+  statusCardTitle?: string;
+  okStatusValue?: string;
+  okStatusNote?: string;
 };
 
 export function SummaryCards({
@@ -37,6 +41,10 @@ export function SummaryCards({
   stockHoldingMode = false,
   denominatorFormula,
   stockTransfer,
+  hidePutAssignmentCard = false,
+  statusCardTitle,
+  okStatusValue,
+  okStatusNote,
 }: SummaryCardsProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
   const usePremiumDisplay = !historyMode && premiumDisplay.basis !== "history";
@@ -177,7 +185,7 @@ export function SummaryCards({
           },
         ]
       : []),
-    ...(!historyMode
+    ...(!historyMode && !hidePutAssignmentCard && (putAssignmentJPY > 0 || putAssignmentUSD > 0)
       ? [
           {
             title: "P権利行使時の追加買付資金",
@@ -187,12 +195,14 @@ export function SummaryCards({
         ]
       : []),
     {
-      title: historyMode ? "状態確認" : "最大注意点",
-      value: historyMode ? statusCardValue : blockingCount > 0 ? `${blockingCount}件NG` : "注文前NGなし",
+      title: historyMode ? "状態確認" : statusCardTitle ?? "最大注意点",
+      value: historyMode ? statusCardValue : blockingCount > 0 ? `${blockingCount}件NG` : okStatusValue ?? "注文前NGなし",
       note: historyMode
         ? statusCardNote
         : primaryWarning
           ? primaryWarning.message
+          : okStatusNote
+            ? okStatusNote
           : isN
             ? `チケット証拠金 ${formatUSD(simulation.brokerMarginUSD ?? 0)} / 使用証拠金 ${formatUSD(usedMarginUSD)}`
             : `チケット証拠金 ${formatJPY(simulation.brokerMarginJPY)} / 使用証拠金 ${formatJPY(usedMarginJPY)}`,

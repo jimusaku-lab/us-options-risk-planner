@@ -18,6 +18,7 @@ import { createSimulationFromCandidate } from "@/domain/candidateConversion";
 import { calculateYearlyPerformanceSummary } from "@/domain/yearlyPerformance";
 import { getStatusLabel } from "@/domain/strategyLabels";
 import { calculateStockHoldingEvaluation, type StockHoldingEvaluation } from "@/domain/stockHoldingEvaluation";
+import { getShortCallLegs } from "@/domain/calculations";
 import { CandidatePanel } from "@/components/candidates/CandidatePanel";
 import { AccountOverview } from "@/components/dashboard/AccountOverview";
 import { Dashboard } from "@/components/dashboard/Dashboard";
@@ -76,6 +77,7 @@ export default function App() {
   const [performanceYear, setPerformanceYear] = useState(() => Number(formatLocalDate().slice(0, 4)));
   const [activeView, setActiveView] = useState<"positions" | "performance">("positions");
   const [dashboardHistoryOpen, setDashboardHistoryOpen] = useState(false);
+  const [coveredCallReferenceOpen, setCoveredCallReferenceOpen] = useState(false);
   const [saxoOrderCandidates, setSaxoOrderCandidates] = useState<SaxoApiOrderSnapshot[]>([]);
   const [saxoPositionCandidates, setSaxoPositionCandidates] = useState<SaxoApiPositionSnapshot[]>([]);
   const [saxoHistoryCandidates, setSaxoHistoryCandidates] = useState<SaxoHistoryDiscoveryItem[]>([]);
@@ -1331,6 +1333,15 @@ export default function App() {
     primaryWithNet,
   );
   const orderPrepCoveredCallMode = selected.status === "planned" && selected.strategyType === "covered_call";
+  const openCoveredCallShortCalls = getShortCallLegs(selectedWithAccount);
+  const openCoveredCallManagementMode =
+    selectedWithAccount.strategyType === "covered_call" &&
+    selectedWithAccount.status === "open" &&
+    openCoveredCallShortCalls.length > 0 &&
+    selectedCoveredCallCoverage.requiredShares > 0 &&
+    selectedCoveredCallCoverage.coveredShares >= selectedCoveredCallCoverage.requiredShares &&
+    selectedCoveredCallCoverage.missingShares === 0;
+  const compactCoveredCallMode = orderPrepCoveredCallMode || openCoveredCallManagementMode;
 
   return (
     <main className="min-h-screen bg-slate-100 text-slate-950">
@@ -1392,10 +1403,29 @@ export default function App() {
                 payoff={payoff}
               />
             ) : null}
+            {openCoveredCallManagementMode ? (
+              <CoveredCallOpenManagementPanel
+                simulation={selectedWithAccount}
+                coverage={selectedCoveredCallCoverage}
+                onOpenCloseDecision={() => {
+                  setCoveredCallReferenceOpen(true);
+                  const shortCall = openCoveredCallShortCalls[0];
+                  setCloseDecisionFocusRequest({
+                    anchorId: shortCall ? `close-decision-call-${shortCall.id}` : "close-decision",
+                    requestId: Date.now(),
+                  });
+                  window.setTimeout(() => {
+                    document.getElementById("covered-call-reference-info")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }, 50);
+                }}
+                onOpenNStock={() => openWheelManagement(selectedWithAccount.ticker)}
+                onDownloadJson={downloadJson}
+              />
+            ) : null}
             <CollapsibleSection
-              title={orderPrepCoveredCallMode ? "Saxo API詳細" : undefined}
-              subtitle={orderPrepCoveredCallMode ? "API接続・取得・反映待ちは必要時だけ確認します。" : undefined}
-              collapsed={orderPrepCoveredCallMode}
+              title={compactCoveredCallMode ? "Saxo API詳細" : undefined}
+              subtitle={compactCoveredCallMode ? "API接続・取得・反映待ちは必要時だけ確認します。" : undefined}
+              collapsed={compactCoveredCallMode}
             >
               <SaxoReadOnlyPanel
                 workspace={activeWorkspace}
@@ -1429,9 +1459,9 @@ export default function App() {
               />
             ) : null}
             <CollapsibleSection
-              title={orderPrepCoveredCallMode ? "口座全体の余力・証拠金詳細" : undefined}
-              subtitle={orderPrepCoveredCallMode ? "注文判断カードを確認した後、必要な場合だけ口座全体を確認します。" : undefined}
-              collapsed={orderPrepCoveredCallMode}
+              title={compactCoveredCallMode ? "口座全体の余力・証拠金詳細" : undefined}
+              subtitle={compactCoveredCallMode ? "主要カードを確認した後、必要な場合だけ口座全体を確認します。" : undefined}
+              collapsed={compactCoveredCallMode}
             >
               <AccountOverview
                 workspace={activeWorkspace}
@@ -1505,8 +1535,20 @@ export default function App() {
             ) : null}
             {!historyResultMode || showSelectedHistoryDetails ? (
               <CollapsibleSection
-                title={orderPrepCoveredCallMode ? "予定値サマリー詳細" : undefined}
-                subtitle={orderPrepCoveredCallMode ? "上部の注文判断カードと同じ予定値を、従来形式で確認します。" : undefined}
+                title={
+                  orderPrepCoveredCallMode
+                    ? "予定値サマリー詳細"
+                    : openCoveredCallManagementMode
+                      ? "建玉中カバードコールの主要指標"
+                      : undefined
+                }
+                subtitle={
+                  orderPrepCoveredCallMode
+                    ? "上部の注文判断カードと同じ予定値を、従来形式で確認します。"
+                    : openCoveredCallManagementMode
+                      ? "受取プレミアム、使用分母、プレミアム年率、権利行使時想定を確認します。"
+                      : undefined
+                }
                 collapsed={orderPrepCoveredCallMode}
               >
                 <SummaryCards
@@ -1521,6 +1563,14 @@ export default function App() {
                   stockHoldingMode={assignedPutStockHoldingMode}
                   denominatorFormula={assignedPutDenominatorFormula}
                   stockTransfer={selectedStockTransfer}
+                  hidePutAssignmentCard={openCoveredCallManagementMode || orderPrepCoveredCallMode}
+                  statusCardTitle={openCoveredCallManagementMode ? "カバー状態" : undefined}
+                  okStatusValue={openCoveredCallManagementMode ? "カバー済み" : undefined}
+                  okStatusNote={
+                    openCoveredCallManagementMode
+                      ? `N口座${selectedCoveredCallCoverage.coveredShares}株を参照しています。必要株数 ${selectedCoveredCallCoverage.requiredShares}株。`
+                      : undefined
+                  }
                 />
               </CollapsibleSection>
             ) : null}
@@ -1583,6 +1633,51 @@ export default function App() {
                   <DenominatorChart denominators={denominators} />
                 </CollapsibleSection>
               </>
+            ) : !historyResultMode && openCoveredCallManagementMode ? (
+              <>
+                <PayoffChart simulation={selectedWithAccount} points={payoff} />
+                <CollapsibleSection
+                  title="参考情報"
+                  subtitle="税務、シナリオ、分母比較、反対売買判断などは必要時だけ確認します。"
+                  collapsed
+                  open={coveredCallReferenceOpen}
+                  onOpenChange={setCoveredCallReferenceOpen}
+                >
+                  <div id="covered-call-reference-info" className="grid gap-4">
+                    <CloseDecisionCard
+                      simulation={selected}
+                      saxoOrderCandidates={saxoOrderCandidates}
+                      onChange={upsertSimulation}
+                      focusRequest={closeDecisionFocusRequest}
+                      onExecutionDraft={() => {
+                        setIsEditorOpen(true);
+                        setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
+                      }}
+                    />
+                    <RiskPanel warnings={warnings} checklist={[]} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                    <DenominatorTable
+                      denominators={denominators}
+                      collapsible
+                      defaultOpen={false}
+                      title="分母比較"
+                      subtitle="建玉中カバードコールでは、主表示はN口座保有株の取得原価ベースです。必要時だけ比較します。"
+                    />
+                    <AnnualReturnFormula
+                      simulation={selectedWithAccount}
+                      primaryDenominator={primaryWithNet}
+                      taxResult={taxResult}
+                    />
+                    <TaxComparisonCard
+                      taxResult={taxResult}
+                      nisaComparison={nisaComparison}
+                      stockSettlementTax={stockSettlementTax}
+                      taxBucketSummary={taxBucketSummary}
+                    />
+                    <ScenarioCards scenarios={scenarios} />
+                    <DenominatorChart denominators={denominators} />
+                  </div>
+                </CollapsibleSection>
+              </>
             ) : !historyResultMode ? (
               <>
                 <DenominatorTable denominators={denominators} />
@@ -1617,9 +1712,9 @@ export default function App() {
             ) : null}
             {activeWorkspace === "live" ? (
               <CollapsibleSection
-                title={orderPrepCoveredCallMode ? "ホイール管理詳細" : undefined}
-                subtitle={orderPrepCoveredCallMode ? "注文前の主判断後、ホイール状態を確認する場合に開きます。" : undefined}
-                collapsed={orderPrepCoveredCallMode}
+                title={compactCoveredCallMode ? "ホイール管理詳細" : undefined}
+                subtitle={compactCoveredCallMode ? "主判断後、ホイール状態を確認する場合に開きます。" : undefined}
+                collapsed={compactCoveredCallMode}
               >
                 <WheelPanel
                   cycles={wheelCycles}
@@ -1648,16 +1743,24 @@ function CollapsibleSection({
   title,
   subtitle,
   collapsed,
+  open,
+  onOpenChange,
   children,
 }: {
   title?: string;
   subtitle?: string;
   collapsed?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
   if (!collapsed || !title) return <>{children}</>;
   return (
-    <details className="rounded-lg border border-slate-200 bg-white shadow-sm">
+    <details
+      className="rounded-lg border border-slate-200 bg-white shadow-sm"
+      open={open}
+      onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
+    >
       <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-900">
         {title}
         {subtitle ? <span className="ml-2 font-normal text-slate-500">{subtitle}</span> : null}
@@ -1783,6 +1886,94 @@ function CoveredCallOrderPrepPanel({
           ))}
         </div>
       </section>
+    </section>
+  );
+}
+
+function CoveredCallOpenManagementPanel({
+  simulation,
+  coverage,
+  onOpenCloseDecision,
+  onOpenNStock,
+  onDownloadJson,
+}: {
+  simulation: TradeSimulation;
+  coverage: ReturnType<typeof resolveEffectiveCoveredCallSimulation>["coverage"];
+  onOpenCloseDecision: () => void;
+  onOpenNStock: () => void;
+  onDownloadJson: () => void;
+}) {
+  const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
+  const callLeg = getShortCallLegs(simulation)[0];
+  const assignment = premiumDisplay.coveredCallAssignmentEstimate;
+  const strike = callLeg?.strikeUSD ?? 0;
+  const currentPrice = simulation.currentPriceUSD;
+  const nearStrike = strike > 0 && currentPrice > 0 && currentPrice >= strike * 0.97;
+  const aboveStrike = strike > 0 && currentPrice >= strike;
+  const nextAction = aboveStrike
+    ? "株価が権利行使価格以上です。権利行使される可能性があります。株を渡してよいか確認し、残したい場合は反対売買判断へ進みます。"
+    : nearStrike
+      ? "株価が権利行使価格付近です。満期前まで監視し、株を残したくなったら反対売買判断へ進みます。"
+      : "満期前まで監視します。株を残したくなったら反対売買判断へ進みます。";
+
+  return (
+    <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-bold uppercase tracking-wide text-emerald-700">建玉中カバードコール管理モード</div>
+          <h2 className="mt-1 text-lg font-bold text-slate-950">
+            N口座で{simulation.ticker} {coverage.coveredShares}株保有、{callLeg ? `C${formatNumber(callLeg.strikeUSD)}を${callLeg.quantity}枚売り中` : "C売り建玉中"}です。
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-emerald-950">
+            カバー済み: N口座{coverage.coveredShares}株を参照しています。必要株数 {coverage.requiredShares}株。
+          </p>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-emerald-800 ring-1 ring-emerald-200">建玉中 / カバー済み</span>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <DecisionMetric
+          label="受取プレミアム"
+          value={formatUSD(premiumDisplay.premiumUSD)}
+          note={premiumDisplay.effectiveFxRateJPY ? `参考 ${formatJPY(premiumDisplay.premiumJPY)}` : "N口座USD主計算。参考JPY未計算。"}
+        />
+        <DecisionMetric
+          label="満期日 / 残日数"
+          value={callLeg ? callLeg.expiryDate : simulation.expiryDate}
+          note={`${premiumDisplay.dte}日換算。満期前に株価と意向を確認します。`}
+        />
+        <DecisionMetric
+          label="権利行使価格"
+          value={callLeg ? formatUSD(callLeg.strikeUSD) : "未入力"}
+          note={simulation.currentPriceUSD > 0 ? `現在株価 ${formatUSD(simulation.currentPriceUSD)}` : "現在株価未取得"}
+        />
+        <DecisionMetric
+          label="プレミアム年率"
+          value={premiumDisplay.annualReturnPct !== undefined ? formatPct(premiumDisplay.annualReturnPct) : "未計算"}
+          note={premiumDisplay.netAnnualReturnPct !== undefined ? `手数料後 ${formatPct(premiumDisplay.netAnnualReturnPct)}` : "N口座保有株の取得原価ベース"}
+        />
+        <DecisionMetric label="使用分母" value={assignment ? formatUSD(assignment.costBasisDenominatorUSD) : "未計算"} note="N口座保有株の取得原価ベースです。" />
+        <DecisionMetric label="権利行使時想定益" value={assignment ? formatUSD(assignment.totalWithPremiumUSD) : "未計算"} note={assignment ? `手数料後 ${formatUSD(assignment.totalAfterFeesUSD)}` : "C売り条件を確認"} />
+        <DecisionMetric
+          label="権利行使時想定年率"
+          value={assignment?.annualReturnPct !== undefined ? formatPct(assignment.annualReturnPct) : "未計算"}
+          note={assignment?.netAnnualReturnPct !== undefined ? `手数料後 ${formatPct(assignment.netAnnualReturnPct)}。実績には含めません。` : "実績には含めません。"}
+        />
+        <DecisionMetric label="カバー状態" value="カバー済み" note={`N口座${coverage.coveredShares}株 / 必要${coverage.requiredShares}株。`} />
+      </div>
+      <div className="mt-4 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm leading-6 text-amber-950">
+        <span className="font-bold">次にやること: </span>{nextAction}
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button type="button" className="rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800" onClick={onOpenCloseDecision}>
+          反対売買判断へ
+        </button>
+        <button type="button" className="rounded-md border border-emerald-300 bg-white px-4 py-2 text-sm font-bold text-emerald-800 hover:bg-emerald-100" onClick={onOpenNStock}>
+          N口座保有株を確認
+        </button>
+        <button type="button" className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50" onClick={onDownloadJson}>
+          JSONバックアップ
+        </button>
+      </div>
     </section>
   );
 }
