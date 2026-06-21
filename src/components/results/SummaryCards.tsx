@@ -39,7 +39,7 @@ export function SummaryCards({
   stockTransfer,
 }: SummaryCardsProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
-  const usePremiumDisplay = !historyMode && (premiumDisplay.basis === "planned" || premiumDisplay.basis === "open_unconfirmed");
+  const usePremiumDisplay = !historyMode && premiumDisplay.basis !== "history";
   const premiumJPY = usePremiumDisplay ? premiumDisplay.premiumJPY : calculateNetInitialPremiumJPY(simulation);
   const premiumUSD = usePremiumDisplay ? premiumDisplay.premiumUSD : calculateNetInitialPremiumUSD(simulation);
   const putAssignmentJPY = calculatePutAssignmentCapitalTotalJPY(simulation);

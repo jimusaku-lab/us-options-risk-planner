@@ -4,7 +4,7 @@ import { calculatePendingAccountCashEffects, createAccountCashAdjustment } from 
 import type { PendingAccountCashEffect } from "@/domain/accountCashEffects";
 import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
-import { applyCoveredCallCoverageToSimulation, resolveCoveredCallCoverage } from "@/domain/coveredCallCoverage";
+import { resolveEffectiveCoveredCallSimulation } from "@/domain/coveredCallCoverage";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { createOptionCloseExecutionDraft, sanitizeSaxoHistoryCloseExecutions } from "@/domain/optionCloseExecutions";
 import { createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
@@ -1266,8 +1266,7 @@ export default function App() {
         ? accountInputs.N.marginUsagePercent
         : accountInputs.P.marginUsagePercent,
   };
-  const selectedCoveredCallCoverage = resolveCoveredCallCoverage(selectedWithAccountBase, { wheelCycles, stockTransfers });
-  const selectedWithAccount = applyCoveredCallCoverageToSimulation(selectedWithAccountBase, selectedCoveredCallCoverage);
+  const { simulation: selectedWithAccount, coverage: selectedCoveredCallCoverage } = resolveEffectiveCoveredCallSimulation(selectedWithAccountBase, { wheelCycles, stockTransfers });
   const historyPerformance = calculateHistoryPerformance(selectedWithAccount);
   const historyResultMode = historyPerformance.historyResultMode;
   const showSelectedHistoryDetails = historyResultMode && dashboardHistoryOpen;

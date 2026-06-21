@@ -15,6 +15,26 @@ function hasAvoidPut(simulation: TradeSimulation): boolean {
   return isAvoidAssignmentPut(simulation);
 }
 
+function getCoverageDiagnosticMessage(
+  simulation: TradeSimulation,
+  uncoveredCallShares: number,
+  coverage?: CoveredCallCoverageResolution,
+): string {
+  if (!coverage) {
+    return simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+      ? `N口座の保有株だけで確認します。未カバー株数は${uncoveredCallShares}株です。P口座株や未移管株はN口座のカバーに使いません。`
+      : `このC売りは完全にはカバーされていません。C売り対象株数と保有株数を分けて確認してください。未カバー株数は${uncoveredCallShares}株です。`;
+  }
+  const wheelCycleLabel = coverage.wheelCycleId ?? "該当なし";
+  const stockTransferLabel = coverage.stockTransferIds?.length ? coverage.stockTransferIds.join(", ") : "該当なし";
+  return [
+    `必要株数 ${coverage.requiredShares}株 / 検出できたN口座株数 ${coverage.coveredShares}株 / 未カバー ${coverage.missingShares}株。`,
+    `参照したホイールサイクルID: ${wheelCycleLabel}。`,
+    `参照した移管記録ID: ${stockTransferLabel}。`,
+    `銘柄 ${simulation.ticker}、N口座、currentPhase が n_stock_holding / n_covered_call、またはP→N移管済み記録だけをカバー候補にします。`,
+  ].join(" ");
+}
+
 function closeDecisionAction(simulation: TradeSimulation, leg: OptionLeg): Pick<RiskWarning, "actionAnchorId" | "actionLabel" | "actionLegId" | "actionLegType" | "actionSimulationId"> {
   return {
     actionLabel: "反対売買判断へ",
@@ -131,12 +151,15 @@ export function generateRiskWarnings(
   }
 
   if (!Number.isFinite(simulation.fxRateJPY) || simulation.fxRateJPY <= 0) {
+    const isNUsdAccount = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
     warnings.push({
       id: "missing-fx-rate",
-      severity: "danger",
-      title: "為替レートが未入力です",
-      message: "円換算のプレミアム、使用分母、年率はUSD/JPYが0だとすべて0円になります。上部の為替ボタン、または入力欄の取得ボタンでUSD/JPYを入れてください。",
-      blocking: true,
+      severity: isNUsdAccount ? "info" : "danger",
+      title: isNUsdAccount ? "参考JPY換算が未入力です" : "為替レートが未入力です",
+      message: isNUsdAccount
+        ? "N口座の本体計算はUSDで行います。USD/JPYが未入力の場合、参考JPYだけ0円表示になります。"
+        : "円換算のプレミアム、使用分母、年率はUSD/JPYが0だとすべて0円になります。上部の為替ボタン、または入力欄の取得ボタンでUSD/JPYを入れてください。",
+      blocking: !isNUsdAccount,
     });
   }
 
@@ -165,10 +188,7 @@ export function generateRiskWarnings(
       id: simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "n-covered-call-share-shortage" : "uncovered-call",
       severity: "danger",
       title: simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "N口座カバードコールの株数が不足しています" : "裸コール部分があります",
-      message:
-        simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
-          ? `N口座の保有株だけで確認します。未カバー株数は${uncoveredCallShares}株です。P口座株や未移管株はN口座のカバーに使いません。`
-          : `このC売りは完全にはカバーされていません。C売り対象株数と保有株数を分けて確認してください。未カバー株数は${uncoveredCallShares}株です。`,
+      message: getCoverageDiagnosticMessage(simulation, uncoveredCallShares, options.coveredCallCoverage),
       blocking: simulation.beginnerMode ?? true,
       ...(firstCall ? closeDecisionAction(simulation, firstCall) : {}),
     });
@@ -181,9 +201,9 @@ export function generateRiskWarnings(
   ) {
     warnings.push({
       id: "n-covered-call-link-needed",
-      severity: "warning",
-      title: "N口座保有株との紐づけ確認が必要です",
-      message: `N口座で${simulation.ticker} ${options.coveredCallCoverage.coveredShares}株を保有しています。このC売り${Math.ceil(options.coveredCallCoverage.requiredShares / 100)}枚をN口座保有株に紐づけるとカバードコールとして確認できます。`,
+      severity: "info",
+      title: "カバー済み: N口座保有株を参照しています",
+      message: `N口座で${simulation.ticker || "対象銘柄"} ${options.coveredCallCoverage.coveredShares}株を保有しています。このC売り${Math.ceil(options.coveredCallCoverage.requiredShares / 100)}枚はN口座保有株をカバー根拠として確認できます。`,
       blocking: false,
       actionLabel: "N口座保有株に紐づける",
       actionSimulationId: simulation.id,

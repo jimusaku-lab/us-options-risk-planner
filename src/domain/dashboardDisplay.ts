@@ -133,6 +133,12 @@ function calculateCoveredCallAssignmentEstimate(params: {
   };
 }
 
+function calculateNAccountStockDenominatorUSD(simulation: TradeSimulation): number | undefined {
+  if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT") return undefined;
+  if (!simulation.stockPosition?.shares || simulation.stockPosition.averageCostUSD <= 0) return undefined;
+  return simulation.stockPosition.shares * simulation.stockPosition.averageCostUSD;
+}
+
 function calculatePlannedPremiumDisplay(
   simulation: TradeSimulation,
   basis: "planned" | "open_unconfirmed",
@@ -150,11 +156,7 @@ function calculatePlannedPremiumDisplay(
   const feeJPY = calculateManualFeeJPY(simulation);
   const netAfterFeesUSD = premiumUSD - feeUSD;
   const netAfterFeesJPY = premiumJPY - feeJPY;
-  const denominatorUSD = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
-    ? simulation.stockPosition?.shares && simulation.stockPosition.averageCostUSD > 0
-      ? simulation.stockPosition.shares * simulation.stockPosition.averageCostUSD
-      : undefined
-    : undefined;
+  const denominatorUSD = calculateNAccountStockDenominatorUSD(simulation);
   const denominatorJPY = simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT"
     ? simulation.customDenominatorJPY ?? 0
     : undefined;
@@ -226,13 +228,27 @@ export function calculateDashboardPremiumDisplay(simulation: TradeSimulation): D
     simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
       ? calculateNetInitialPremiumUSD(simulation)
       : premiumJPY / (getFxRateOrZero(simulation) || 1);
+  const dte = getDisplayDte(simulation);
+  const denominatorUSD = calculateNAccountStockDenominatorUSD(simulation);
+  const annualReturnPct =
+    simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" && denominatorUSD && denominatorUSD > 0
+      ? calculateAnnualReturnPercentByCurrency({ netProfit: premiumUSD, denominator: denominatorUSD, dte })
+      : undefined;
   return {
     basis: "confirmed",
     label: "建玉時プレミアム",
     hasPremiumInput: true,
     effectiveFxRateJPY: getEffectiveFxRateJPY(simulation),
-    dte: getDisplayDte(simulation),
+    dte,
     premiumJPY,
     premiumUSD,
+    annualReturnPct,
+    coveredCallAssignmentEstimate: calculateCoveredCallAssignmentEstimate({
+      simulation,
+      premiumUSD,
+      netAfterFeesUSD: premiumUSD,
+      denominatorUSD,
+      dte,
+    }),
   };
 }

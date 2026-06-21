@@ -4,7 +4,7 @@ import { Fragment } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
-import { applyCoveredCallCoverageToSimulation, resolveCoveredCallCoverage } from "@/domain/coveredCallCoverage";
+import { resolveEffectiveCoveredCallSimulation } from "@/domain/coveredCallCoverage";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
@@ -124,8 +124,10 @@ export function Dashboard({
                     ? accountInputs.N.marginUsagePercent
                     : accountInputs.P.marginUsagePercent,
               };
-              const coveredCallCoverage = resolveCoveredCallCoverage(simulationWithAccountBase, { wheelCycles, stockTransfers });
-              const simulationWithAccount = applyCoveredCallCoverageToSimulation(simulationWithAccountBase, coveredCallCoverage);
+              const { simulation: simulationWithAccount, coverage: coveredCallCoverage } = resolveEffectiveCoveredCallSimulation(
+                simulationWithAccountBase,
+                { wheelCycles, stockTransfers },
+              );
               const isHistoryRow = endedStatuses.has(simulation.status);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);

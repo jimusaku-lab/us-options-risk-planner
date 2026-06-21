@@ -152,4 +152,50 @@ describe("dashboard premium display", () => {
     expect(display.coveredCallAssignmentEstimate?.annualReturnPct).toBeCloseTo(253.5, 1);
     expect(display.coveredCallAssignmentEstimate?.netAnnualReturnPct).toBeCloseTo(253.4, 1);
   });
+
+  it("calculates confirmed N covered call annual return in USD without requiring JPY reference FX", () => {
+    const simulation = createPlannedCoveredCall({
+      status: "open",
+      entryDate: "2026-06-18",
+      expiryDate: "2026-07-10",
+      dte: 0,
+      fxRateJPY: 0,
+      referenceFxRateJPY: 0,
+      optionLegs: [
+        {
+          id: "call-leg",
+          type: "call",
+          side: "sell",
+          strikeUSD: 225,
+          premiumUSD: 1.83,
+          quantity: 1,
+          expiryDate: "2026-07-10",
+          isCovered: true,
+        },
+      ],
+      optionEntryExecutions: [
+        {
+          id: "confirmed-entry",
+          legId: "call-leg",
+          tradeDate: "2026-06-18",
+          contracts: 1,
+          fillPriceUSD: 1.83,
+          settlementCurrency: "USD",
+          commissionUSD: 2.25,
+          inputMode: "USD_EXECUTION_CALC",
+          source: "saxo_api_estimate",
+          confirmed: true,
+        },
+      ],
+    });
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(display.basis).toBe("confirmed");
+    expect(display.dte).toBe(22);
+    expect(display.premiumUSD).toBeCloseTo(180.75, 8);
+    expect(display.annualReturnPct).toBeGreaterThan(0);
+    expect(display.coveredCallAssignmentEstimate?.costBasisDenominatorUSD).toBeCloseTo(20_750, 8);
+    expect(display.coveredCallAssignmentEstimate?.annualReturnPct).toBeGreaterThan(0);
+  });
 });
