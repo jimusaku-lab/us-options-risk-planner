@@ -280,6 +280,23 @@ describe("covered call coverage resolution", () => {
     expect(payoffSummary.breakevens[0].label).toBe("保有株込みの損益分岐点");
   });
 
+  it("uses stock average cost for the dashboard primary denominator when current price is missing", () => {
+    const simulation = createNAccountCoveredCall({
+      currentPriceUSD: 0,
+      fxRateJPY: 0,
+      referenceFxRateJPY: 0,
+      stockPosition: {
+        shares: 100,
+        averageCostUSD: 207.5,
+        denominatorPriceMode: "current_price",
+      },
+    });
+    const primaryDenominator = getPrimaryDenominator(calculateDenominators(simulation, 0));
+
+    expect(calculateStockDenominatorForSimulationUSD(simulation)).toBeCloseTo(20_750, 8);
+    expect(primaryDenominator.amountUSD).toBeCloseTo(20_750, 8);
+  });
+
   it("uses the only N wheel holding when the covered call ticker is not yet captured", () => {
     const simulation = createNAccountCoveredCall({
       ticker: "",

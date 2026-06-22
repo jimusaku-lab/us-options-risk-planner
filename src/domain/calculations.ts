@@ -70,11 +70,20 @@ export function getSelectedStockDenominatorPriceUSD(
   currentPriceUSD: number,
 ): number {
   if (!stockPosition) return 0;
-  if (stockPosition.denominatorPriceMode === "average_cost") return stockPosition.averageCostUSD;
+  const currentPrice = Number.isFinite(currentPriceUSD) && currentPriceUSD > 0 ? currentPriceUSD : 0;
+  const averageCost =
+    Number.isFinite(stockPosition.averageCostUSD) && stockPosition.averageCostUSD > 0 ? stockPosition.averageCostUSD : 0;
+  const customPrice =
+    stockPosition.customDenominatorPriceUSD !== undefined &&
+    Number.isFinite(stockPosition.customDenominatorPriceUSD) &&
+    stockPosition.customDenominatorPriceUSD > 0
+      ? stockPosition.customDenominatorPriceUSD
+      : 0;
+  if (stockPosition.denominatorPriceMode === "average_cost") return averageCost || currentPrice;
   if (stockPosition.denominatorPriceMode === "custom") {
-    return stockPosition.customDenominatorPriceUSD ?? currentPriceUSD;
+    return customPrice || averageCost || currentPrice;
   }
-  return currentPriceUSD;
+  return currentPrice || averageCost;
 }
 
 export function getShortOptionLegs(simulation: TradeSimulation): OptionLeg[] {
