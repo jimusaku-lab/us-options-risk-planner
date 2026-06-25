@@ -54,7 +54,7 @@ npm run dev:saxo-api
 OAuth redirect URIは以下です。Saxo Developer Portalのアプリ設定に登録してください。
 
 ```text
-http://127.0.0.1:18787/api/saxo/auth/callback
+http://localhost:18787/api/saxo/auth/callback
 ```
 
 保存しない情報:

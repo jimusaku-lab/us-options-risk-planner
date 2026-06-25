@@ -19,7 +19,7 @@ const LOCAL_UI_RETURN_URL =
   process.env.SAXO_LOCAL_UI_ORIGIN ??
   "http://127.0.0.1:5173/";
 const PUBLIC_GITHUB_PAGES_ORIGIN = "https://jimusaku-lab.github.io";
-const EXPECTED_REDIRECT_URI = `http://${HOST}:${PORT}/api/saxo/auth/callback`;
+const EXPECTED_REDIRECT_URI = `http://localhost:${PORT}/api/saxo/auth/callback`;
 const KEYCHAIN_SERVICE = "us-options-risk-planner-saxo-readonly";
 const KEYCHAIN_STORAGE_LABEL = "macOS Keychain";
 

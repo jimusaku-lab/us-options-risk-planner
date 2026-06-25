@@ -16,7 +16,7 @@ Saxo OpenAPIを使うには、Saxo Developer PortalでOpenAPI applicationを作�
 このアプリで使うRedirect URI:
 
 ```text
-http://127.0.0.1:18787/api/saxo/auth/callback
+http://localhost:18787/api/saxo/auth/callback
 ```
 
 ## 2. 似ている情報の違い
@@ -194,7 +194,7 @@ Saxo API接続を使う場合だけ、Saxoとの通信を担当するPC側補助
 2. Saxo Developer Portalに入る手順を案内してください。
 3. OpenAPI applicationを作る手順を案内してください。
 4. Redirect URIとして次を登録するよう案内してください。
-   http://127.0.0.1:18787/api/saxo/auth/callback
+   http://localhost:18787/api/saxo/auth/callback
 5. LIVE AppKey（Client ID）を確認する手順を案内してください。
 6. PC側補助ツールの準備に必要なNode.js/npm、.env.local、起動コマンドの手順を、Mac/Windows別に案内してください。
 7. ローカルAPI起動後、次の成功ログが出ているか確認するよう案内してください。

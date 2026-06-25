@@ -630,7 +630,7 @@ export function SaxoReadOnlyPanel({
   }
 
   async function copyRedirectUri() {
-    const redirectUri = status?.redirectUri ?? configStatus?.redirectUri ?? "http://127.0.0.1:18787/api/saxo/auth/callback";
+    const redirectUri = status?.redirectUri ?? configStatus?.redirectUri ?? "http://localhost:18787/api/saxo/auth/callback";
     try {
       await navigator.clipboard.writeText(redirectUri);
       setMessage("redirect URIをコピーしました。");
@@ -678,7 +678,7 @@ export function SaxoReadOnlyPanel({
       "2. Saxo Developer Portalに入る手順を案内してください。",
       "3. OpenAPI applicationを作る手順を案内してください。",
       "4. Redirect URIとして次を登録するよう案内してください。",
-      "   http://127.0.0.1:18787/api/saxo/auth/callback",
+      "   http://localhost:18787/api/saxo/auth/callback",
       "5. LIVE AppKey（Client ID）を確認する手順を案内してください。",
       "6. PC側補助ツールの準備に必要なNode.js/npm、.env.local、起動コマンドの手順を、Mac/Windows別に案内してください。",
       "7. ローカルAPI起動後、次の成功ログが出ているか確認するよう案内してください。",
@@ -1837,7 +1837,7 @@ function SaxoApiOnboardingSection({
           </div>
         )}
         <p className="mt-3 text-xs font-semibold text-sky-800">
-          Redirect URI: <code className="rounded bg-sky-50 px-1 py-0.5">http://127.0.0.1:18787/api/saxo/auth/callback</code>
+          Redirect URI: <code className="rounded bg-sky-50 px-1 py-0.5">http://localhost:18787/api/saxo/auth/callback</code>
         </p>
         <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700">
           <div className="font-bold text-slate-900">.env.local について</div>
@@ -2245,7 +2245,7 @@ function SaxoDiagnostics({
         <StatusRow label="access token期限" value={formatDateTime(status?.tokenExpiresAt)} />
         <StatusRow label="接続維持" value={formatPersistenceState(status)} />
         <StatusRow label="保存先" value={status?.tokenPersistence?.storage ?? "macOS Keychain"} />
-        <StatusRow label="redirect URI" value={status?.redirectUri ?? "http://127.0.0.1:18787/api/saxo/auth/callback"} />
+        <StatusRow label="redirect URI" value={status?.redirectUri ?? "http://localhost:18787/api/saxo/auth/callback"} />
         <StatusRow label="UI許可元" value={configStatus?.localUiAllowedOrigin ?? "未取得"} />
         <StatusRow label="OAuth後の戻り先" value={configStatus?.localUiReturnUrl ?? "未取得"} />
       </dl>
@@ -2254,7 +2254,7 @@ function SaxoDiagnostics({
         GitHub PagesはSaxoへ直接接続せず、Client ID、OAuth token、口座データ、JSONバックアップを保存しません。
       </div>
       <ReadOnlyStorageNotice status={status} />
-      <SetupGuidanceBox guidance={setupGuidance} redirectUri={status?.redirectUri ?? "http://127.0.0.1:18787/api/saxo/auth/callback"} />
+      <SetupGuidanceBox guidance={setupGuidance} redirectUri={status?.redirectUri ?? "http://localhost:18787/api/saxo/auth/callback"} />
       {connectionState === "local_api_down" ? (
         <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700">
           <div className="font-bold text-slate-900">詳細起動コマンド</div>
@@ -2538,7 +2538,7 @@ function ConnectionSetupSection({
   onCopyRedirectUri: () => void;
   onSave: () => void;
 }) {
-  const redirectUri = configStatus?.redirectUri ?? "http://127.0.0.1:18787/api/saxo/auth/callback";
+  const redirectUri = configStatus?.redirectUri ?? "http://localhost:18787/api/saxo/auth/callback";
   const appKeyWarning = getLiveAppKeyInputWarning(clientId);
   return (
     <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
