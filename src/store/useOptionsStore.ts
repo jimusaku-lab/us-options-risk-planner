@@ -15,7 +15,11 @@ import type {
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import { getCoveredCallRequiredShares } from "@/domain/coveredCallCoverage";
 import { getDefaultExitOrderPlan, normalizeExitOrderPlan, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
-import { normalizeOptionCloseExecutionsForStatus, sanitizeSaxoHistoryCloseExecutions } from "@/domain/optionCloseExecutions";
+import {
+  calculateOptionCloseExecutionResults,
+  normalizeOptionCloseExecutionsForStatus,
+  sanitizeSaxoHistoryCloseExecutions,
+} from "@/domain/optionCloseExecutions";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
 
 export type WorkspaceMode = "demo" | "live";
@@ -276,6 +280,66 @@ function repairWheelCyclePhase(cycle: WheelCycle, simulations: TradeSimulation[]
   const linkedSimulations = cycle.linkedSimulationIds
     .map((id) => simulations.find((simulation) => simulation.id === id))
     .filter((simulation): simulation is TradeSimulation => Boolean(simulation));
+  const openNShortPuts = simulations.filter(isOpenNShortPut);
+  const openNShortPut =
+    linkedSimulations.find(isOpenNShortPut) ??
+    simulations.find(
+      (simulation) =>
+        isOpenNShortPut(simulation) &&
+        simulation.ticker.trim() !== "" &&
+        simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase() &&
+        cycle.currentAccountCode === "N" &&
+        cycle.currentShares <= 0 &&
+        ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase),
+    ) ??
+    (openNShortPuts.length === 1 &&
+    cycle.currentAccountCode === "N" &&
+    cycle.currentShares <= 0 &&
+    ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase)
+      ? openNShortPuts[0]
+      : undefined);
+  if (openNShortPut) {
+    return withRecalculatedWheelCycleFees({
+      ...cycle,
+      currentPhase: "n_short_put",
+      currentAccountCode: "N",
+      currentShares: 0,
+      closedAt: undefined,
+      linkedSimulationIds: Array.from(new Set([...cycle.linkedSimulationIds, openNShortPut.id])),
+      memo: "現在はN口座プット売り建玉を管理中です。満期保有、買戻し、または権利行使時の株式取得を確認します。",
+    }, simulations);
+  }
+  const relatedCoveredCall =
+    linkedSimulations.find((simulation) => simulation.strategyType === "covered_call") ??
+    simulations.find(
+      (simulation) =>
+        simulation.strategyType === "covered_call" &&
+        simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" &&
+        simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase() &&
+        (getActiveStockSettlement(simulation) || hasConfirmedCoveredCallClose(simulation)),
+    );
+  if (relatedCoveredCall) {
+    const settlement = getActiveStockSettlement(relatedCoveredCall);
+    if (settlement) {
+      const remainingShares = Math.max(0, cycle.currentShares - settlement.shares);
+      return withRecalculatedWheelCycleFees({
+        ...cycle,
+        currentPhase: remainingShares > 0 ? "n_stock_holding" : "n_called_away",
+        currentAccountCode: "N",
+        currentShares: remainingShares,
+        closedAt: remainingShares <= 0 ? settlement.settlementDate || cycle.closedAt : cycle.closedAt,
+        linkedSimulationIds: Array.from(new Set([...cycle.linkedSimulationIds, relatedCoveredCall.id])),
+      }, simulations);
+    }
+    if (hasConfirmedCoveredCallClose(relatedCoveredCall) && cycle.currentPhase === "n_covered_call") {
+      return withRecalculatedWheelCycleFees({
+        ...cycle,
+        currentPhase: cycle.currentShares > 0 ? "n_stock_holding" : "n_cash",
+        currentAccountCode: "N",
+        linkedSimulationIds: Array.from(new Set([...cycle.linkedSimulationIds, relatedCoveredCall.id])),
+      }, simulations);
+    }
+  }
   const hasNAccountLink = linkedSimulations.some(
     (simulation) =>
       simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ||
@@ -287,18 +351,17 @@ function repairWheelCyclePhase(cycle: WheelCycle, simulations: TradeSimulation[]
   const hasTransferToN = cycle.currentPhase.startsWith("n_");
 
   if (hasPAccountLink && !hasNAccountLink && !hasTransferToN) {
-    return {
+    return withRecalculatedWheelCycleFees({
       ...cycle,
       currentPhase: cycle.currentShares > 0 ? "p_assigned_stock" : "p_short_put",
       currentAccountCode: "P",
-    };
+    }, simulations);
   }
 
-  return cycle;
+  return withRecalculatedWheelCycleFees(cycle, simulations);
 }
 
 function hasConfirmedCoveredCallEntry(simulation: TradeSimulation): boolean {
-  if (simulation.status !== "open") return false;
   if (simulation.strategyType !== "covered_call") return false;
   if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" && simulation.accountCode !== "N") return false;
   const callLegIds = simulation.optionLegs
@@ -307,6 +370,400 @@ function hasConfirmedCoveredCallEntry(simulation: TradeSimulation): boolean {
   if (callLegIds.length === 0) return false;
   const executions = simulation.optionEntryExecutions ?? [];
   return callLegIds.every((legId) => executions.some((execution) => execution.legId === legId && execution.confirmed));
+}
+
+function hasConfirmedCoveredCallClose(simulation: TradeSimulation): boolean {
+  if (simulation.status !== "closed" && simulation.status !== "expired") return false;
+  if (simulation.strategyType !== "covered_call") return false;
+  if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" && simulation.accountCode !== "N") return false;
+  const callLegIds = simulation.optionLegs
+    .filter((leg) => leg.type === "call" && leg.side === "sell")
+    .map((leg) => leg.id);
+  if (callLegIds.length === 0) return false;
+  const executions = simulation.optionCloseExecutions ?? [];
+  return callLegIds.every((legId) => executions.some((execution) => execution.legId === legId && execution.confirmed));
+}
+
+function getCoveredCallCloseDate(simulation: TradeSimulation): string {
+  const closeDates = (simulation.optionCloseExecutions ?? [])
+    .filter((execution) => execution.confirmed && execution.closeDate)
+    .map((execution) => execution.closeDate)
+    .sort();
+  return closeDates[closeDates.length - 1] ?? simulation.expiryDate ?? formatLocalDate();
+}
+
+function getActiveStockSettlement(simulation: TradeSimulation): NonNullable<TradeSimulation["stockSettlement"]> | undefined {
+  const settlement = simulation.stockSettlement;
+  if (!settlement?.enabled) return undefined;
+  if (!Number.isFinite(settlement.shares) || settlement.shares <= 0) return undefined;
+  return settlement;
+}
+
+function getWheelEventTypeForStockSettlement(
+  settlement: NonNullable<TradeSimulation["stockSettlement"]>,
+): WheelEvent["type"] {
+  return settlement.kind === "covered_call_assignment" ? "call_assigned" : "stock_sold";
+}
+
+function calculateStockSettlementPnlUSD(settlement: NonNullable<TradeSimulation["stockSettlement"]>): number {
+  return (settlement.sellPriceUSD - settlement.costBasisUSD) * settlement.shares - (settlement.commissionUSD ?? 0);
+}
+
+function findRelatedWheelCycle(
+  simulation: TradeSimulation,
+  wheelCycles: WheelCycle[],
+): WheelCycle | undefined {
+  const ticker = simulation.ticker.toUpperCase();
+  return (
+    wheelCycles.find((cycle) => cycle.linkedSimulationIds.includes(simulation.id)) ??
+    wheelCycles.find(
+      (cycle) =>
+        cycle.ticker.toUpperCase() === ticker &&
+        cycle.currentAccountCode === "N" &&
+        cycle.currentPhase !== "cycle_closed" &&
+        ["n_stock_holding", "n_covered_call", "n_called_away", "n_cash"].includes(cycle.currentPhase),
+    )
+  );
+}
+
+function isOpenNShortPut(simulation: TradeSimulation): boolean {
+  return (
+    simulation.strategyType === "short_put" &&
+    simulation.status === "open" &&
+    (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" || simulation.accountCode === "N")
+  );
+}
+
+function calculateShortPutPremiumUSD(simulation: TradeSimulation): number {
+  return simulation.optionLegs
+    .filter((leg) => leg.type === "put" && leg.side === "sell")
+    .reduce((sum, leg) => sum + leg.premiumUSD * leg.quantity * 100, 0);
+}
+
+function sumConfirmedEntryFeesUSD(
+  simulation: TradeSimulation,
+  predicate: (legId: string) => boolean,
+): number {
+  return (simulation.optionEntryExecutions ?? [])
+    .filter((execution) => execution.confirmed && predicate(execution.legId))
+    .reduce((sum, execution) => sum + (execution.commissionUSD ?? 0), 0);
+}
+
+function sumConfirmedCloseFeesUSD(
+  simulation: TradeSimulation,
+  predicate: (legId: string) => boolean,
+): number {
+  return (simulation.optionCloseExecutions ?? [])
+    .filter((execution) => execution.confirmed && predicate(execution.legId))
+    .reduce((sum, execution) => sum + (execution.commissionUSD ?? 0), 0);
+}
+
+function getShortPutLegIds(simulation: TradeSimulation): Set<string> {
+  return new Set(simulation.optionLegs.filter((leg) => leg.type === "put" && leg.side === "sell").map((leg) => leg.id));
+}
+
+function getCoveredCallLegIds(simulation: TradeSimulation): Set<string> {
+  return new Set(simulation.optionLegs.filter((leg) => leg.type === "call" && leg.side === "sell").map((leg) => leg.id));
+}
+
+function calculateShortPutFeesUSD(simulation: TradeSimulation): number {
+  const putLegIds = getShortPutLegIds(simulation);
+  const executionFeesUSD = sumConfirmedEntryFeesUSD(simulation, (legId) => putLegIds.has(legId));
+  return executionFeesUSD > 0 ? executionFeesUSD : simulation.brokerCommissionUSD ?? 0;
+}
+
+function calculateCoveredCallEntryFeesUSD(simulation: TradeSimulation): number {
+  const callLegIds = getCoveredCallLegIds(simulation);
+  return sumConfirmedEntryFeesUSD(simulation, (legId) => callLegIds.has(legId));
+}
+
+function calculateCoveredCallCloseFeesUSD(simulation: TradeSimulation): number {
+  const callLegIds = getCoveredCallLegIds(simulation);
+  return sumConfirmedCloseFeesUSD(simulation, (legId) => callLegIds.has(legId));
+}
+
+function calculateWheelFeesFromSimulation(simulation: TradeSimulation): number {
+  if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" && simulation.accountCode !== "N") return 0;
+  if (simulation.strategyType === "short_put") return calculateShortPutFeesUSD(simulation);
+  if (simulation.strategyType !== "covered_call") return getActiveStockSettlement(simulation)?.commissionUSD ?? 0;
+  return (
+    calculateCoveredCallEntryFeesUSD(simulation) +
+    calculateCoveredCallCloseFeesUSD(simulation) +
+    (getActiveStockSettlement(simulation)?.commissionUSD ?? 0)
+  );
+}
+
+function calculateWheelCycleFeesFromLinkedSimulations(cycle: WheelCycle, simulations: TradeSimulation[]): number {
+  const linkedIds = new Set(cycle.linkedSimulationIds);
+  return simulations
+    .filter((simulation) => linkedIds.has(simulation.id))
+    .reduce((sum, simulation) => sum + calculateWheelFeesFromSimulation(simulation), 0);
+}
+
+function withRecalculatedWheelCycleFees(cycle: WheelCycle, simulations: TradeSimulation[]): WheelCycle {
+  const feesUSD = calculateWheelCycleFeesFromLinkedSimulations(cycle, simulations);
+  return feesUSD > 0 ? { ...cycle, cumulativeFeesUSD: feesUSD } : cycle;
+}
+
+function updateWheelEventFee(
+  wheelEvents: WheelEvent[],
+  eventType: WheelEvent["type"],
+  linkedSimulationId: string,
+  feeUSD: number,
+): WheelEvent[] {
+  return wheelEvents.map((event) =>
+    event.type === eventType && event.linkedSimulationId === linkedSimulationId ? { ...event, feeUSD } : event,
+  );
+}
+
+function findRelatedNShortPutWheelCycle(
+  simulation: TradeSimulation,
+  wheelCycles: WheelCycle[],
+): WheelCycle | undefined {
+  const ticker = simulation.ticker.toUpperCase();
+  const eligibleCycles = wheelCycles.filter(
+    (cycle) =>
+      cycle.currentAccountCode === "N" &&
+      cycle.currentShares <= 0 &&
+      ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase),
+  );
+  return (
+    wheelCycles.find((cycle) => cycle.linkedSimulationIds.includes(simulation.id)) ??
+    (simulation.ticker.trim() !== ""
+      ? wheelCycles.find(
+      (cycle) =>
+        cycle.ticker.toUpperCase() === ticker &&
+        cycle.currentAccountCode === "N" &&
+        cycle.currentShares <= 0 &&
+        ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase),
+    )
+      : undefined) ??
+    (eligibleCycles.length === 1 ? eligibleCycles[0] : undefined)
+  );
+}
+
+export function syncWheelCycleWithNShortPutSimulation(params: {
+  simulation: TradeSimulation;
+  wheelCycles: WheelCycle[];
+  wheelEvents: WheelEvent[];
+  workspace: WorkspaceMode;
+  simulations?: TradeSimulation[];
+}): { wheelCycles: WheelCycle[]; wheelEvents: WheelEvent[] } {
+  const { simulation, workspace } = params;
+  if (!isOpenNShortPut(simulation)) return params;
+
+  let wheelCycles = params.wheelCycles;
+  let wheelEvents = params.wheelEvents;
+  const premiumUSD = calculateShortPutPremiumUSD(simulation);
+  const feesUSD = calculateShortPutFeesUSD(simulation);
+  const existingCycle = findRelatedNShortPutWheelCycle(simulation, wheelCycles);
+  const targetCycle: WheelCycle =
+    existingCycle ??
+    {
+      id: `wheel-${workspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      ticker: simulation.ticker,
+      primaryAccountCode: "N",
+      currentPhase: "n_cash",
+      currentAccountCode: "N",
+      currentShares: 0,
+      averageCostUSD: 0,
+      usdCashImpact: 0,
+      cumulativePremiumUSD: 0,
+      cumulativeStockRealizedPnlUSD: 0,
+      cumulativeFeesUSD: 0,
+      cumulativeTotalPnlUSD: 0,
+      referenceFxRateJPY: simulation.referenceFxRateJPY ?? simulation.fxRateJPY,
+      eventIds: [],
+      linkedSimulationIds: [],
+      openedAt: simulation.entryDate,
+    };
+
+  const alreadyOpened = wheelEvents.some(
+    (event) => event.type === "short_put_opened" && event.linkedSimulationId === simulation.id,
+  );
+  const nextEventIds = new Set(targetCycle.eventIds);
+  const nextLinkedSimulationIds = new Set([...targetCycle.linkedSimulationIds, simulation.id]);
+
+  if (!alreadyOpened) {
+    const event: WheelEvent = {
+      id: `wheel-event-${workspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      wheelCycleId: targetCycle.id,
+      type: "short_put_opened",
+      occurredAt: simulation.entryDate,
+      accountCode: "N",
+      description: `${simulation.ticker} N口座プット売りを建玉開始`,
+      feeUSD: feesUSD,
+      usdPnl: 0,
+      phaseAfter: "n_short_put",
+      linkedSimulationId: simulation.id,
+    };
+    wheelEvents = [event, ...wheelEvents];
+    nextEventIds.add(event.id);
+  } else {
+    wheelEvents = updateWheelEventFee(wheelEvents, "short_put_opened", simulation.id, feesUSD);
+  }
+
+  const nextCycle = withRecalculatedWheelCycleFees({
+    ...targetCycle,
+    currentPhase: "n_short_put",
+    currentAccountCode: "N",
+    currentShares: 0,
+    referenceFxRateJPY: targetCycle.referenceFxRateJPY ?? simulation.referenceFxRateJPY ?? simulation.fxRateJPY,
+    cumulativePremiumUSD: alreadyOpened ? targetCycle.cumulativePremiumUSD : targetCycle.cumulativePremiumUSD + premiumUSD,
+    cumulativeFeesUSD: targetCycle.cumulativeFeesUSD,
+    cumulativeTotalPnlUSD: alreadyOpened ? targetCycle.cumulativeTotalPnlUSD : targetCycle.cumulativeTotalPnlUSD + premiumUSD - feesUSD,
+    usdCashImpact: alreadyOpened ? targetCycle.usdCashImpact : targetCycle.usdCashImpact + premiumUSD - feesUSD,
+    closedAt: undefined,
+    memo: "現在はN口座プット売り建玉を管理中です。満期保有、買戻し、または権利行使時の株式取得を確認します。",
+    eventIds: Array.from(nextEventIds),
+    linkedSimulationIds: Array.from(nextLinkedSimulationIds),
+  }, params.simulations ?? [simulation]);
+
+  wheelCycles = existingCycle
+    ? wheelCycles.map((cycle) => (cycle.id === targetCycle.id ? nextCycle : cycle))
+    : [nextCycle, ...wheelCycles];
+  return { wheelCycles, wheelEvents };
+}
+
+export function syncWheelCycleWithCoveredCallSimulation(params: {
+  simulation: TradeSimulation;
+  wheelCycles: WheelCycle[];
+  wheelEvents: WheelEvent[];
+  workspace: WorkspaceMode;
+  simulations?: TradeSimulation[];
+}): { wheelCycles: WheelCycle[]; wheelEvents: WheelEvent[] } {
+  const { simulation, workspace } = params;
+  if (simulation.strategyType !== "covered_call") return params;
+  if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" && simulation.accountCode !== "N") return params;
+  const targetCycle = findRelatedWheelCycle(simulation, params.wheelCycles);
+  if (!targetCycle) return params;
+
+  let wheelCycles = params.wheelCycles;
+  let wheelEvents = params.wheelEvents;
+  let nextCycle = targetCycle;
+  const nextEventIds = new Set(targetCycle.eventIds);
+  const nextLinkedSimulationIds = new Set([...targetCycle.linkedSimulationIds, simulation.id]);
+
+  if (hasConfirmedCoveredCallEntry(simulation)) {
+    const entryFeesUSD = calculateCoveredCallEntryFeesUSD(simulation);
+    const alreadyOpened = wheelEvents.some(
+      (event) => event.type === "covered_call_opened" && event.linkedSimulationId === simulation.id,
+    );
+    if (!alreadyOpened) {
+      const event: WheelEvent = {
+        id: `wheel-event-${workspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        wheelCycleId: targetCycle.id,
+        type: "covered_call_opened",
+        occurredAt: simulation.entryDate,
+        accountCode: "N",
+        description: `${simulation.ticker} N口座カバードコールを建玉開始`,
+        feeUSD: entryFeesUSD,
+        usdPnl: 0,
+        phaseAfter: "n_covered_call",
+        linkedSimulationId: simulation.id,
+      };
+      wheelEvents = [event, ...wheelEvents];
+      nextEventIds.add(event.id);
+    } else {
+      wheelEvents = updateWheelEventFee(wheelEvents, "covered_call_opened", simulation.id, entryFeesUSD);
+    }
+  }
+
+  if (hasConfirmedCoveredCallClose(simulation)) {
+    const alreadyClosed = wheelEvents.some(
+      (event) => event.type === "covered_call_closed" && event.linkedSimulationId === simulation.id,
+    );
+    const closeResults = calculateOptionCloseExecutionResults(simulation);
+    const closePnlUSD = closeResults.reduce((sum, result) => sum + result.realizedPnlUSD, 0);
+    const closeFeesUSD = calculateCoveredCallCloseFeesUSD(simulation);
+    if (!alreadyClosed) {
+      const event: WheelEvent = {
+        id: `wheel-event-${workspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        wheelCycleId: targetCycle.id,
+        type: "covered_call_closed",
+        occurredAt: getCoveredCallCloseDate(simulation),
+        accountCode: "N",
+        description: `${simulation.ticker} N口座カバードコールを決済`,
+        feeUSD: closeFeesUSD,
+        usdPnl: closePnlUSD,
+        phaseAfter: "n_stock_holding",
+        linkedSimulationId: simulation.id,
+      };
+      wheelEvents = [event, ...wheelEvents];
+      nextEventIds.add(event.id);
+    } else {
+      wheelEvents = updateWheelEventFee(wheelEvents, "covered_call_closed", simulation.id, closeFeesUSD);
+    }
+    nextCycle = {
+      ...nextCycle,
+      currentPhase: nextCycle.currentShares > 0 ? "n_stock_holding" : "n_cash",
+      currentAccountCode: "N",
+    };
+  }
+
+  const settlement = getActiveStockSettlement(simulation);
+  if (settlement) {
+    const eventType = getWheelEventTypeForStockSettlement(settlement);
+    const alreadySold = wheelEvents.some(
+      (event) => event.type === eventType && event.linkedSimulationId === simulation.id,
+    );
+    const soldShares = Math.min(Math.max(0, nextCycle.currentShares), settlement.shares);
+    const remainingShares = Math.max(0, nextCycle.currentShares - settlement.shares);
+    const stockPnlUSD = calculateStockSettlementPnlUSD(settlement);
+    const stockFeeUSD = settlement.commissionUSD ?? 0;
+    const phaseAfter: WheelPhase = remainingShares > 0 ? "n_stock_holding" : "n_called_away";
+    if (!alreadySold) {
+      const event: WheelEvent = {
+        id: `wheel-event-${workspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        wheelCycleId: targetCycle.id,
+        type: eventType,
+        occurredAt: settlement.settlementDate || getCoveredCallCloseDate(simulation),
+        accountCode: "N",
+        description:
+          eventType === "call_assigned"
+            ? `${simulation.ticker} C権利行使でN口座株式を譲渡`
+            : `${simulation.ticker} N口座株式を売却`,
+        feeUSD: stockFeeUSD,
+        usdPnl: stockPnlUSD,
+        sharesChange: -settlement.shares,
+        phaseAfter,
+        linkedSimulationId: simulation.id,
+      };
+      wheelEvents = [event, ...wheelEvents];
+      nextEventIds.add(event.id);
+    } else {
+      wheelEvents = updateWheelEventFee(wheelEvents, eventType, simulation.id, stockFeeUSD);
+    }
+    nextCycle = {
+      ...nextCycle,
+      currentPhase: phaseAfter,
+      currentAccountCode: "N",
+      currentShares: remainingShares,
+      cumulativeStockRealizedPnlUSD: alreadySold
+        ? nextCycle.cumulativeStockRealizedPnlUSD
+        : nextCycle.cumulativeStockRealizedPnlUSD + stockPnlUSD,
+      cumulativeFeesUSD: nextCycle.cumulativeFeesUSD,
+      cumulativeTotalPnlUSD: alreadySold
+        ? nextCycle.cumulativeTotalPnlUSD
+        : nextCycle.cumulativeTotalPnlUSD + stockPnlUSD,
+      closedAt: remainingShares <= 0 ? settlement.settlementDate || getCoveredCallCloseDate(simulation) : nextCycle.closedAt,
+      memo:
+        remainingShares <= 0
+          ? "N口座株式は売却済みです。次はN現金待機として次候補を確認します。"
+          : nextCycle.memo,
+    };
+    if (soldShares <= 0 && nextCycle.currentShares <= 0) {
+      nextCycle = { ...nextCycle, currentPhase: "n_called_away" };
+    }
+  }
+
+  nextCycle = withRecalculatedWheelCycleFees({
+    ...nextCycle,
+    eventIds: Array.from(nextEventIds),
+    linkedSimulationIds: Array.from(nextLinkedSimulationIds),
+  }, params.simulations ?? [simulation]);
+  wheelCycles = wheelCycles.map((cycle) => (cycle.id === targetCycle.id ? nextCycle : cycle));
+  return { wheelCycles, wheelEvents };
 }
 
 function buildCoveredCallDraftFromWheelCycle(cycle: WheelCycle, workspace: WorkspaceMode): TradeSimulation | undefined {
@@ -663,6 +1120,7 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
             occurredAt: normalized.entryDate,
             accountCode: "N",
             description: `${normalized.ticker} N口座カバードコールを建玉開始`,
+            feeUSD: calculateCoveredCallEntryFeesUSD(normalized),
             usdPnl: 0,
             phaseAfter: "n_covered_call",
             linkedSimulationId: normalized.id,
@@ -681,6 +1139,24 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
           );
         }
       }
+      const synced = syncWheelCycleWithCoveredCallSimulation({
+        simulation: normalized,
+        wheelCycles,
+        wheelEvents,
+        workspace: state.activeWorkspace,
+        simulations,
+      });
+      wheelCycles = synced.wheelCycles;
+      wheelEvents = synced.wheelEvents;
+      const shortPutSynced = syncWheelCycleWithNShortPutSimulation({
+        simulation: normalized,
+        wheelCycles,
+        wheelEvents,
+        workspace: state.activeWorkspace,
+        simulations,
+      });
+      wheelCycles = shortPutSynced.wheelCycles;
+      wheelEvents = shortPutSynced.wheelEvents;
       const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: wheelCycles };
       const wheelEventsByWorkspace = { ...state.wheelEventsByWorkspace, [state.activeWorkspace]: wheelEvents };
       saveJson(SIMULATIONS_KEY, simulationsByWorkspace);
@@ -766,7 +1242,7 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       const premiumUSD = normalized.optionLegs
         .filter((leg) => leg.side === "sell")
         .reduce((sum, leg) => sum + leg.premiumUSD * leg.quantity * 100, 0);
-      const feesUSD = normalized.brokerCommissionUSD ?? 0;
+      const feesUSD = calculateWheelFeesFromSimulation(normalized);
       const cycle: WheelCycle = {
         id: `wheel-${state.activeWorkspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         ticker: normalized.ticker,
@@ -953,23 +1429,26 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
           occurredAt: simulation.entryDate,
           accountCode: "N",
           description: `${simulation.ticker} N口座カバードコールを建玉開始`,
+          feeUSD: calculateCoveredCallEntryFeesUSD(simulation),
           usdPnl: 0,
           phaseAfter: "n_covered_call",
           linkedSimulationId: simulation.id,
         };
         wheelEvents = [event, ...wheelEvents];
         eventIds = [...eventIds, event.id];
+      } else if (alreadyOpened) {
+        wheelEvents = updateWheelEventFee(wheelEvents, "covered_call_opened", simulation.id, calculateCoveredCallEntryFeesUSD(simulation));
       }
 
       const wheelCycles: WheelCycle[] = state.wheelCyclesByWorkspace[state.activeWorkspace].map((cycle) =>
         cycle.id === targetCycle.id
-          ? {
+          ? withRecalculatedWheelCycleFees({
               ...cycle,
               currentPhase: shouldOpenCoveredCall ? "n_covered_call" : cycle.currentPhase,
               currentAccountCode: "N" as const,
               eventIds,
               linkedSimulationIds: Array.from(new Set([...cycle.linkedSimulationIds, simulation.id])),
-            }
+            }, state.simulationsByWorkspace[state.activeWorkspace])
           : cycle,
       );
       const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: wheelCycles };

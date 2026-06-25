@@ -578,6 +578,7 @@ export type WheelEvent = {
   occurredAt: string;
   accountCode: SaxoAccountCode;
   description: string;
+  feeUSD?: number;
   usdPnl?: number;
   sharesChange?: number;
   phaseAfter: WheelPhase;
