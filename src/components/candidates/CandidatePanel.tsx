@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
-import { AlertTriangle, Eye, FileUp, ListFilter, Plus, Trash2 } from "lucide-react";
-import type { CandidateSymbol } from "@/types/candidates";
+import { AlertTriangle, Eye, FileUp, ListFilter, Plus, Trash2, X } from "lucide-react";
+import type { CandidateImportSummary, CandidateSymbol } from "@/types/candidates";
 import type { TradeSimulation } from "@/types/domain";
 import { parseCandidateImport } from "@/lib/candidates";
 import { formatUSD } from "@/lib/format";
@@ -21,17 +21,21 @@ function formatPercentValue(value?: number): string {
 export function CandidatePanel({
   candidates,
   importWarnings,
+  importSummary,
   simulations,
   onImport,
   onClear,
+  onClose,
   onWatchOnly,
   onCreateSimulation,
 }: {
   candidates: CandidateSymbol[];
   importWarnings: string[];
+  importSummary?: CandidateImportSummary;
   simulations: TradeSimulation[];
-  onImport: (candidates: CandidateSymbol[], warnings: string[]) => void;
+  onImport: (candidates: CandidateSymbol[], warnings: string[], summary?: CandidateImportSummary) => void;
   onClear: () => void;
+  onClose: () => void;
   onWatchOnly: (id: string, watchOnly: boolean) => void;
   onCreateSimulation: (candidate: CandidateSymbol, strategy: "covered_call" | "short_put") => void;
 }) {
@@ -61,8 +65,12 @@ export function CandidatePanel({
     try {
       const text = await file.text();
       const result = parseCandidateImport(text, file.name);
-      onImport(result.candidates, result.warnings);
-      setStatus(`${result.candidates.length}件の候補を読み込みました。`);
+      onImport(result.candidates, result.warnings, result.summary);
+      setStatus(
+        result.summary
+          ? `取込済み候補 ${result.summary.importedCount}/${result.summary.totalRows}件、要確認 ${result.summary.warningCount}件、エラー ${result.summary.errorCount}件`
+          : `${result.candidates.length}件の候補を読み込みました。`,
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "候補ファイルを読み込めませんでした。");
     } finally {
@@ -74,9 +82,12 @@ export function CandidatePanel({
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-slate-950">候補リスト</h2>
+          <h2 className="text-lg font-bold text-slate-950">スクリーニング候補</h2>
           <p className="mt-1 text-sm text-slate-600">
-            TradingViewの候補JSON/CSVを読み込み、Saxo APIなしで建玉案の入口を作ります。
+            moomooスクリーニング候補を確認し、建玉案の入口を作ります。moomoo OpenD連携前はJSON/CSV取込で候補を確認できます。
+          </p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            moomoo OpenD連携は後続工程です。現在は候補ファイル取込の暫定利用として、旧互換CSV/JSONも読み込めます。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -85,7 +96,7 @@ export function CandidatePanel({
             onClick={() => fileInputRef.current?.click()}
           >
             <FileUp size={16} />
-            候補取込
+            候補ファイル取込
           </button>
           <button
             className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 disabled:opacity-40"
@@ -94,6 +105,14 @@ export function CandidatePanel({
           >
             <Trash2 size={16} />
             クリア
+          </button>
+          <button
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-900 hover:border-slate-400 hover:bg-slate-50"
+            aria-label="スクリーニング候補を閉じる"
+            onClick={onClose}
+          >
+            <X size={16} />
+            閉じる
           </button>
           <input
             ref={fileInputRef}
@@ -104,6 +123,35 @@ export function CandidatePanel({
           />
         </div>
       </div>
+
+      {importSummary ? (
+        <div className="mt-3 grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 md:grid-cols-6">
+          <div>
+            <div className="font-bold text-slate-900">取込済み候補</div>
+            <div>{importSummary.importedCount}/{importSummary.totalRows}件</div>
+          </div>
+          <div>
+            <div className="font-bold text-slate-900">要確認</div>
+            <div>{importSummary.warningCount}件</div>
+          </div>
+          <div>
+            <div className="font-bold text-slate-900">エラー</div>
+            <div>{importSummary.errorCount}件</div>
+          </div>
+          <div>
+            <div className="font-bold text-slate-900">データソース</div>
+            <div>{importSummary.source}</div>
+          </div>
+          <div>
+            <div className="font-bold text-slate-900">asOf</div>
+            <div>{importSummary.asOf ?? "-"}</div>
+          </div>
+          <div>
+            <div className="font-bold text-slate-900">最終取込</div>
+            <div>{importSummary.importedAt}</div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
         <div className="flex flex-wrap items-center gap-2">
@@ -144,7 +192,7 @@ export function CandidatePanel({
 
       {candidates.length === 0 ? (
         <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-5 text-sm leading-6 text-slate-600">
-          tradingview_candidates.json またはCSVを取り込むと、候補銘柄をここで確認できます。
+          moomoo候補JSON/CSV、または互換CSVを取り込むと、スクリーニング候補をここで確認できます。
         </div>
       ) : (
         <div className="mt-4 overflow-x-auto">
@@ -160,6 +208,8 @@ export function CandidatePanel({
                 <th className="py-2 pr-3 text-right">時価総額</th>
                 <th className="py-2 pr-3">Sector</th>
                 <th className="py-2 pr-3">注意</th>
+                <th className="py-2 pr-3">戦術判定</th>
+                <th className="py-2 pr-3">不足</th>
                 <th className="py-2 pr-3 text-right">Score</th>
                 <th className="py-2 pr-3 text-right">操作</th>
               </tr>
@@ -187,6 +237,29 @@ export function CandidatePanel({
                     <td className={`py-3 pr-3 text-xs font-semibold ${hasWarnings ? "text-amber-700" : "text-slate-500"}`}>
                       {candidate.earningsWarning || candidate.parseWarnings?.[0] || "-"}
                     </td>
+                    <td className="py-3 pr-3 text-xs text-slate-700">
+                      <div className="flex flex-wrap gap-1">
+                        {candidate.strategyFitResults?.slice(0, 3).map((result) => (
+                          <span key={result.strategy} className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">
+                            {result.strategy}: {result.fitLevel}
+                          </span>
+                        ))}
+                        {candidate.technicalTimingPatterns?.[0] ? (
+                          <span className="rounded bg-teal-50 px-1.5 py-0.5 font-semibold text-teal-800">
+                            上昇転換コンボ候補: {candidate.technicalTimingPatterns[0].fitLevel}
+                          </span>
+                        ) : null}
+                        {candidate.syntheticForwardCandidates?.[0] ? (
+                          <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-semibold text-indigo-800">
+                            シンセティック: {candidate.syntheticForwardCandidates[0].fitLevel}
+                          </span>
+                        ) : null}
+                        {!candidate.strategyFitResults?.length && !candidate.technicalTimingPatterns?.length && !candidate.syntheticForwardCandidates?.length ? "-" : null}
+                      </div>
+                    </td>
+                    <td className="py-3 pr-3 text-xs text-slate-600">
+                      {candidate.screeningCandidate?.missingFields.length ? candidate.screeningCandidate.missingFields.slice(0, 3).join(", ") : "-"}
+                    </td>
                     <td className="numeric-input py-3 pr-3 text-right font-bold text-slate-900">{candidate.score}</td>
                     <td className="py-3 pr-3 text-right">
                       <div className="flex justify-end gap-1.5">
@@ -207,7 +280,7 @@ export function CandidatePanel({
                         </button>
                         <button
                           className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-2 text-xs font-bold text-slate-600 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800"
-                          title="Cash Secured Put候補として建玉案を作成"
+                          title="P売り候補として建玉案を作成"
                           onClick={() => onCreateSimulation(candidate, "short_put")}
                         >
                           P
@@ -221,7 +294,7 @@ export function CandidatePanel({
           </table>
           <div className="mt-3 flex items-center gap-2 text-xs leading-5 text-slate-500">
             <AlertTriangle size={14} />
-            建玉案作成後も、権利行使価格・満期・プレミアム・証拠金は手入力で確認します。Saxo発注機能はありません。
+            建玉案作成後も、権利行使価格・満期・プレミアム・証拠金は手入力で確認します。自動発注機能はありません。
           </div>
         </div>
       )}

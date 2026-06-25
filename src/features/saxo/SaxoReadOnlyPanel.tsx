@@ -124,8 +124,8 @@ export function SaxoReadOnlyPanel({
   onOrdersChange?: (orders: SaxoApiOrderSnapshot[]) => void;
   onPositionsChange?: (positions: SaxoApiPositionSnapshot[]) => void;
   onHistoryCandidatesChange?: (items: SaxoHistoryDiscoveryItem[]) => void;
-  onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string } | void;
-  onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string } | void;
+  onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
+  onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
   onLinkPositionToExisting?: (position: SaxoApiPositionSnapshot, simulation: TradeSimulation, historyItems?: SaxoHistoryDiscoveryItem[]) => boolean | void;
   onCreateStockTransferFromPosition?: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
@@ -432,7 +432,8 @@ export function SaxoReadOnlyPanel({
     const created = target === "assignment" ? onCreateAssignmentDraft?.(item, assignmentStockItem) : onCreateHistoryDraft?.(item);
     if (!created?.simulationId) {
       const targetLabel = target === "assignment" ? "権利行使候補" : target === "close" ? "決済実績候補" : "建玉開始候補";
-      const message = `${targetLabel}を作成できませんでした。P/N口座、銘柄、Put/Call、権利行使価格、満期、数量が対象建玉と一致するか確認してください。`;
+      const baseMessage = created?.errorMessage ?? `${targetLabel}を作成できませんでした。P/N口座、銘柄、Put/Call、権利行使価格、満期、数量が対象建玉と一致するか確認してください。`;
+      const message = created?.diagnostics ? `${baseMessage} ${created.diagnostics}` : baseMessage;
       setMessage(message);
       setRowMessage("error", message);
       return false;
@@ -450,8 +451,9 @@ export function SaxoReadOnlyPanel({
         : target === "close"
           ? "決済実績への反映候補を作成しました。正式な決済実績保存や現金残高反映はまだ行っていません。"
           : "建玉開始の約定確認への反映候補を作成しました。正式な建玉保存はまだ行っていません。";
-    setMessage(successMessage);
-    setRowMessage("success", successMessage);
+    const message = created.warningMessage ? `${successMessage} ${created.warningMessage}` : successMessage;
+    setMessage(message);
+    setRowMessage("success", message);
 
     if (openAfterCreate) {
       onOpenHistoryTarget?.(getHistoryCandidateAnchorId(item), item.id);

@@ -696,6 +696,8 @@ export type SaxoEntryHistoryMatch = {
 };
 
 export type SaxoHistoryCandidateTarget = "entry" | "close" | "assignment" | "unknown";
+export const SAXO_CLOSE_ACCOUNT_CONFIRMATION_WARNING =
+  "Saxo履歴側の口座情報が建玉側と一致しない、または信頼できないため、正式保存前にN/P口座を確認してください。";
 
 export function getSaxoHistoryCandidateTarget(item: SaxoHistoryDiscoveryItem): SaxoHistoryCandidateTarget {
   if (isSaxoHistoryPutAssignmentOptionCandidate(item)) return "assignment";
@@ -703,6 +705,7 @@ export function getSaxoHistoryCandidateTarget(item: SaxoHistoryDiscoveryItem): S
   if (item.kind === "closed_position") return "close";
   if (item.openClose === "close") return "close";
   if (item.openClose === "open") return "entry";
+  if (item.buySell === "buy" && resolveSaxoHistoryOptionType(item) === "call" && resolveSaxoHistoryOptionContract(item)) return "close";
   if (item.buySell === "buy" && (item.profitLoss !== undefined || item.profitLossBase !== undefined)) return "close";
   if (item.buySell === "sell") return "entry";
   if (item.buySell === "buy") return "entry";
@@ -775,28 +778,214 @@ export function isSaxoHistoryMatchingOptionLeg(
   item: SaxoHistoryDiscoveryItem,
   target: SaxoHistoryCandidateTarget = getSaxoHistoryCandidateTarget(item),
 ): boolean {
-  if (target === "unknown") return false;
-  if (item.accountCode && simulation.accountCode && item.accountCode !== simulation.accountCode) return false;
-  if (item.accountKey && simulation.fixtureMeta?.saxoAccountKey && item.accountKey !== simulation.fixtureMeta.saxoAccountKey && item.accountKey !== maskSaxoIdentifier(simulation.fixtureMeta.saxoAccountKey)) return false;
+  return getSaxoHistoryOptionLegMatchDiagnostics(simulation, leg, item, target).matched;
+}
+
+export type SaxoHistoryOptionLegMatchDiagnostics = {
+  matched: boolean;
+  mismatches: string[];
+  accountMismatches: string[];
+  nonAccountMismatches: string[];
+  history: {
+    target: SaxoHistoryCandidateTarget;
+    accountCode?: SaxoAccountCode;
+    accountKey?: string;
+    symbol?: string;
+    instrumentCode?: string;
+    optionType?: "call" | "put";
+    strike?: number;
+    expiry?: string;
+    quantity?: number;
+    buySell?: SaxoHistoryDiscoveryItem["buySell"];
+    openClose?: SaxoHistoryDiscoveryItem["openClose"];
+  };
+  app: {
+    simulationId: string;
+    accountCode?: SaxoAccountCode;
+    accountKey?: string;
+    ticker: string;
+    legId: string;
+    optionType: OptionLeg["type"];
+    strike: number;
+    expiry: string;
+    quantity: number;
+    side: OptionLeg["side"];
+  };
+};
+
+export function getSaxoHistoryOptionLegMatchDiagnostics(
+  simulation: TradeSimulation,
+  leg: OptionLeg,
+  item: SaxoHistoryDiscoveryItem,
+  target: SaxoHistoryCandidateTarget = getSaxoHistoryCandidateTarget(item),
+): SaxoHistoryOptionLegMatchDiagnostics {
+  const accountMismatches: string[] = [];
+  const nonAccountMismatches: string[] = [];
+  const resolvedHistoryTarget = getSaxoHistoryCandidateTarget(item);
+  if (target === "unknown") nonAccountMismatches.push("履歴候補の移動先を判定できません。");
+  if (item.accountCode && simulation.accountCode && item.accountCode !== simulation.accountCode) {
+    accountMismatches.push(`P/N口座が不一致です（履歴: ${item.accountCode} / 建玉: ${simulation.accountCode}）。`);
+  }
+  if (
+    item.accountKey &&
+    simulation.fixtureMeta?.saxoAccountKey &&
+    item.accountKey !== simulation.fixtureMeta.saxoAccountKey &&
+    item.accountKey !== maskSaxoIdentifier(simulation.fixtureMeta.saxoAccountKey)
+  ) {
+    accountMismatches.push("Saxo accountKeyが不一致です。");
+  }
   const itemOptionType = resolveSaxoHistoryOptionType(item);
   const itemStrike = resolveSaxoHistoryStrike(item);
   const itemExpiry = resolveSaxoHistoryExpiry(item);
-  if (itemOptionType === undefined || itemOptionType !== leg.type) return false;
-  if (itemStrike === undefined || Math.abs(itemStrike - leg.strikeUSD) > 0.001) return false;
-  if (!itemExpiry || normalizeDate(itemExpiry) !== normalizeDate(leg.expiryDate)) return false;
+  if (itemOptionType === undefined) {
+    nonAccountMismatches.push("履歴からPut/Callを取得できません。");
+  } else if (itemOptionType !== leg.type) {
+    nonAccountMismatches.push(`Put/Callが不一致です（履歴: ${itemOptionType} / 建玉: ${leg.type}）。`);
+  }
+  if (itemStrike === undefined) {
+    nonAccountMismatches.push("履歴から権利行使価格を取得できません。");
+  } else if (Math.abs(itemStrike - leg.strikeUSD) > 0.001) {
+    nonAccountMismatches.push(`権利行使価格が不一致です（履歴: ${itemStrike} / 建玉: ${leg.strikeUSD}）。`);
+  }
+  if (!itemExpiry) {
+    nonAccountMismatches.push("履歴から満期を取得できません。");
+  } else if (normalizeDate(itemExpiry) !== normalizeDate(leg.expiryDate)) {
+    nonAccountMismatches.push(`満期が不一致です（履歴: ${normalizeDate(itemExpiry)} / 建玉: ${normalizeDate(leg.expiryDate)}）。`);
+  }
   const itemSymbol = resolveSaxoHistoryUnderlyingSymbol(item) ?? normalizeSymbol(item.symbol ?? "");
-  if (itemSymbol && normalizeSymbol(simulation.ticker) !== itemSymbol) return false;
-  if (item.quantity !== undefined && Math.abs(Math.abs(item.quantity) - leg.quantity) > 0.0001) return false;
-
-  if (target === "entry") {
-    if (leg.side === "sell" && item.buySell !== "sell") return false;
-    if (leg.side === "buy" && item.buySell !== "buy") return false;
-    return getSaxoHistoryCandidateTarget(item) === "entry";
+  if (itemSymbol && normalizeSymbol(simulation.ticker) !== itemSymbol) {
+    nonAccountMismatches.push(`原資産が不一致です（履歴: ${itemSymbol} / 建玉: ${normalizeSymbol(simulation.ticker)}）。`);
+  }
+  if (item.quantity !== undefined && Math.abs(Math.abs(item.quantity) - leg.quantity) > 0.0001) {
+    nonAccountMismatches.push(`数量が不一致です（履歴: ${Math.abs(item.quantity)} / 建玉: ${leg.quantity}）。`);
   }
 
-  if (leg.side === "sell" && item.buySell !== "buy") return false;
-  if (leg.side === "buy" && item.buySell !== "sell") return false;
-  return ["close", "assignment"].includes(getSaxoHistoryCandidateTarget(item));
+  if (target === "entry") {
+    if (leg.side === "sell" && item.buySell !== "sell") nonAccountMismatches.push("建玉開始候補ですが、売り建て脚に対応する履歴の売買区分が売ではありません。");
+    if (leg.side === "buy" && item.buySell !== "buy") nonAccountMismatches.push("建玉開始候補ですが、買い建て脚に対応する履歴の売買区分が買ではありません。");
+    if (resolvedHistoryTarget !== "entry") nonAccountMismatches.push(`履歴候補の判定が建玉開始ではありません（判定: ${resolvedHistoryTarget}）。`);
+  } else if (target !== "unknown") {
+    if (leg.side === "sell" && item.buySell !== "buy") nonAccountMismatches.push("決済候補ですが、売り建て脚に対する反対売買の買履歴ではありません。");
+    if (leg.side === "buy" && item.buySell !== "sell") nonAccountMismatches.push("決済候補ですが、買い建て脚に対する反対売買の売履歴ではありません。");
+    if (!["close", "assignment"].includes(resolvedHistoryTarget)) {
+      nonAccountMismatches.push(`履歴候補の判定が決済または権利行使ではありません（判定: ${resolvedHistoryTarget}）。`);
+    }
+  }
+  const mismatches = [...accountMismatches, ...nonAccountMismatches];
+
+  return {
+    matched: mismatches.length === 0,
+    mismatches,
+    accountMismatches,
+    nonAccountMismatches,
+    history: {
+      target: resolvedHistoryTarget,
+      accountCode: item.accountCode,
+      accountKey: item.accountKey,
+      symbol: item.symbol,
+      instrumentCode: item.instrumentCode,
+      optionType: itemOptionType,
+      strike: itemStrike,
+      expiry: itemExpiry ? normalizeDate(itemExpiry) : undefined,
+      quantity: item.quantity !== undefined ? Math.abs(item.quantity) : undefined,
+      buySell: item.buySell,
+      openClose: item.openClose,
+    },
+    app: {
+      simulationId: simulation.id,
+      accountCode: simulation.accountCode,
+      accountKey: simulation.fixtureMeta?.saxoAccountKey,
+      ticker: simulation.ticker,
+      legId: leg.id,
+      optionType: leg.type,
+      strike: leg.strikeUSD,
+      expiry: normalizeDate(leg.expiryDate),
+      quantity: leg.quantity,
+      side: leg.side,
+    },
+  };
+}
+
+export type SaxoHistoryResolvedOptionLegMatch = {
+  simulation: TradeSimulation;
+  leg: OptionLeg;
+  diagnostics: SaxoHistoryOptionLegMatchDiagnostics;
+  accountConfirmationWarning?: string;
+};
+
+export function findSaxoHistoryOptionLegMatches(
+  simulations: TradeSimulation[],
+  item: SaxoHistoryDiscoveryItem,
+  target: SaxoHistoryCandidateTarget = getSaxoHistoryCandidateTarget(item),
+  options: { allowCloseAccountMismatch?: boolean } = {},
+): SaxoHistoryResolvedOptionLegMatch[] {
+  if (target === "unknown") return [];
+  const allMatches = simulations.flatMap((simulation) =>
+    simulation.optionLegs.map((leg) => ({
+      simulation,
+      leg,
+      diagnostics: getSaxoHistoryOptionLegMatchDiagnostics(simulation, leg, item, target),
+    })),
+  );
+  const strictMatches = allMatches
+    .filter((match) => match.diagnostics.matched)
+    .map((match) => ({ ...match, accountConfirmationWarning: undefined }));
+  if (!options.allowCloseAccountMismatch || target !== "close" || getSaxoHistoryCandidateTarget(item) !== "close") {
+    return strictMatches;
+  }
+  return allMatches
+    .filter((match) => match.diagnostics.nonAccountMismatches.length === 0)
+    .map((match) => ({
+      ...match,
+      accountConfirmationWarning:
+        match.diagnostics.accountMismatches.length > 0 ? SAXO_CLOSE_ACCOUNT_CONFIRMATION_WARNING : undefined,
+    }));
+}
+
+export function resolveSaxoHistoryOptionLegMatch(
+  simulations: TradeSimulation[],
+  item: SaxoHistoryDiscoveryItem,
+  target: SaxoHistoryCandidateTarget = getSaxoHistoryCandidateTarget(item),
+  selectedSimulationId?: string,
+  options: { allowCloseAccountMismatch?: boolean } = {},
+): SaxoHistoryResolvedOptionLegMatch | undefined {
+  const matches = findSaxoHistoryOptionLegMatches(simulations, item, target, options);
+  const selectedMatch = selectedSimulationId ? matches.find((match) => match.simulation.id === selectedSimulationId) : undefined;
+  if (selectedMatch) return selectedMatch;
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function describeBestSaxoHistoryOptionLegMismatch(
+  simulations: TradeSimulation[],
+  item: SaxoHistoryDiscoveryItem,
+  target: SaxoHistoryCandidateTarget = getSaxoHistoryCandidateTarget(item),
+): string | undefined {
+  const diagnostics = simulations
+    .flatMap((simulation) =>
+      simulation.optionLegs.map((leg) => getSaxoHistoryOptionLegMatchDiagnostics(simulation, leg, item, target)),
+    )
+    .sort((a, b) => a.mismatches.length - b.mismatches.length);
+  const best = diagnostics[0];
+  if (!best || best.mismatches.length === 0) return undefined;
+  const historyShape = [
+    best.history.accountCode ? `履歴口座 ${best.history.accountCode}` : "履歴口座 未取得",
+    best.history.symbol ?? best.history.instrumentCode ? `履歴銘柄 ${best.history.symbol ?? best.history.instrumentCode}` : "履歴銘柄 未取得",
+    best.history.optionType ? `履歴種別 ${best.history.optionType}` : "履歴種別 未取得",
+    best.history.strike !== undefined ? `履歴権利行使価格 ${best.history.strike}` : "履歴権利行使価格 未取得",
+    best.history.expiry ? `履歴満期 ${best.history.expiry}` : "履歴満期 未取得",
+    best.history.quantity !== undefined ? `履歴数量 ${best.history.quantity}` : "履歴数量 未取得",
+    best.history.buySell ? `履歴売買 ${best.history.buySell}` : "履歴売買 未取得",
+  ].join(" / ");
+  const appShape = [
+    best.app.accountCode ? `建玉口座 ${best.app.accountCode}` : "建玉口座 未取得",
+    `建玉銘柄 ${best.app.ticker}`,
+    `建玉種別 ${best.app.optionType}`,
+    `建玉権利行使価格 ${best.app.strike}`,
+    `建玉満期 ${best.app.expiry}`,
+    `建玉数量 ${best.app.quantity}`,
+    `建玉売買 ${best.app.side}`,
+  ].join(" / ");
+  return `${historyShape}。${appShape}。不一致: ${best.mismatches.join(" ")}`;
 }
 
 export function getSaxoHistoryContractsForLeg(item: SaxoHistoryDiscoveryItem, leg: OptionLeg): number {

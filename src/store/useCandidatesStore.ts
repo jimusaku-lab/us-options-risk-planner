@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CandidateSymbol } from "@/types/candidates";
+import type { CandidateImportSummary, CandidateSymbol } from "@/types/candidates";
 
 const CANDIDATES_KEY = "us-options-candidate-symbols-v1";
 
@@ -23,7 +23,8 @@ type CandidatesStore = {
   candidates: CandidateSymbol[];
   lastImportedAt?: string;
   importWarnings: string[];
-  importCandidateSymbols: (candidates: CandidateSymbol[], warnings?: string[]) => void;
+  lastImportSummary?: CandidateImportSummary;
+  importCandidateSymbols: (candidates: CandidateSymbol[], warnings?: string[], summary?: CandidateImportSummary) => void;
   clearCandidates: () => void;
   markCandidateWatchOnly: (id: string, watchOnly: boolean) => void;
 };
@@ -34,19 +35,20 @@ export const useCandidatesStore = create<CandidatesStore>((set) => ({
   candidates: initialCandidates,
   lastImportedAt: initialCandidates[0]?.importedAt,
   importWarnings: [],
-  importCandidateSymbols: (candidates, warnings = []) =>
+  importCandidateSymbols: (candidates, warnings = [], summary) =>
     set(() => {
       saveJson(CANDIDATES_KEY, candidates);
       return {
         candidates,
         lastImportedAt: candidates[0]?.importedAt,
         importWarnings: warnings,
+        lastImportSummary: summary,
       };
     }),
   clearCandidates: () =>
     set(() => {
       saveJson(CANDIDATES_KEY, []);
-      return { candidates: [], lastImportedAt: undefined, importWarnings: [] };
+      return { candidates: [], lastImportedAt: undefined, importWarnings: [], lastImportSummary: undefined };
     }),
   markCandidateWatchOnly: (id, watchOnly) =>
     set((state) => {

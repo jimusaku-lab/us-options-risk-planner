@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createOptionCloseExecutionDraft } from "@/domain/optionCloseExecutions";
 import {
   createAccountPatchFromSaxoSnapshot,
   createSaxoAccountDiffRows,
@@ -9,9 +10,12 @@ import {
   findOrderCandidatesForLeg,
   getSaxoHistoryCandidateKeys,
   getSaxoHistoryCandidateTarget,
+  getSaxoHistoryContractsForLeg,
+  getSaxoHistoryOptionLegMatchDiagnostics,
   getSaxoHistoryStableKey,
   getSaxoAccountReflectionBlockReason,
   reconcileSaxoPositions,
+  resolveSaxoHistoryOptionLegMatch,
   resolveSaxoPositionSymbol,
   hasAppliedSaxoSnapshot,
   hasConfirmedMappingForAccount,
@@ -19,6 +23,7 @@ import {
   isSaxoHistoryPutAssignmentOptionCandidate,
   isSaxoHistoryMatchingOptionLeg,
   maskSaxoIdentifier,
+  SAXO_CLOSE_ACCOUNT_CONFIRMATION_WARNING,
   SAXO_READONLY_ENDPOINTS,
   type SaxoApiOrderSnapshot,
   type SaxoApiPositionSnapshot,
@@ -479,6 +484,18 @@ describe("Saxo read-only account sync", () => {
     ).toBe("entry");
     expect(
       getSaxoHistoryCandidateTarget({
+        id: "covered-call-unknown-close-buy",
+        kind: "trade",
+        assetType: "StockOption",
+        symbol: "NVDA/10N26C225:XCBF",
+        buySell: "buy",
+        openClose: "unknown",
+        quantity: 1,
+        price: 0.79,
+      }),
+    ).toBe("close");
+    expect(
+      getSaxoHistoryCandidateTarget({
         id: "unknown-sell-with-pnl",
         kind: "trade",
         assetType: "StockOption",
@@ -649,6 +666,185 @@ describe("Saxo read-only account sync", () => {
     };
 
     expect(isSaxoHistoryMatchingOptionLeg(simulation, simulation.optionLegs[0], entryHistory, "entry")).toBe(true);
+  });
+
+  it("matches a Saxo call buy history draft to an open N covered call close", () => {
+    const simulation = createOpenCoveredCallSimulation();
+    const closeHistory: SaxoHistoryDiscoveryItem = {
+      id: "nvda-c225-buyback",
+      kind: "trade",
+      accountCode: "N",
+      symbol: "NVDA/10N26C225:XCBF",
+      assetType: "StockOption",
+      instrumentCode: "NVDA/10N26C225:XCBF",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 0.79,
+      tradeDate: "2026-06-23",
+    };
+    const leg = simulation.optionLegs[0];
+
+    expect(getSaxoHistoryCandidateTarget(closeHistory)).toBe("close");
+    expect(isSaxoHistoryMatchingOptionLeg(simulation, leg, closeHistory, "close")).toBe(true);
+
+    const draft = createOptionCloseExecutionDraft({
+      simulation,
+      leg,
+      closeKind: "buyback",
+      closePriceUSD: closeHistory.price,
+    });
+    const execution = {
+      ...draft,
+      closeDate: closeHistory.tradeDate ?? draft.closeDate,
+      contracts: getSaxoHistoryContractsForLeg(closeHistory, leg),
+      closePriceUSD: closeHistory.price ?? draft.closePriceUSD,
+      settlementCurrency: "USD" as const,
+      source: "saxo_history" as const,
+      sourceTradeId: closeHistory.id,
+      confirmationStatus: "pending" as const,
+      confirmed: false,
+    };
+
+    expect(execution.legId).toBe("leg-call-225");
+    expect(execution.contracts).toBe(1);
+    expect(execution.closeDate).toBe("2026-06-23");
+    expect(execution.closePriceUSD).toBe(0.79);
+    expect(execution.source).toBe("saxo_history");
+    expect(execution.confirmationStatus).toBe("pending");
+  });
+
+  it("does not match a Saxo covered-call close history from a clearly different P/N account", () => {
+    const simulation = createOpenCoveredCallSimulation({ accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT" });
+    const closeHistory: SaxoHistoryDiscoveryItem = {
+      id: "nvda-c225-p-account",
+      kind: "trade",
+      accountCode: "P",
+      symbol: "NVDA/10N26C225:XCBF",
+      assetType: "StockOption",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 0.79,
+    };
+
+    const diagnostics = getSaxoHistoryOptionLegMatchDiagnostics(simulation, simulation.optionLegs[0], closeHistory, "close");
+
+    expect(isSaxoHistoryMatchingOptionLeg(simulation, simulation.optionLegs[0], closeHistory, "close")).toBe(false);
+    expect(diagnostics.mismatches.join(" ")).toContain("P/N口座が不一致");
+  });
+
+  it("resolves a unique covered-call close candidate with an account mismatch as an unconfirmed warning match", () => {
+    const simulation = createOpenCoveredCallSimulation({ accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT" });
+    const closeHistory: SaxoHistoryDiscoveryItem = {
+      id: "nvda-c225-p-account-relaxed",
+      kind: "trade",
+      accountCode: "P",
+      symbol: "NVDA/10N26C225:XCBF",
+      instrumentCode: "NVDA/10N26C225:XCBF",
+      assetType: "StockOption",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 0.79,
+      tradeDate: "2026-06-23",
+    };
+
+    const strictDiagnostics = getSaxoHistoryOptionLegMatchDiagnostics(simulation, simulation.optionLegs[0], closeHistory, "close");
+    const resolved = resolveSaxoHistoryOptionLegMatch([simulation], closeHistory, "close", undefined, {
+      allowCloseAccountMismatch: true,
+    });
+
+    expect(strictDiagnostics.matched).toBe(false);
+    expect(strictDiagnostics.accountMismatches.join(" ")).toContain("P/N口座が不一致");
+    expect(strictDiagnostics.nonAccountMismatches).toEqual([]);
+    expect(resolved?.simulation.id).toBe("sim-covered-call");
+    expect(resolved?.leg.id).toBe("leg-call-225");
+    expect(resolved?.accountConfirmationWarning).toBe(SAXO_CLOSE_ACCOUNT_CONFIRMATION_WARNING);
+  });
+
+  it("does not auto-resolve an account-mismatched close history when multiple identical leg shapes exist", () => {
+    const nSimulation = createOpenCoveredCallSimulation({ id: "sim-n", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT" });
+    const pSimulation = createOpenCoveredCallSimulation({ id: "sim-p", accountCode: "P", accountEnvironment: "PROD_P_JPY_SETTLEMENT" });
+    const closeHistory: SaxoHistoryDiscoveryItem = {
+      id: "nvda-c225-ambiguous",
+      kind: "trade",
+      accountCode: "P",
+      symbol: "NVDA/10N26C225:XCBF",
+      assetType: "StockOption",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 0.79,
+    };
+
+    const unresolved = resolveSaxoHistoryOptionLegMatch([nSimulation, pSimulation], closeHistory, "close", undefined, {
+      allowCloseAccountMismatch: true,
+    });
+    const selected = resolveSaxoHistoryOptionLegMatch([nSimulation, pSimulation], closeHistory, "close", "sim-n", {
+      allowCloseAccountMismatch: true,
+    });
+
+    expect(unresolved).toBeUndefined();
+    expect(selected?.simulation.id).toBe("sim-n");
+    expect(selected?.accountConfirmationWarning).toBe(SAXO_CLOSE_ACCOUNT_CONFIRMATION_WARNING);
+  });
+
+  it("does not relax account mismatch when close history differs by strike", () => {
+    const simulation = createOpenCoveredCallSimulation({ accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT" });
+    const closeHistory: SaxoHistoryDiscoveryItem = {
+      id: "nvda-c220-p-account",
+      kind: "trade",
+      accountCode: "P",
+      symbol: "NVDA/10N26C220:XCBF",
+      assetType: "StockOption",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 0.79,
+    };
+
+    const resolved = resolveSaxoHistoryOptionLegMatch([simulation], closeHistory, "close", undefined, {
+      allowCloseAccountMismatch: true,
+    });
+
+    expect(resolved).toBeUndefined();
+  });
+
+  it("allows a Saxo covered-call close history when account mapping is missing but the leg shape is unique", () => {
+    const simulation = createOpenCoveredCallSimulation();
+    const closeHistory: SaxoHistoryDiscoveryItem = {
+      id: "nvda-c225-unmapped",
+      kind: "trade",
+      symbol: "NVDA/10N26C225:XCBF",
+      assetType: "StockOption",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 0.79,
+    };
+
+    expect(isSaxoHistoryMatchingOptionLeg(simulation, simulation.optionLegs[0], closeHistory, "close")).toBe(true);
+  });
+
+  it("reports the mismatched field when a similar Saxo covered-call close history differs by strike", () => {
+    const simulation = createOpenCoveredCallSimulation();
+    const closeHistory: SaxoHistoryDiscoveryItem = {
+      id: "nvda-c220-buyback",
+      kind: "trade",
+      accountCode: "N",
+      symbol: "NVDA/10N26C220:XCBF",
+      assetType: "StockOption",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 0.79,
+    };
+
+    const diagnostics = getSaxoHistoryOptionLegMatchDiagnostics(simulation, simulation.optionLegs[0], closeHistory, "close");
+
+    expect(isSaxoHistoryMatchingOptionLeg(simulation, simulation.optionLegs[0], closeHistory, "close")).toBe(false);
+    expect(diagnostics.mismatches.join(" ")).toContain("権利行使価格が不一致");
   });
 
   it("matches Saxo option instrument symbols to the underlying ticker for assignment history", () => {
@@ -893,6 +1089,47 @@ function createOpenPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSim
         expiryDate: "2026-06-05",
         isCovered: false,
         putIntent: "accept_assignment",
+      },
+    ],
+    brokerMarginJPY: 0,
+    marginBufferMultiplier: 1,
+    denominatorMode: "cash_secured",
+    taxProfileId: "japan_derivative_separate_tax_user_confirm",
+    ...patch,
+  };
+}
+
+function createOpenCoveredCallSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulation {
+  return {
+    id: "sim-covered-call",
+    status: "open",
+    name: "NVDA covered call",
+    ticker: "NVDA",
+    strategyType: "covered_call",
+    currentPriceUSD: 210,
+    fxRateJPY: 157,
+    accountCode: "N",
+    accountEnvironment: "PROD_N_USD_SETTLEMENT",
+    entryDate: "2026-06-12",
+    expiryDate: "2026-07-10",
+    dte: 28,
+    accountCurrency: "USD",
+    stockPosition: {
+      shares: 100,
+      averageCostUSD: 207.5,
+      denominatorPriceMode: "average_cost",
+    },
+    optionLegs: [
+      {
+        id: "leg-call-225",
+        type: "call",
+        side: "sell",
+        strikeUSD: 225,
+        premiumUSD: 1.83,
+        quantity: 1,
+        expiryDate: "2026-07-10",
+        isCovered: true,
+        callExitIntent: "covered_keep_stock",
       },
     ],
     brokerMarginJPY: 0,

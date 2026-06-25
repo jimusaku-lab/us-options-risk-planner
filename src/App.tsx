@@ -28,6 +28,7 @@ import { FirstRunNotice } from "@/components/help/FirstRunNotice";
 import { UserGuide } from "@/components/help/UserGuide";
 import { SaxoReadOnlyPanel } from "@/features/saxo/SaxoReadOnlyPanel";
 import {
+  describeBestSaxoHistoryOptionLegMismatch,
   findEntryHistoryMatches,
   findSaxoAssignmentStockAcquisitionItem,
   getSaxoHistoryCandidateKeys,
@@ -35,8 +36,8 @@ import {
   getSaxoHistoryStableKey,
   isSaxoHistoryMatchingCloseExecution,
   isSaxoHistoryMatchingEntryExecution,
-  isSaxoHistoryMatchingOptionLeg,
   isSaxoHistoryMatchingStockAcquisition,
+  resolveSaxoHistoryOptionLegMatch,
   resolveSaxoPositionSymbol,
   type SaxoApiOrderSnapshot,
   type SaxoApiPositionSnapshot,
@@ -51,6 +52,7 @@ import { ScenarioCards } from "@/components/results/ScenarioCards";
 import { SummaryCards } from "@/components/results/SummaryCards";
 import { StockHoldingEvaluationCard } from "@/components/results/StockHoldingEvaluationCard";
 import { TaxComparisonCard } from "@/components/results/TaxComparisonCard";
+import { BackToTopButton } from "@/components/ui/BackToTopButton";
 import { SimulationEditor } from "@/components/wizard/SimulationEditor";
 import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
@@ -82,6 +84,7 @@ export default function App() {
   const [saxoPositionCandidates, setSaxoPositionCandidates] = useState<SaxoApiPositionSnapshot[]>([]);
   const [saxoHistoryCandidates, setSaxoHistoryCandidates] = useState<SaxoHistoryDiscoveryItem[]>([]);
   const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
+  const candidatePanelRef = useRef<HTMLDivElement | null>(null);
   const {
     activeWorkspace,
     accountInputs,
@@ -107,6 +110,7 @@ export default function App() {
   const {
     candidates,
     importWarnings,
+    lastImportSummary,
     importCandidateSymbols,
     clearCandidates,
     markCandidateWatchOnly,
@@ -281,6 +285,17 @@ export default function App() {
     upsertSimulation(simulation);
     setIsEditorOpen(true);
     setQuoteStatus(`${candidate.symbol} の${strategyType === "covered_call" ? "カバードコール" : "P売り"}建玉案を作成しました。`);
+  };
+  const toggleCandidatesPanel = () => {
+    if (isCandidatesOpen) {
+      setIsCandidatesOpen(false);
+      return;
+    }
+    setActiveView("positions");
+    setIsCandidatesOpen(true);
+    window.setTimeout(() => {
+      candidatePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   };
   const createSimulationFromSaxoPosition = (position: SaxoApiPositionSnapshot, historyItems: SaxoHistoryDiscoveryItem[] = saxoHistoryCandidates) => {
     if (position.accountAssignment !== "P" && position.accountAssignment !== "N") {
@@ -746,36 +761,43 @@ export default function App() {
     setIsEditorOpen(true);
     setEditorFocusRequest({ anchorId, requestId: Date.now() + Math.random() });
   };
+  type SaxoHistoryDraftResult = {
+    simulationId?: string;
+    closeExecutionId?: string;
+    errorMessage?: string;
+    diagnostics?: string;
+    warningMessage?: string;
+  };
   const findSaxoHistoryTargetSimulation = (item: SaxoHistoryDiscoveryItem, historyTarget: ReturnType<typeof getSaxoHistoryCandidateTarget>) => {
     if (historyTarget === "unknown") return undefined;
     const latestState = useOptionsStore.getState();
-    const latestSimulations = latestState.simulations;
-    const latestSelected = latestSimulations.find((simulation) => simulation.id === latestState.selectedSimulationId);
-    const matches = latestSimulations.flatMap((simulation) =>
-      simulation.optionLegs
-        .filter((leg) => isSaxoHistoryMatchingOptionLeg(simulation, leg, item, historyTarget))
-        .map((leg) => ({ simulation, leg })),
+    return resolveSaxoHistoryOptionLegMatch(
+      latestState.simulations,
+      item,
+      historyTarget,
+      latestState.selectedSimulationId,
+      { allowCloseAccountMismatch: historyTarget === "close" },
     );
-    const selectedMatch = latestSelected ? matches.find((match) => match.simulation.id === latestSelected.id) : undefined;
-    if (selectedMatch) return selectedMatch;
-    return matches.length === 1 ? matches[0] : undefined;
   };
 
   const applySaxoAssignmentDraftToSelectedSimulation = (
     item: SaxoHistoryDiscoveryItem,
     stockItem?: SaxoHistoryDiscoveryItem,
-  ): { simulationId?: string } => {
+  ): SaxoHistoryDraftResult => {
     const historyKeys = getSaxoHistoryCandidateKeys(item);
     const stockKeys = stockItem ? getSaxoHistoryCandidateKeys(stockItem) : [];
     const primaryHistoryKey = getSaxoHistoryStableKey(item);
     const resolvedTarget = findSaxoHistoryTargetSimulation(item, "assignment");
     if (!resolvedTarget) {
-      setQuoteStatus("この権利行使履歴に厳密一致するP売り建玉が見つかりません。P/N口座、銘柄、Put/Call、権利行使価格、満期、数量を確認してください。");
-      return {};
+      const mismatch = describeBestSaxoHistoryOptionLegMismatch(useOptionsStore.getState().simulations, item, "assignment");
+      const errorMessage = "この権利行使履歴に厳密一致するP売り建玉が見つかりません。P/N口座、銘柄、Put/Call、権利行使価格、満期、数量を確認してください。";
+      setQuoteStatus(`${errorMessage}${mismatch ? ` ${mismatch}` : ""}`);
+      return { errorMessage, diagnostics: mismatch };
     }
     if (!stockItem) {
-      setQuoteStatus("権利行使に対応する現物株100株の買付履歴が見つかりません。Saxo履歴を再取得するか、6-Aへ手入力してください。");
-      return {};
+      const errorMessage = "権利行使に対応する現物株100株の買付履歴が見つかりません。Saxo履歴を再取得するか、6-Aへ手入力してください。";
+      setQuoteStatus(errorMessage);
+      return { errorMessage };
     }
     const target = resolvedTarget.simulation;
     const leg = resolvedTarget.leg;
@@ -791,8 +813,9 @@ export default function App() {
     const accountEnvironment: TradeSimulation["accountEnvironment"] =
       target.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "PROD_N_USD_SETTLEMENT" : "PROD_P_JPY_SETTLEMENT";
     if (!Number.isFinite(shares) || shares <= 0 || !Number.isFinite(priceUSD) || priceUSD <= 0) {
-      setQuoteStatus("権利行使候補を作成できませんでした。現物株の株数または取得単価が未取得です。Saxo履歴を確認してください。");
-      return {};
+      const errorMessage = "権利行使候補を作成できませんでした。現物株の株数または取得単価が未取得です。Saxo履歴を確認してください。";
+      setQuoteStatus(errorMessage);
+      return { errorMessage };
     }
     const nextStockAcquisition = {
       enabled: true,
@@ -835,24 +858,28 @@ export default function App() {
     return { simulationId: target.id };
   };
 
-  const applySaxoHistoryDraftToSelectedSimulation = (item: SaxoHistoryDiscoveryItem): { simulationId?: string; closeExecutionId?: string } => {
+  const applySaxoHistoryDraftToSelectedSimulation = (item: SaxoHistoryDiscoveryItem): SaxoHistoryDraftResult => {
     const historyTarget = getSaxoHistoryCandidateTarget(item);
     const historyKeys = getSaxoHistoryCandidateKeys(item);
     const primaryHistoryKey = getSaxoHistoryStableKey(item);
     if (historyTarget === "unknown") {
-      setQuoteStatus("この履歴候補は建玉開始か決済かを判定できません。売買区分と新規/決済区分をSaxo画面で確認し、必要な場合は手入力してください。");
-      return {};
+      const errorMessage = "この履歴候補は建玉開始か決済かを判定できません。売買区分と新規/決済区分をSaxo画面で確認し、必要な場合は手入力してください。";
+      setQuoteStatus(errorMessage);
+      return { errorMessage };
     }
     const resolvedTarget = findSaxoHistoryTargetSimulation(item, historyTarget);
     if (!resolvedTarget) {
-      setQuoteStatus("この履歴候補に厳密一致する建玉が見つかりません。P/N口座、銘柄、Put/Call、権利行使価格、満期、数量を確認してください。");
-      return {};
+      const mismatch = describeBestSaxoHistoryOptionLegMismatch(useOptionsStore.getState().simulations, item, historyTarget);
+      const errorMessage = "この履歴候補に厳密一致する建玉が見つかりません。P/N口座、銘柄、Put/Call、権利行使価格、満期、数量を確認してください。";
+      setQuoteStatus(`${errorMessage}${mismatch ? ` ${mismatch}` : ""}`);
+      return { errorMessage, diagnostics: mismatch };
     }
     const target = resolvedTarget.simulation;
     const shortLeg = resolvedTarget.leg;
     if (!shortLeg) {
-      setQuoteStatus("履歴候補を反映できるオプション脚がありません。対象建玉を確認してください。");
-      return {};
+      const errorMessage = "履歴候補を反映できるオプション脚がありません。対象建玉を確認してください。";
+      setQuoteStatus(errorMessage);
+      return { errorMessage };
     }
     if (historyTarget === "assignment") {
       const stockItem = findSaxoAssignmentStockAcquisitionItem(item, saxoHistoryCandidates);
@@ -895,7 +922,10 @@ export default function App() {
           sourceTradeId: item.id,
           targetPositionId: target.id,
           confirmationStatus: "pending" as const,
-          memo: `入力元: Saxo履歴候補。${item.sourceIdMasked ? `履歴ID: ${item.sourceIdMasked}。` : ""}正式保存前にSaxo履歴と照合してください。`,
+          memo: [
+            `入力元: Saxo履歴候補。${item.sourceIdMasked ? `履歴ID: ${item.sourceIdMasked}。` : ""}正式保存前にSaxo履歴と照合してください。`,
+            resolvedTarget.accountConfirmationWarning,
+          ].filter(Boolean).join(""),
           confirmed: false,
         };
         upsertSimulation({
@@ -905,11 +935,13 @@ export default function App() {
             nextExecution,
           ],
         });
-        setQuoteStatus("履歴候補から作成された決済実績があります。7. 決済実績で内容を確認してください。");
-        return { simulationId: target.id, closeExecutionId: nextExecution.id };
+        const successMessage = `履歴候補から作成された決済実績があります。7. 決済実績で内容を確認してください。${resolvedTarget.accountConfirmationWarning ? ` ${resolvedTarget.accountConfirmationWarning}` : ""}`;
+        setQuoteStatus(successMessage);
+        return { simulationId: target.id, closeExecutionId: nextExecution.id, warningMessage: resolvedTarget.accountConfirmationWarning };
       }
-      setQuoteStatus("履歴候補から作成された決済実績があります。7. 決済実績で内容を確認してください。");
-      return { simulationId: target.id, closeExecutionId: existingExecution.id };
+      const successMessage = `履歴候補から作成された決済実績があります。7. 決済実績で内容を確認してください。${resolvedTarget.accountConfirmationWarning ? ` ${resolvedTarget.accountConfirmationWarning}` : ""}`;
+      setQuoteStatus(successMessage);
+      return { simulationId: target.id, closeExecutionId: existingExecution.id, warningMessage: resolvedTarget.accountConfirmationWarning };
     }
     const existingEntry = (target.optionEntryExecutions ?? []).some(
       (execution) =>
@@ -1133,6 +1165,25 @@ export default function App() {
       })
       .filter((entry): entry is [string, StockHoldingEvaluation] => Boolean(entry[1])),
   );
+  const saxoReadOnlyPanelProps = {
+    workspace: activeWorkspace,
+    accountInputs,
+    simulations,
+    onApplyAccountState: updateAccountState,
+    onOrdersChange: setSaxoOrderCandidates,
+    onPositionsChange: setSaxoPositionCandidates,
+    onHistoryCandidatesChange: setSaxoHistoryCandidates,
+    onCreateHistoryDraft: applySaxoHistoryDraftToSelectedSimulation,
+    onCreateAssignmentDraft: applySaxoAssignmentDraftToSelectedSimulation,
+    onCreatePositionDraft: createSimulationFromSaxoPosition,
+    onLinkPositionToExisting: linkSaxoPositionToExistingSimulation,
+    onCreateStockTransferFromPosition: createStockTransferFromSaxoPosition,
+    stockTransfers,
+    onOpenLinkedSimulation: openSimulationEditorAt,
+    onOpenHistoryTarget: openSelectedSimulationHistoryTarget,
+    onOpenWheelManagement: openWheelManagement,
+    onDownloadJson: downloadJson,
+  };
 
   if (!selected) {
     return (
@@ -1147,7 +1198,8 @@ export default function App() {
           onImportJson={() => importInputRef.current?.click()}
           onToggleGuide={() => setIsGuideOpen((current) => !current)}
           onToggleData={() => setIsDataOpen((current) => !current)}
-          onToggleCandidates={() => setIsCandidatesOpen((current) => !current)}
+          onToggleCandidates={toggleCandidatesPanel}
+          isCandidatesOpen={isCandidatesOpen}
           activeView={activeView}
           onViewChange={setActiveView}
           onRefreshQuote={refreshAllQuotes}
@@ -1156,7 +1208,11 @@ export default function App() {
           quoteStatus=""
         />
         <input ref={importInputRef} className="hidden" type="file" accept="application/json,.json" onChange={(event) => void importJson(event.target.files?.[0] ?? null)} />
-        <div className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5">
+        <div
+          id={activeView === "performance" ? "performance-view-top" : "positions-view-top"}
+          tabIndex={-1}
+          className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5 focus:outline-none"
+        >
           {isGuideOpen ? <UserGuide onClose={() => setIsGuideOpen(false)} /> : null}
           {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
           {activeView === "performance" ? (
@@ -1165,6 +1221,7 @@ export default function App() {
               selectedYear={performanceYear}
               onYearChange={setPerformanceYear}
               onIssueAction={goToYearlyPerformanceIssue}
+              workspace={activeWorkspace}
             />
           ) : (
             <>
@@ -1183,35 +1240,21 @@ export default function App() {
                 onWarningAction={goToCloseDecision}
                 onWorkflowTaskAction={goToWorkflowTask}
               />
-              <SaxoReadOnlyPanel
-                workspace={activeWorkspace}
-                accountInputs={accountInputs}
-                simulations={simulations}
-                onApplyAccountState={updateAccountState}
-                onOrdersChange={setSaxoOrderCandidates}
-                onPositionsChange={setSaxoPositionCandidates}
-                onHistoryCandidatesChange={setSaxoHistoryCandidates}
-                onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
-                onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
-                onCreatePositionDraft={createSimulationFromSaxoPosition}
-                onLinkPositionToExisting={linkSaxoPositionToExistingSimulation}
-                onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
-                stockTransfers={stockTransfers}
-                onOpenLinkedSimulation={openSimulationEditorAt}
-                onOpenHistoryTarget={openSelectedSimulationHistoryTarget}
-                onOpenWheelManagement={openWheelManagement}
-                onDownloadJson={downloadJson}
-              />
+              <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
               {isCandidatesOpen ? (
-                <CandidatePanel
-                  candidates={candidates}
-                  importWarnings={importWarnings}
-                  simulations={simulations}
-                  onImport={importCandidateSymbols}
-                  onClear={clearCandidates}
-                  onWatchOnly={markCandidateWatchOnly}
-                  onCreateSimulation={createCandidateSimulation}
-                />
+                <div ref={candidatePanelRef}>
+                  <CandidatePanel
+                    candidates={candidates}
+                    importWarnings={importWarnings}
+                    importSummary={lastImportSummary}
+                    simulations={simulations}
+                    onImport={importCandidateSymbols}
+                    onClear={clearCandidates}
+                    onClose={() => setIsCandidatesOpen(false)}
+                    onWatchOnly={markCandidateWatchOnly}
+                    onCreateSimulation={createCandidateSimulation}
+                  />
+                </div>
               ) : null}
               <AccountOverview
                 workspace={activeWorkspace}
@@ -1252,6 +1295,7 @@ export default function App() {
             </>
           )}
         </div>
+        <BackToTopButton targetId={activeView === "performance" ? "performance-view-top" : "positions-view-top"} />
       </main>
     );
   }
@@ -1355,7 +1399,8 @@ export default function App() {
         onImportJson={() => importInputRef.current?.click()}
         onToggleGuide={() => setIsGuideOpen((current) => !current)}
         onToggleData={() => setIsDataOpen((current) => !current)}
-        onToggleCandidates={() => setIsCandidatesOpen((current) => !current)}
+        onToggleCandidates={toggleCandidatesPanel}
+        isCandidatesOpen={isCandidatesOpen}
         activeView={activeView}
         onViewChange={setActiveView}
         onRefreshQuote={refreshAllQuotes}
@@ -1364,7 +1409,11 @@ export default function App() {
         quoteStatus={quoteStatus}
       />
       <input ref={importInputRef} className="hidden" type="file" accept="application/json,.json" onChange={(event) => void importJson(event.target.files?.[0] ?? null)} />
-      <div className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5">
+      <div
+        id={activeView === "performance" ? "performance-view-top" : "positions-view-top"}
+        tabIndex={-1}
+        className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5 focus:outline-none"
+      >
         {isGuideOpen ? <UserGuide onClose={() => setIsGuideOpen(false)} /> : null}
         {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
         {activeView === "performance" ? (
@@ -1373,6 +1422,7 @@ export default function App() {
             selectedYear={performanceYear}
             onYearChange={setPerformanceYear}
             onIssueAction={goToYearlyPerformanceIssue}
+            workspace={activeWorkspace}
           />
         ) : (
           <>
@@ -1427,36 +1477,22 @@ export default function App() {
               subtitle={compactCoveredCallMode ? "API接続・取得・反映待ちは必要時だけ確認します。" : undefined}
               collapsed={compactCoveredCallMode}
             >
-              <SaxoReadOnlyPanel
-                workspace={activeWorkspace}
-                accountInputs={accountInputs}
-                simulations={simulations}
-                onApplyAccountState={updateAccountState}
-                onOrdersChange={setSaxoOrderCandidates}
-                onPositionsChange={setSaxoPositionCandidates}
-                onHistoryCandidatesChange={setSaxoHistoryCandidates}
-                onCreateHistoryDraft={applySaxoHistoryDraftToSelectedSimulation}
-                onCreateAssignmentDraft={applySaxoAssignmentDraftToSelectedSimulation}
-                onCreatePositionDraft={createSimulationFromSaxoPosition}
-                onLinkPositionToExisting={linkSaxoPositionToExistingSimulation}
-                onCreateStockTransferFromPosition={createStockTransferFromSaxoPosition}
-                stockTransfers={stockTransfers}
-                onOpenLinkedSimulation={openSimulationEditorAt}
-                onOpenHistoryTarget={openSelectedSimulationHistoryTarget}
-                onOpenWheelManagement={openWheelManagement}
-                onDownloadJson={downloadJson}
-              />
+              <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
             </CollapsibleSection>
             {isCandidatesOpen ? (
-              <CandidatePanel
-                candidates={candidates}
-                importWarnings={importWarnings}
-                simulations={simulations}
-                onImport={importCandidateSymbols}
-                onClear={clearCandidates}
-                onWatchOnly={markCandidateWatchOnly}
-                onCreateSimulation={createCandidateSimulation}
-              />
+              <div ref={candidatePanelRef}>
+                <CandidatePanel
+                  candidates={candidates}
+                  importWarnings={importWarnings}
+                  importSummary={lastImportSummary}
+                  simulations={simulations}
+                  onImport={importCandidateSymbols}
+                  onClear={clearCandidates}
+                  onClose={() => setIsCandidatesOpen(false)}
+                  onWatchOnly={markCandidateWatchOnly}
+                  onCreateSimulation={createCandidateSimulation}
+                />
+              </div>
             ) : null}
             <CollapsibleSection
               title={compactCoveredCallMode ? "口座全体の余力・証拠金詳細" : undefined}
@@ -1512,6 +1548,10 @@ export default function App() {
                         openWheelManagement(selected.ticker);
                         setQuoteStatus("P→N株式移管は記録済みです。現在はN口座で株式保有中です。N口座ホイールを確認し、JSONバックアップを保存してください。");
                       }
+                    }}
+                    onOpenPerformance={() => {
+                      setIsEditorOpen(false);
+                      setActiveView("performance");
                     }}
                     onReturnToSaxoHistory={returnToSaxoHistoryCandidates}
                     onRecreateSaxoHistoryCandidate={recreateSaxoHistoryCandidate}
@@ -1734,8 +1774,9 @@ export default function App() {
             )}
           </>
         )}
-      </div>
-    </main>
+        </div>
+        <BackToTopButton targetId={activeView === "performance" ? "performance-view-top" : "positions-view-top"} />
+      </main>
   );
 }
 
@@ -2127,11 +2168,13 @@ function PerformanceView({
   selectedYear,
   onYearChange,
   onIssueAction,
+  workspace,
 }: {
   summary: ReturnType<typeof calculateYearlyPerformanceSummary>;
   selectedYear: number;
   onYearChange: (year: number) => void;
   onIssueAction: (issue: YearlyPerformanceIssue) => void;
+  workspace: "demo" | "live";
 }) {
   return (
     <section className="grid gap-4">
@@ -2149,6 +2192,7 @@ function PerformanceView({
         selectedYear={selectedYear}
         onYearChange={onYearChange}
         onIssueAction={onIssueAction}
+        workspace={workspace}
         detailsMode="always"
       />
     </section>
@@ -2186,6 +2230,7 @@ function AppHeader({
   onToggleGuide,
   onToggleData,
   onToggleCandidates,
+  isCandidatesOpen,
   activeView,
   onViewChange,
   onRefreshQuote,
@@ -2202,6 +2247,7 @@ function AppHeader({
   onToggleGuide: () => void;
   onToggleData: () => void;
   onToggleCandidates: () => void;
+  isCandidatesOpen: boolean;
   activeView: "positions" | "performance";
   onViewChange: (view: "positions" | "performance") => void;
   onRefreshQuote?: () => void;
@@ -2265,9 +2311,11 @@ function AppHeader({
             <HelpCircle size={16} />
           </button>
           <button
-            className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900"
+            className={`inline-flex h-9 items-center gap-1 rounded-md border px-2 text-sm font-semibold ${
+              isCandidatesOpen ? "border-teal-300 bg-teal-50 text-teal-900" : "border-slate-300 bg-white text-slate-900"
+            }`}
             onClick={onToggleCandidates}
-            title="候補リストを表示"
+            title={isCandidatesOpen ? "スクリーニング候補を閉じる" : "スクリーニング候補を表示"}
           >
             <ListChecks size={16} />
             候補

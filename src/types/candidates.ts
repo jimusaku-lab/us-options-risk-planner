@@ -1,4 +1,13 @@
-export type CandidateSource = "tradingview" | "manual" | "imported_csv";
+import type { ScreeningCandidate, StrategyFitResult, SyntheticForwardEvaluation, TechnicalTimingPattern } from "@/types/screening";
+
+export type CandidateSource =
+  | "moomoo_opend"
+  | "moomoo_file_import"
+  | "manual"
+  | "manual_import"
+  | "legacy_tradingview"
+  | "tradingview"
+  | "imported_csv";
 
 export type CandidateSymbol = {
   id: string;
@@ -25,9 +34,36 @@ export type CandidateSymbol = {
   redlist?: boolean;
   alreadyHasPosition?: boolean;
   watchOnly?: boolean;
+  screeningCandidate?: ScreeningCandidate;
+  strategyFitResults?: StrategyFitResult[];
+  technicalTimingPatterns?: TechnicalTimingPattern[];
+  syntheticForwardCandidates?: SyntheticForwardEvaluation[];
+};
+
+export type CandidateImportFormat = "json" | "csv";
+
+export type CandidateImportError = {
+  rowNumber?: number;
+  symbol?: string;
+  field?: string;
+  message: string;
+};
+
+export type CandidateImportSummary = {
+  totalRows: number;
+  importedCount: number;
+  warningCount: number;
+  errorCount: number;
+  source: CandidateSource;
+  format: CandidateImportFormat;
+  asOf?: string;
+  importedAt: string;
 };
 
 export type CandidateImportResult = {
   candidates: CandidateSymbol[];
   warnings: string[];
+  errors?: CandidateImportError[];
+  summary?: CandidateImportSummary;
+  screeningCandidates?: ScreeningCandidate[];
 };

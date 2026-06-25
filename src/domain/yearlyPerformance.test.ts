@@ -202,10 +202,286 @@ describe("yearly performance summary", () => {
     expect(summary.optionPnlJPY).toBe(0);
     expect(summary.nOptionPnlUSD).toBe(100);
     expect(summary.nReferencePnlJPY).toBe(15_000);
+    expect(summary.combinedReferenceOptionJPY).toBe(15_000);
+    expect(summary.combinedReferenceStockJPY).toBe(0);
+    expect(summary.combinedReferenceTotalJPY).toBe(15_000);
     expect(summary.optionAnnualReturnPct).toBeUndefined();
     expect(summary.nOptionAnnualReturnPct).toBeDefined();
     expect(summary.optionBreakdowns[0].currency).toBe("USD");
     expect(summary.optionBreakdowns[0].amountUSD).toBe(100);
+  });
+
+  it("keeps N account stock settlement USD results out of confirmed JPY totals", () => {
+    const summary = calculateYearlyPerformanceSummary([
+      closedPutSimulation({
+        id: "nvda-c225",
+        name: "NVDA C225",
+        ticker: "NVDA",
+        strategyType: "covered_call",
+        status: "closed",
+        accountEnvironment: "PROD_N_USD_SETTLEMENT",
+        accountCode: "N",
+        accountCurrency: "USD",
+        fxRateJPY: 0,
+        referenceFxRateJPY: undefined,
+        optionLegs: [
+          {
+            ...putLeg,
+            id: "call-225",
+            type: "call",
+            side: "sell",
+            strikeUSD: 225,
+            premiumUSD: 1.8075,
+            quantity: 1,
+            expiryDate: "2026-07-10",
+          },
+        ],
+        optionCloseExecutions: [],
+        stockPosition: {
+          shares: 0,
+          averageCostUSD: 207.5,
+          denominatorPriceMode: "average_cost",
+        },
+        stockSettlement: {
+          enabled: true,
+          kind: "manual_sale",
+          settlementDate: "2026-06-23",
+          shares: 100,
+          sellPriceUSD: 202.76,
+          costBasisUSD: 207.5,
+          commissionUSD: 18.26,
+        },
+      }),
+    ], 2026);
+
+    expect(summary.realizedPnlJPY).toBe(0);
+    expect(summary.stockPnlJPY).toBe(0);
+    expect(summary.nStockPnlUSD).toBeCloseTo(-492.26, 8);
+    expect(summary.nTotalPnlUSD).toBeCloseTo(-492.26, 8);
+    expect(summary.nReferencePnlJPY).toBe(0);
+    expect(summary.stockSettlementCount).toBe(0);
+    expect(summary.nStockSettlementCount).toBe(1);
+    expect(summary.monthly[5].nStockUSD).toBeCloseTo(-492.26, 8);
+    expect(summary.monthly[5].cumulativeNUsd).toBeCloseTo(-492.26, 8);
+    const nStockBucket = summary.taxBuckets.find((bucket) => bucket.id === "n_stock");
+    expect(nStockBucket?.amountUSD).toBeCloseTo(-492.26, 8);
+    expect(nStockBucket?.referenceJPY).toBe(0);
+    expect(summary.tickerSummaries.find((item) => item.ticker === "NVDA")?.nStockUSD).toBeCloseTo(-492.26, 8);
+  });
+
+  it("combines N option USD and N stock settlement USD without mixing them into JPY totals", () => {
+    const optionSimulation = closedPutSimulation({
+      id: "nvda-c225-close",
+      ticker: "NVDA",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      accountCode: "N",
+      accountCurrency: "USD",
+      referenceFxRateJPY: undefined,
+      fxRateJPY: 0,
+      optionCloseExecutions: [
+        {
+          id: "n-c225-close",
+          legId: "put-test",
+          closeKind: "buyback",
+          confirmed: true,
+          closeDate: "2026-06-23",
+          contracts: 1,
+          closePriceUSD: 0.79,
+          commissionUSD: 2.25,
+          settlementCurrency: "USD",
+          realizedPnlUSD: 99.5,
+          source: "saxo_history",
+        },
+      ],
+    });
+    const stockSimulation = closedPutSimulation({
+      id: "nvda-stock-sale",
+      ticker: "NVDA",
+      strategyType: "covered_call",
+      status: "closed",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      accountCode: "N",
+      accountCurrency: "USD",
+      optionCloseExecutions: [],
+      stockSettlement: {
+        enabled: true,
+        kind: "manual_sale",
+        settlementDate: "2026-06-23",
+        shares: 100,
+        sellPriceUSD: 202.76,
+        costBasisUSD: 207.5,
+        commissionUSD: 18.26,
+      },
+    });
+
+    const summary = calculateYearlyPerformanceSummary([optionSimulation, stockSimulation], 2026);
+
+    expect(summary.realizedPnlJPY).toBe(0);
+    expect(summary.nOptionPnlUSD).toBeCloseTo(99.5, 8);
+    expect(summary.nStockPnlUSD).toBeCloseTo(-492.26, 8);
+    expect(summary.nTotalPnlUSD).toBeCloseTo(-392.76, 8);
+    expect(summary.nStockSettlementCount).toBe(1);
+    expect(summary.taxBuckets.find((bucket) => bucket.id === "n_stock")?.count).toBe(1);
+    expect(summary.tickerSummaries.find((item) => item.ticker === "NVDA")?.nStockUSD).toBeCloseTo(-492.26, 8);
+  });
+
+  it("uses N stock settlement cost basis as covered call annual return denominator after stock sale", () => {
+    const summary = calculateYearlyPerformanceSummary([
+      closedPutSimulation({
+        id: "nvda-c225-close-with-stock-sale",
+        ticker: "NVDA",
+        strategyType: "covered_call",
+        accountEnvironment: "PROD_N_USD_SETTLEMENT",
+        accountCode: "N",
+        accountCurrency: "USD",
+        entryDate: "2026-06-20",
+        referenceFxRateJPY: 161.23,
+        fxRateJPY: 0,
+        stockPosition: {
+          shares: 0,
+          averageCostUSD: 207.5,
+          denominatorPriceMode: "average_cost",
+        },
+        optionLegs: [
+          {
+            ...putLeg,
+            id: "call-225",
+            type: "call",
+            side: "sell",
+            strikeUSD: 225,
+            premiumUSD: 1.8075,
+            quantity: 1,
+            expiryDate: "2026-07-10",
+          },
+        ],
+        optionCloseExecutions: [
+          {
+            id: "n-c225-close",
+            legId: "call-225",
+            closeKind: "buyback",
+            confirmed: true,
+            closeDate: "2026-06-23",
+            contracts: 1,
+            closePriceUSD: 0.79,
+            commissionUSD: 2.25,
+            settlementCurrency: "USD",
+            realizedPnlUSD: 99.5,
+            source: "saxo_history",
+          },
+        ],
+        stockSettlement: {
+          enabled: true,
+          kind: "manual_sale",
+          settlementDate: "2026-06-23",
+          shares: 100,
+          sellPriceUSD: 202.76,
+          costBasisUSD: 207.5,
+          commissionUSD: 18.26,
+        },
+      }),
+    ], 2026);
+
+    const nOption = summary.optionBreakdowns.find((item) => item.currency === "USD");
+    expect(summary.nOptionPnlUSD).toBeCloseTo(99.5, 8);
+    expect(nOption?.label).toBe("C225反対売買決済");
+    expect(nOption?.amountUSD).toBeCloseTo(99.5, 8);
+    expect(nOption?.denominatorUSD).toBeCloseTo(20_750, 8);
+    expect(nOption?.annualReturnPct).toBeDefined();
+    expect(summary.nOptionAnnualReturnIncludedCount).toBe(1);
+    expect(summary.nOptionAnnualReturnExcludedCount).toBe(0);
+    expect(summary.annualReturnMissingCount).toBe(0);
+  });
+
+  it("combines P account JPY and N account reference JPY for management overview", () => {
+    const pOption = assignedPutSimulation();
+    const nCoveredCall = closedPutSimulation({
+      id: "nvda-c225-reference-combined",
+      ticker: "NVDA",
+      strategyType: "covered_call",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      accountCode: "N",
+      accountCurrency: "USD",
+      entryDate: "2026-06-20",
+      referenceFxRateJPY: 161.23,
+      fxRateJPY: 0,
+      stockPosition: {
+        shares: 0,
+        averageCostUSD: 207.5,
+        denominatorPriceMode: "average_cost",
+      },
+      optionLegs: [
+        {
+          ...putLeg,
+          id: "call-225",
+          type: "call",
+          side: "sell",
+          strikeUSD: 225,
+          premiumUSD: 1.8075,
+          quantity: 1,
+          expiryDate: "2026-07-10",
+        },
+      ],
+      optionCloseExecutions: [
+        {
+          id: "n-c225-close",
+          legId: "call-225",
+          closeKind: "buyback",
+          confirmed: true,
+          closeDate: "2026-06-23",
+          contracts: 1,
+          closePriceUSD: 0.79,
+          commissionUSD: 2.25,
+          settlementCurrency: "USD",
+          realizedPnlUSD: 99.5,
+          source: "saxo_history",
+        },
+      ],
+      stockSettlement: {
+        enabled: true,
+        kind: "manual_sale",
+        settlementDate: "2026-06-23",
+        shares: 100,
+        sellPriceUSD: 202.76,
+        costBasisUSD: 207.5,
+        fxRateJPY: 161.23,
+        commissionUSD: 18.26,
+      },
+    });
+
+    const pClosedOption = closedPutSimulation({
+      id: "closed-200p",
+      ticker: "NVDA",
+      accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+      accountCode: "P",
+      accountCurrency: "JPY",
+      optionCloseExecutions: [
+        {
+          id: "close-200p",
+          legId: "put-test",
+          closeKind: "buyback",
+          confirmed: true,
+          closeDate: "2026-06-02",
+          contracts: 1,
+          closePriceUSD: 0.13,
+          commissionUSD: 0,
+          settlementCurrency: "JPY",
+          brokerRealizedPnlJPY: 15_491,
+          source: "manual",
+        },
+      ],
+    });
+    const summary = calculateYearlyPerformanceSummary([pClosedOption, pOption, nCoveredCall], 2026);
+
+    expect(summary.optionPnlJPY).toBe(34_283);
+    expect(summary.stockPnlJPY).toBe(0);
+    expect(summary.nOptionPnlUSD).toBeCloseTo(99.5, 8);
+    expect(summary.nStockPnlUSD).toBeCloseTo(-492.26, 8);
+    expect(summary.combinedReferenceOptionJPY).toBeCloseTo(34_283 + 99.5 * 161.23, 2);
+    expect(summary.combinedReferenceStockJPY).toBeCloseTo(-492.26 * 161.23, 2);
+    expect(summary.combinedReferenceTotalJPY).toBeCloseTo(34_283 + (99.5 - 492.26) * 161.23, 2);
+    expect(summary.monthly[5].combinedReferenceOptionJPY).toBeCloseTo(summary.combinedReferenceOptionJPY, 2);
+    expect(summary.monthly[5].combinedReferenceStockJPY).toBeCloseTo(summary.combinedReferenceStockJPY, 2);
+    expect(summary.monthly[5].combinedReferenceCumulativeJPY).toBeCloseTo(summary.combinedReferenceTotalJPY, 2);
   });
 
   it("aggregates monthly results by realization date", () => {

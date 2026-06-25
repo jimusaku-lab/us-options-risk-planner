@@ -14,6 +14,7 @@ import {
   hasUnconfirmedCloseExecutionDraft,
   validateSaxoHistoryCloseExecution,
 } from "@/domain/optionCloseExecutions";
+import { calculateStockSettlementTaxResult } from "@/domain/tax";
 import { getStatusLabel } from "@/domain/strategyLabels";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { getSaxoHistoryCandidateTarget, isSaxoHistoryMatchingOptionLeg, type SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
@@ -32,13 +33,14 @@ type SimulationEditorProps = {
   onCloseDecisionAction?: (anchorId: string) => void;
   onCloseEditor?: () => void;
   onStockAcquisitionCompleteClose?: () => void;
+  onOpenPerformance?: () => void;
   onReturnToSaxoHistory?: () => void;
   onRecreateSaxoHistoryCandidate?: (sourceTradeId?: string) => void;
   stockTransfer?: StockTransferEvent;
   focusRequest?: { anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string } | null;
 };
 
-export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onStockAcquisitionCompleteClose, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
+export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onStockAcquisitionCompleteClose, onOpenPerformance, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
   const [quoteStatus, setQuoteStatus] = useState<string>("");
   const [workflowNotice, setWorkflowNotice] = useState<{ message: string; actionLabel: string; anchorId: string } | null>(null);
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
@@ -89,6 +91,21 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     stockAcquisition.shares > 0 &&
     Number.isFinite(stockAcquisition.priceUSD) &&
     stockAcquisition.priceUSD > 0;
+  const stockSettlementComplete =
+    stockSettlement.enabled &&
+    Boolean(stockSettlement.settlementDate) &&
+    Number.isFinite(stockSettlement.shares) &&
+    stockSettlement.shares > 0 &&
+    Number.isFinite(stockSettlement.sellPriceUSD) &&
+    stockSettlement.sellPriceUSD > 0 &&
+    Number.isFinite(stockSettlement.costBasisUSD) &&
+    stockSettlement.costBasisUSD > 0;
+  const stockSettlementRealizedPnlUSD =
+    (stockSettlement.sellPriceUSD - stockSettlement.costBasisUSD) * stockSettlement.shares - (stockSettlement.commissionUSD ?? 0);
+  const stockSettlementTaxResult = calculateStockSettlementTaxResult({
+    ...simulation,
+    stockSettlement,
+  });
 
   const update = (patch: Partial<TradeSimulation>) => onChange({ ...simulation, ...patch });
   const updateAccountEnvironment = (accountEnvironment: TradeSimulation["accountEnvironment"]) => {
@@ -103,11 +120,18 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     });
   };
   const updateStockSettlement = (patch: Partial<NonNullable<TradeSimulation["stockSettlement"]>>) => {
+    const normalizedPatch =
+      patch.commissionUSD === undefined
+        ? patch
+        : {
+            ...patch,
+            commissionUSD: Math.round(patch.commissionUSD * 100) / 100,
+          };
     update({
       stockSettlement: {
         ...defaultStockSettlement,
         ...stockSettlement,
-        ...patch,
+        ...normalizedPatch,
       },
     });
   };
@@ -1824,7 +1848,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           <div>
             <h3 className="text-sm font-bold text-slate-950">6-B. 現物株の譲渡記録</h3>
             <p className="mt-1 text-xs leading-5 text-slate-500">
-              カバードコールで株を渡した、または現物株を売却した場合だけ入力します。オプション損益とは別に「上場株式等の譲渡所得等」として表示します。
+              カバードコールで株を渡した、または現物株を売却した場合だけ入力します。この欄は入力と同時に保存され、チェックがONで必要項目が入っている場合は成績に反映されます。
             </p>
           </div>
           <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
@@ -1884,7 +1908,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
             />
             <NumberInput
               label="売却手数料"
-              value={stockSettlement.commissionUSD ?? 0}
+              value={Math.round((stockSettlement.commissionUSD ?? 0) * 100) / 100}
               suffix="USD"
               min={0}
               onChange={(commissionUSD) => updateStockSettlement({ commissionUSD })}
@@ -1896,6 +1920,35 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               min={0}
               onChange={(commissionJPY) => updateStockSettlement({ commissionJPY })}
             />
+            {stockSettlementComplete ? (
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950 xl:col-span-4">
+                <div className="font-bold">現物株の譲渡記録は成績に反映済みです。</div>
+                {simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" || simulation.accountCode === "N" ? (
+                  <p className="mt-1">
+                    N口座株式譲渡損益: {formatUSD(stockSettlementRealizedPnlUSD)}
+                    {stockSettlementTaxResult.realizedGainJPY ? ` / 参考 ${formatJPY(stockSettlementTaxResult.realizedGainJPY, { signed: true })}` : ""}
+                  </p>
+                ) : (
+                  <p className="mt-1">株式譲渡損益: {formatJPY(stockSettlementTaxResult.realizedGainJPY, { signed: true })}</p>
+                )}
+                <p className="mt-1 text-xs text-emerald-800">
+                  成績タブの「{simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" || simulation.accountCode === "N" ? "N口座株式譲渡損益（USD主帳簿）" : "P/DEMO株式譲渡損益（JPY集計）"}」で確認できます。
+                </p>
+                {onOpenPerformance ? (
+                  <button
+                    type="button"
+                    className="mt-3 rounded-md bg-emerald-700 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-800"
+                    onClick={onOpenPerformance}
+                  >
+                    成績タブで確認
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950 xl:col-span-4">
+                現物株の譲渡を記録するチェックはONですが、譲渡日、譲渡株数、売却単価、取得単価のいずれかが未入力です。必要項目が揃うまで成績反映済みとは表示しません。
+              </div>
+            )}
           </div>
         ) : (
           <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm leading-6 text-slate-600">

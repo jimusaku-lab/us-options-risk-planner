@@ -28,14 +28,22 @@ export type YearlyPerformanceMonthlyRow = {
   stockJPY: number;
   totalJPY: number;
   nOptionUSD: number;
+  nStockUSD: number;
+  nOptionReferenceJPY: number;
+  nStockReferenceJPY: number;
   nReferenceJPY: number;
+  combinedReferenceOptionJPY: number;
+  combinedReferenceStockJPY: number;
+  combinedReferenceTotalJPY: number;
+  combinedReferenceCumulativeJPY: number;
   cumulativeJPY: number;
-  cumulativeNOptionUSD: number;
+  cumulativeNUsd: number;
 };
 
 export type YearlyPerformanceTaxBucket = {
-  id: "option" | "stock" | "n_option";
+  id: "option" | "stock" | "n_option" | "n_stock";
   label: string;
+  subLabel?: string;
   amountJPY: number;
   amountUSD?: number;
   referenceJPY?: number;
@@ -48,6 +56,7 @@ export type YearlyPerformanceTickerSummary = {
   stockJPY: number;
   totalJPY: number;
   nOptionUSD: number;
+  nStockUSD: number;
   nReferenceJPY: number;
   count: number;
 };
@@ -75,7 +84,12 @@ export type YearlyPerformanceSummary = {
   optionPnlJPY: number;
   stockPnlJPY: number;
   nOptionPnlUSD: number;
+  nStockPnlUSD: number;
+  nTotalPnlUSD: number;
   nReferencePnlJPY: number;
+  combinedReferenceOptionJPY: number;
+  combinedReferenceStockJPY: number;
+  combinedReferenceTotalJPY: number;
   optionCapitalDaysJPY: number;
   optionAnnualReturnProfitJPY: number;
   optionAnnualReturnIncludedCount: number;
@@ -89,6 +103,7 @@ export type YearlyPerformanceSummary = {
   optionCount: number;
   stockSettlementCount: number;
   nOptionCount: number;
+  nStockSettlementCount: number;
   unconfirmedCount: number;
   transactionUnconfirmedCount: number;
   annualReturnMissingCount: number;
@@ -115,6 +130,31 @@ type AggregationEvent = {
   annualReturnIssueTarget?: YearlyPerformanceIssueTarget;
 };
 
+function resolveNOptionDenominatorUSD(simulation: TradeSimulation, fallback?: number): number | undefined {
+  if (fallback !== undefined && Number.isFinite(fallback) && fallback > 0) return fallback;
+  const settlement = simulation.stockSettlement;
+  if (
+    settlement?.enabled &&
+    Number.isFinite(settlement.costBasisUSD) &&
+    settlement.costBasisUSD > 0 &&
+    Number.isFinite(settlement.shares) &&
+    settlement.shares > 0
+  ) {
+    return settlement.costBasisUSD * settlement.shares;
+  }
+  const acquisition = simulation.stockAcquisition;
+  if (
+    acquisition?.enabled &&
+    Number.isFinite(acquisition.priceUSD) &&
+    acquisition.priceUSD > 0 &&
+    Number.isFinite(acquisition.shares) &&
+    acquisition.shares > 0
+  ) {
+    return acquisition.priceUSD * acquisition.shares;
+  }
+  return undefined;
+}
+
 function calculateAnnualReturnPct(amount: number, denominator: number | undefined, days: number | undefined): number | undefined {
   if (denominator === undefined || denominator <= 0 || days === undefined || days <= 0) return undefined;
   return (amount / denominator / days) * 365 * 100;
@@ -135,6 +175,10 @@ function getMissingAnnualReturnReason(event: Pick<AggregationEvent, "denominator
   if (!isPositiveFinite(denominator)) reasons.push(event.denominatorMissingReason ?? "使用分母が不足");
   if (!isPositiveFinite(event.days)) reasons.push("日数が不足");
   return reasons.length > 0 ? reasons.join(" / ") : undefined;
+}
+
+function formatUsdForMessage(value: number): string {
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function getPositiveFx(...values: Array<number | undefined>): number | undefined {
@@ -184,6 +228,7 @@ function addTickerSummary(
       stockJPY: 0,
       totalJPY: 0,
       nOptionUSD: 0,
+      nStockUSD: 0,
       nReferenceJPY: 0,
       count: 0,
     };
@@ -193,6 +238,7 @@ function addTickerSummary(
     stockJPY: current.stockJPY + (patch.stockJPY ?? 0),
     totalJPY: current.totalJPY + (patch.totalJPY ?? 0),
     nOptionUSD: current.nOptionUSD + (patch.nOptionUSD ?? 0),
+    nStockUSD: current.nStockUSD + (patch.nStockUSD ?? 0),
     nReferenceJPY: current.nReferenceJPY + (patch.nReferenceJPY ?? 0),
     count: current.count + (patch.count ?? 0),
   };
@@ -321,9 +367,16 @@ export function calculateYearlyPerformanceSummary(
     stockJPY: 0,
     totalJPY: 0,
     nOptionUSD: 0,
+    nStockUSD: 0,
+    nOptionReferenceJPY: 0,
+    nStockReferenceJPY: 0,
     nReferenceJPY: 0,
+    combinedReferenceOptionJPY: 0,
+    combinedReferenceStockJPY: 0,
+    combinedReferenceTotalJPY: 0,
+    combinedReferenceCumulativeJPY: 0,
     cumulativeJPY: 0,
-    cumulativeNOptionUSD: 0,
+    cumulativeNUsd: 0,
   }));
   const tickerMap = new Map<string, YearlyPerformanceTickerSummary>();
   const availableYearSet = new Set<number>([year]);
@@ -331,7 +384,9 @@ export function calculateYearlyPerformanceSummary(
   let optionPnlJPY = 0;
   let stockPnlJPY = 0;
   let nOptionPnlUSD = 0;
-  let nReferencePnlJPY = 0;
+  let nStockPnlUSD = 0;
+  let nOptionReferencePnlJPY = 0;
+  let nStockReferencePnlJPY = 0;
   let optionCapitalDaysJPY = 0;
   let optionAnnualReturnProfitJPY = 0;
   let optionAnnualReturnIncludedCount = 0;
@@ -343,6 +398,7 @@ export function calculateYearlyPerformanceSummary(
   let optionCount = 0;
   let nOptionCount = 0;
   let stockSettlementCount = 0;
+  let nStockSettlementCount = 0;
   const optionBreakdowns: YearlyPerformanceOptionBreakdown[] = [];
 
   const addEvent = (event: AggregationEvent) => {
@@ -355,7 +411,7 @@ export function calculateYearlyPerformanceSummary(
 
     if (event.kind === "option" && event.amountUSD !== undefined) {
       nOptionPnlUSD += event.amountUSD;
-      nReferencePnlJPY += event.referenceJPY ?? 0;
+      nOptionReferencePnlJPY += event.referenceJPY ?? 0;
       nOptionCount += 1;
       if (event.denominatorUSD !== undefined && event.denominatorUSD > 0 && event.days !== undefined && event.days > 0) {
         nOptionCapitalDaysUSD += (event.denominatorUSD * event.days) / 365;
@@ -387,12 +443,13 @@ export function calculateYearlyPerformanceSummary(
           simulationId: event.simulation.id,
           ticker,
           label: "年率未計算",
-          detail: `${event.label ?? "N口座オプション損益"} の実績年率を計算できません。理由: ${annualReturnMissingReason}。`,
+          detail: `${event.label ?? "N口座オプション損益"} の損益 ${formatUsdForMessage(event.amountUSD)} は反映済みです。実績年率だけ未計算: ${annualReturnMissingReason}。`,
           severity: "warning",
           targetAnchor: event.annualReturnIssueTarget ?? "option-close-executions",
         });
       }
       row.nOptionUSD += event.amountUSD;
+      row.nOptionReferenceJPY += event.referenceJPY ?? 0;
       row.nReferenceJPY += event.referenceJPY ?? 0;
       addTickerSummary(tickerMap, ticker, {
         nOptionUSD: event.amountUSD,
@@ -451,6 +508,21 @@ export function calculateYearlyPerformanceSummary(
       return;
     }
 
+    if (event.kind === "stock" && event.amountUSD !== undefined) {
+      nStockPnlUSD += event.amountUSD;
+      nStockReferencePnlJPY += event.referenceJPY ?? 0;
+      nStockSettlementCount += 1;
+      row.nStockUSD += event.amountUSD;
+      row.nStockReferenceJPY += event.referenceJPY ?? 0;
+      row.nReferenceJPY += event.referenceJPY ?? 0;
+      addTickerSummary(tickerMap, ticker, {
+        nStockUSD: event.amountUSD,
+        nReferenceJPY: event.referenceJPY ?? 0,
+        count: 1,
+      });
+      return;
+    }
+
     stockPnlJPY += event.amountJPY;
     stockSettlementCount += 1;
     row.stockJPY += event.amountJPY;
@@ -482,15 +554,21 @@ export function calculateYearlyPerformanceSummary(
       .filter((result) => result.execution.confirmed)
       .forEach((result) => {
         if (isNAccount(simulation.accountEnvironment)) {
+          const referenceFx = getPositiveFx(
+            result.execution.brokerExchangeRateJPY,
+            result.execution.fxRateJPY,
+            simulation.referenceFxRateJPY,
+            simulation.fxRateJPY,
+          );
           addEvent({
             simulation,
             date: result.execution.closeDate,
             kind: "option",
             amountJPY: 0,
             amountUSD: result.realizedPnlUSD,
-            referenceJPY: result.realizedPnlJPY,
-            label: "反対売買決済",
-            denominatorUSD: result.denominatorUSD,
+            referenceJPY: referenceFx ? result.realizedPnlUSD * referenceFx : undefined,
+            label: `${result.leg.type === "call" ? "C" : "P"}${result.leg.strikeUSD}反対売買決済`,
+            denominatorUSD: resolveNOptionDenominatorUSD(simulation, result.denominatorUSD),
             denominatorJPY: result.denominatorJPY,
             days: result.holdingDays,
           });
@@ -530,22 +608,42 @@ export function calculateYearlyPerformanceSummary(
 
     const stockTax = calculateStockSettlementTaxResult(simulation);
     if (simulation.stockSettlement?.enabled && stockTax.enabled) {
-      addEvent({
-        simulation,
-        date: simulation.stockSettlement.settlementDate,
-        kind: "stock",
-        amountJPY: stockTax.realizedGainJPY,
-      });
+      const settlement = simulation.stockSettlement;
+      if (isNAccount(simulation.accountEnvironment)) {
+        const amountUSD = (settlement.sellPriceUSD - settlement.costBasisUSD) * settlement.shares - (settlement.commissionUSD ?? 0);
+        const fx = getPositiveFx(settlement.fxRateJPY, simulation.referenceFxRateJPY, simulation.fxRateJPY);
+        addEvent({
+          simulation,
+          date: settlement.settlementDate,
+          kind: "stock",
+          amountJPY: 0,
+          amountUSD,
+          referenceJPY: fx ? amountUSD * fx : undefined,
+        });
+      } else {
+        addEvent({
+          simulation,
+          date: settlement.settlementDate,
+          kind: "stock",
+          amountJPY: stockTax.realizedGainJPY,
+        });
+      }
     }
   });
 
   let cumulativeJPY = 0;
-  let cumulativeNOptionUSD = 0;
+  let cumulativeNUsd = 0;
+  let combinedReferenceCumulativeJPY = 0;
   monthly.forEach((row) => {
+    row.combinedReferenceOptionJPY = row.optionJPY + row.nOptionReferenceJPY;
+    row.combinedReferenceStockJPY = row.stockJPY + row.nStockReferenceJPY;
+    row.combinedReferenceTotalJPY = row.combinedReferenceOptionJPY + row.combinedReferenceStockJPY;
     cumulativeJPY += row.totalJPY;
-    cumulativeNOptionUSD += row.nOptionUSD;
+    cumulativeNUsd += row.nOptionUSD + row.nStockUSD;
+    combinedReferenceCumulativeJPY += row.combinedReferenceTotalJPY;
     row.cumulativeJPY = cumulativeJPY;
-    row.cumulativeNOptionUSD = cumulativeNOptionUSD;
+    row.cumulativeNUsd = cumulativeNUsd;
+    row.combinedReferenceCumulativeJPY = combinedReferenceCumulativeJPY;
   });
 
   return {
@@ -554,7 +652,12 @@ export function calculateYearlyPerformanceSummary(
     optionPnlJPY,
     stockPnlJPY,
     nOptionPnlUSD,
-    nReferencePnlJPY,
+    nStockPnlUSD,
+    nTotalPnlUSD: nOptionPnlUSD + nStockPnlUSD,
+    nReferencePnlJPY: nOptionReferencePnlJPY + nStockReferencePnlJPY,
+    combinedReferenceOptionJPY: optionPnlJPY + nOptionReferencePnlJPY,
+    combinedReferenceStockJPY: stockPnlJPY + nStockReferencePnlJPY,
+    combinedReferenceTotalJPY: optionPnlJPY + stockPnlJPY + nOptionReferencePnlJPY + nStockReferencePnlJPY,
     optionCapitalDaysJPY,
     optionAnnualReturnProfitJPY,
     optionAnnualReturnIncludedCount,
@@ -568,6 +671,7 @@ export function calculateYearlyPerformanceSummary(
     optionCount,
     stockSettlementCount,
     nOptionCount,
+    nStockSettlementCount,
     unconfirmedCount: issues.length,
     transactionUnconfirmedCount: issues.filter((issue) => issue.label !== "年率未計算").length,
     annualReturnMissingCount: issues.filter((issue) => issue.label === "年率未計算").length,
@@ -581,7 +685,8 @@ export function calculateYearlyPerformanceSummary(
       },
       {
         id: "stock",
-        label: "上場株式等の譲渡所得等（株式譲渡）",
+        label: "P/DEMO株式譲渡損益（JPY集計）",
+        subLabel: "P/DEMO等のJPY課税集計。N口座USDの株式譲渡は下段に別表示。",
         amountJPY: stockPnlJPY,
         count: stockSettlementCount,
       },
@@ -590,8 +695,17 @@ export function calculateYearlyPerformanceSummary(
         label: "N口座オプション損益（USD主帳簿）",
         amountJPY: 0,
         amountUSD: nOptionPnlUSD,
-        referenceJPY: nReferencePnlJPY,
+        referenceJPY: nOptionReferencePnlJPY,
         count: nOptionCount,
+      },
+      {
+        id: "n_stock",
+        label: "N口座株式譲渡損益（USD主帳簿）",
+        subLabel: "N口座の現物株売却。JPYは参考換算です。",
+        amountJPY: 0,
+        amountUSD: nStockPnlUSD,
+        referenceJPY: nStockReferencePnlJPY,
+        count: nStockSettlementCount,
       },
     ],
     tickerSummaries: Array.from(tickerMap.values()).sort((a, b) => Math.abs(b.totalJPY + b.nReferenceJPY) - Math.abs(a.totalJPY + a.nReferenceJPY)),
