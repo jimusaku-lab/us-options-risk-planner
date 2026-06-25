@@ -37,12 +37,19 @@ import {
   isSaxoHistoryMatchingCloseExecution,
   isSaxoHistoryMatchingEntryExecution,
   isSaxoHistoryMatchingStockAcquisition,
+  resolveSaxoHistoryUnderlyingSymbol,
   resolveSaxoHistoryOptionLegMatch,
   resolveSaxoPositionSymbol,
   type SaxoApiOrderSnapshot,
   type SaxoApiPositionSnapshot,
   type SaxoHistoryDiscoveryItem,
 } from "@/features/saxo/saxoAccountSync";
+import {
+  applySaxoStockSettlementToSimulation,
+  buildSaxoStockSettlementDraft,
+  normalizeSaxoStockSettlementTicker,
+  resolveSaxoStockSettlementTargetSimulation,
+} from "@/features/saxo/saxoStockSettlement";
 import { AnnualReturnFormula } from "@/components/results/AnnualReturnFormula";
 import { CloseDecisionCard } from "@/components/results/CloseDecisionCard";
 import { DenominatorChart, PayoffChart } from "@/components/results/Charts";
@@ -773,6 +780,7 @@ export default function App() {
   };
   const findSaxoHistoryTargetSimulation = (item: SaxoHistoryDiscoveryItem, historyTarget: ReturnType<typeof getSaxoHistoryCandidateTarget>) => {
     if (historyTarget === "unknown") return undefined;
+    if (historyTarget === "stock_settlement") return undefined;
     const latestState = useOptionsStore.getState();
     return resolveSaxoHistoryOptionLegMatch(
       latestState.simulations,
@@ -781,6 +789,46 @@ export default function App() {
       latestState.selectedSimulationId,
       { allowCloseAccountMismatch: historyTarget === "close" },
     );
+  };
+
+  const findSaxoStockSettlementTargetSimulation = (item: SaxoHistoryDiscoveryItem): { simulation?: TradeSimulation; errorMessage?: string } => {
+    const latestState = useOptionsStore.getState();
+    return resolveSaxoStockSettlementTargetSimulation({
+      item,
+      simulations: latestState.simulations,
+      stockTransfers: latestState.stockTransfers,
+      wheelCycles: latestState.wheelCycles,
+      selectedSimulationId: latestState.selectedSimulationId,
+    });
+  };
+
+  const applySaxoStockSettlementDraftToSelectedSimulation = (item: SaxoHistoryDiscoveryItem): SaxoHistoryDraftResult => {
+    const targetResult = findSaxoStockSettlementTargetSimulation(item);
+    if (!targetResult.simulation) {
+      const errorMessage = targetResult.errorMessage ?? "この株式売却履歴に対応する建玉が見つかりません。銘柄、N/P口座、株数を確認してください。";
+      setQuoteStatus(errorMessage);
+      return { errorMessage };
+    }
+    const target = targetResult.simulation;
+    const latestState = useOptionsStore.getState();
+    const draft = buildSaxoStockSettlementDraft({
+      item,
+      target,
+      stockTransfers: latestState.stockTransfers,
+      fallbackDate: formatLocalDate(),
+    });
+    if (!draft.settlement) {
+      const errorMessage = draft.errorMessage ?? "株式譲渡候補を作成できませんでした。株数、売却単価、または取得単価が未取得です。Saxo履歴とP→N移管記録を確認してください。";
+      setQuoteStatus(errorMessage);
+      return { errorMessage };
+    }
+    upsertSimulation(applySaxoStockSettlementToSimulation(target, draft.settlement));
+    setQuoteStatus("Saxo履歴から株式譲渡候補を作成しました。6-B. 株式譲渡記録で売却単価、取得単価、手数料を確認してください。");
+    setActiveView("positions");
+    selectSimulation(target.id);
+    setIsEditorOpen(true);
+    setEditorFocusRequest({ anchorId: "stock-settlement-record", requestId: Date.now() + Math.random(), sourceTradeId: item.id });
+    return { simulationId: target.id };
   };
 
   const applySaxoAssignmentDraftToSelectedSimulation = (
@@ -869,6 +917,9 @@ export default function App() {
       const errorMessage = "この履歴候補は建玉開始か決済かを判定できません。売買区分と新規/決済区分をSaxo画面で確認し、必要な場合は手入力してください。";
       setQuoteStatus(errorMessage);
       return { errorMessage };
+    }
+    if (historyTarget === "stock_settlement") {
+      return applySaxoStockSettlementDraftToSelectedSimulation(item);
     }
     const resolvedTarget = findSaxoHistoryTargetSimulation(item, historyTarget);
     if (!resolvedTarget) {
@@ -985,7 +1036,7 @@ export default function App() {
     setQuoteStatus("履歴候補から作成された建玉開始確認があります。3-Aで内容を確認してください。");
     return { simulationId: target.id };
   };
-  const openSelectedSimulationHistoryTarget = (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record", sourceTradeId?: string) => {
+  const openSelectedSimulationHistoryTarget = (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record" | "stock-settlement-record", sourceTradeId?: string) => {
     const latestState = useOptionsStore.getState();
     const latestSimulations = latestState.simulations;
     const latestSelected =
@@ -1030,7 +1081,14 @@ export default function App() {
           );
         })
       : undefined;
-    const target = closeTarget?.simulation ?? entryTarget?.simulation ?? stockTarget ?? latestSelected ?? latestSimulations[0];
+    const stockSettlementTarget = anchorId === "stock-settlement-record" && sourceTradeId
+      ? latestSimulations.find((simulation) => {
+          const settlement = simulation.stockSettlement;
+          if (!settlement?.enabled) return false;
+          return sourceKeys.some((key) => key && settlement.memo?.includes(key));
+        })
+      : undefined;
+    const target = closeTarget?.simulation ?? entryTarget?.simulation ?? stockTarget ?? stockSettlementTarget ?? latestSelected ?? latestSimulations[0];
     if (!target) {
       setQuoteStatus("建玉入力へ移動できません。先に建玉を作成または選択してください。");
       return;
@@ -1063,12 +1121,20 @@ export default function App() {
         requestId: Date.now() + Math.random(),
         sourceTradeId,
       });
+    } else if (anchorId === "stock-settlement-record" && sourceTradeId) {
+      setEditorFocusRequest({
+        anchorId: "stock-settlement-record",
+        requestId: Date.now() + Math.random(),
+        sourceTradeId,
+      });
     } else {
       setEditorFocusRequest({ anchorId, requestId: Date.now() + Math.random() });
     }
     setQuoteStatus(
       anchorId === "stock-acquisition-record"
         ? "履歴候補から作成された権利行使・現物株取得候補があります。6-Aで内容を確認してください。"
+      : anchorId === "stock-settlement-record"
+        ? "履歴候補から作成された株式譲渡候補があります。6-Bで内容を確認してください。"
       : anchorId === "option-entry-executions"
         ? "履歴候補から作成された建玉開始確認があります。3-Aで内容を確認してください。"
       : "履歴候補から作成された決済実績があります。7. 決済実績で内容を確認してください。",
@@ -1085,6 +1151,7 @@ export default function App() {
       setIsEditorOpen(false);
       return;
     }
+    const historyTarget = getSaxoHistoryCandidateTarget(item);
     const created = applySaxoHistoryDraftToSelectedSimulation(item);
     const targetId = created.simulationId ?? selected?.id ?? simulations[0]?.id;
     if (!targetId) return;
@@ -1092,9 +1159,14 @@ export default function App() {
     selectSimulation(targetId);
     setIsEditorOpen(true);
     setEditorFocusRequest({
-      anchorId: created.closeExecutionId ? `option-close-execution-${created.closeExecutionId}` : "option-close-executions",
+      anchorId:
+        historyTarget === "stock_settlement"
+          ? "stock-settlement-record"
+          : created.closeExecutionId
+            ? `option-close-execution-${created.closeExecutionId}`
+            : "option-close-executions",
       requestId: Date.now() + Math.random(),
-      saxoHistoryIssue: created.closeExecutionId ? undefined : "missing-close-candidate",
+      saxoHistoryIssue: historyTarget === "stock_settlement" || created.closeExecutionId ? undefined : "missing-close-candidate",
       sourceTradeId: item.id,
     });
   };
@@ -1188,6 +1260,32 @@ export default function App() {
     onDownloadJson: downloadJson,
     onPendingStateChange: setSaxoHasPendingReflection,
   };
+  const pendingSaxoStockSettlementItems = saxoHistoryCandidates.filter(
+    (item) => getSaxoHistoryCandidateTarget(item) === "stock_settlement",
+  );
+  const yearlyPerformanceSummaryForView =
+    pendingSaxoStockSettlementItems.length > 0 && yearlyPerformanceSummary.nStockSettlementCount === 0
+      ? (() => {
+          const item = pendingSaxoStockSettlementItems[0];
+          const target = findSaxoStockSettlementTargetSimulation(item).simulation ?? selected ?? simulations[0];
+          const ticker = normalizeSaxoStockSettlementTicker(resolveSaxoHistoryUnderlyingSymbol(item) ?? item.symbol ?? target?.ticker ?? "NVDA") || "NVDA";
+          const issue: YearlyPerformanceIssue = {
+            id: `saxo-stock-sale-unreflected-${item.id}`,
+            simulationId: target?.id ?? selected?.id ?? simulations[0]?.id ?? "",
+            ticker,
+            label: "N口座株式売却未反映",
+            detail: "Saxo履歴に現物株売却がありますが、株式譲渡記録が未作成です。6-B 株式譲渡記録へ進んでください。",
+            severity: "warning",
+            targetAnchor: "stock-settlement-record",
+          };
+          return {
+            ...yearlyPerformanceSummary,
+            unconfirmedCount: yearlyPerformanceSummary.unconfirmedCount + 1,
+            transactionUnconfirmedCount: yearlyPerformanceSummary.transactionUnconfirmedCount + 1,
+            issues: [...yearlyPerformanceSummary.issues, issue],
+          };
+        })()
+      : yearlyPerformanceSummary;
 
   if (!selected) {
     return (
@@ -1221,7 +1319,7 @@ export default function App() {
           {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
           {activeView === "performance" ? (
             <PerformanceView
-              summary={yearlyPerformanceSummary}
+              summary={yearlyPerformanceSummaryForView}
               selectedYear={performanceYear}
               onYearChange={setPerformanceYear}
               onIssueAction={goToYearlyPerformanceIssue}
@@ -1452,7 +1550,7 @@ export default function App() {
         {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
         {activeView === "performance" ? (
           <PerformanceView
-            summary={yearlyPerformanceSummary}
+            summary={yearlyPerformanceSummaryForView}
             selectedYear={performanceYear}
             onYearChange={setPerformanceYear}
             onIssueAction={goToYearlyPerformanceIssue}

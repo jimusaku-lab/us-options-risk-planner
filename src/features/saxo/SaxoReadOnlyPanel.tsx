@@ -93,10 +93,10 @@ type LinkedSimulationResolution =
 
 type HistoryReflectionState =
   | { status: "none" }
-  | { status: "candidate"; simulationId: string; recordId: string; target: "entry" | "close" | "assignment"; assignmentCompleted?: boolean; assignmentTransferred?: boolean }
-  | { status: "official"; simulationId: string; recordId: string; target: "entry" | "close" | "assignment"; assignmentCompleted?: boolean; assignmentTransferred?: boolean }
+  | { status: "candidate"; simulationId: string; recordId: string; target: "entry" | "close" | "assignment" | "stock_settlement"; assignmentCompleted?: boolean; assignmentTransferred?: boolean }
+  | { status: "official"; simulationId: string; recordId: string; target: "entry" | "close" | "assignment" | "stock_settlement"; assignmentCompleted?: boolean; assignmentTransferred?: boolean }
   | { status: "ignored" }
-  | { status: "broken"; target: "entry" | "close" | "assignment" | "unknown"; reason: string };
+  | { status: "broken"; target: "entry" | "close" | "assignment" | "stock_settlement" | "unknown"; reason: string };
 
 export function SaxoReadOnlyPanel({
   workspace,
@@ -132,7 +132,7 @@ export function SaxoReadOnlyPanel({
   onCreateStockTransferFromPosition?: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
   stockTransfers?: StockTransferEvent[];
   onOpenLinkedSimulation?: (simulationId: string, anchorId?: string) => void;
-  onOpenHistoryTarget?: (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record", sourceTradeId?: string) => void;
+  onOpenHistoryTarget?: (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record" | "stock-settlement-record", sourceTradeId?: string) => void;
   onOpenWheelManagement?: (ticker?: string) => void;
   onDownloadJson?: () => void;
   onPendingStateChange?: (hasPending: boolean) => void;
@@ -437,7 +437,7 @@ export function SaxoReadOnlyPanel({
     const assignmentStockItem = target === "assignment" ? findSaxoAssignmentStockAcquisitionItem(item, historyItems) : undefined;
     const created = target === "assignment" ? onCreateAssignmentDraft?.(item, assignmentStockItem) : onCreateHistoryDraft?.(item);
     if (!created?.simulationId) {
-      const targetLabel = target === "assignment" ? "権利行使候補" : target === "close" ? "決済実績候補" : "建玉開始候補";
+      const targetLabel = target === "assignment" ? "権利行使候補" : target === "close" ? "決済実績候補" : target === "stock_settlement" ? "株式譲渡候補" : "建玉開始候補";
       const baseMessage = created?.errorMessage ?? `${targetLabel}を作成できませんでした。P/N口座、銘柄、Put/Call、権利行使価格、満期、数量が対象建玉と一致するか確認してください。`;
       const message = created?.diagnostics ? `${baseMessage} ${created.diagnostics}` : baseMessage;
       setMessage(message);
@@ -456,6 +456,8 @@ export function SaxoReadOnlyPanel({
         ? "権利行使候補を作成しました。6-A. 現物株の取得記録で株数と取得単価を確認してください。通常の買戻し決済としては保存していません。"
         : target === "close"
           ? "決済実績への反映候補を作成しました。正式な決済実績保存や現金残高反映はまだ行っていません。"
+        : target === "stock_settlement"
+          ? "株式譲渡候補を作成しました。6-B. 現物株の譲渡記録で売却単価、取得単価、手数料を確認してください。"
           : "建玉開始の約定確認への反映候補を作成しました。正式な建玉保存はまだ行っていません。";
     const message = created.warningMessage ? `${successMessage} ${created.warningMessage}` : successMessage;
     setMessage(message);
@@ -480,6 +482,7 @@ export function SaxoReadOnlyPanel({
     let entryCount = 0;
     let closeCount = 0;
     let assignmentCount = 0;
+    let stockSettlementCount = 0;
     let failedCount = 0;
     for (const item of creatableItems) {
       const target = getSaxoHistoryCandidateTarget(item);
@@ -487,12 +490,13 @@ export function SaxoReadOnlyPanel({
       if (ok && target === "entry") entryCount += 1;
       if (ok && target === "close") closeCount += 1;
       if (ok && target === "assignment") assignmentCount += 1;
+      if (ok && target === "stock_settlement") stockSettlementCount += 1;
       if (!ok) failedCount += 1;
     }
     setMessage(
       failedCount > 0
-        ? `反映候補を作成しました。3-A確認待ち ${entryCount}件 / 7確認待ち ${closeCount}件 / 6-A権利行使 ${assignmentCount}件 / 作成失敗 ${failedCount}件。失敗した行は不足理由を確認してください。`
-        : `反映候補を作成しました。3-A確認待ち ${entryCount}件 / 7確認待ち ${closeCount}件 / 6-A権利行使 ${assignmentCount}件。`,
+        ? `反映候補を作成しました。3-A確認待ち ${entryCount}件 / 7確認待ち ${closeCount}件 / 6-A権利行使 ${assignmentCount}件 / 6-B株式譲渡 ${stockSettlementCount}件 / 作成失敗 ${failedCount}件。失敗した行は不足理由を確認してください。`
+        : `反映候補を作成しました。3-A確認待ち ${entryCount}件 / 7確認待ち ${closeCount}件 / 6-A権利行使 ${assignmentCount}件 / 6-B株式譲渡 ${stockSettlementCount}件。`,
     );
   }
 
@@ -905,7 +909,10 @@ export function SaxoReadOnlyPanel({
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function goToEditorAnchor(anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record", sourceTradeId?: string) {
+  function goToEditorAnchor(
+    anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record" | "stock-settlement-record",
+    sourceTradeId?: string,
+  ) {
     setIsOpen(false);
     if (onOpenHistoryTarget) {
       onOpenHistoryTarget(anchorId, sourceTradeId);
@@ -1667,6 +1674,7 @@ export function SaxoReadOnlyPanel({
                 onGoEntry={() => goToEditorAnchor("option-entry-executions")}
                 onGoClose={(sourceTradeId) => goToEditorAnchor("option-close-executions", sourceTradeId)}
                 onGoAssignment={(sourceTradeId) => goToEditorAnchor("stock-acquisition-record", sourceTradeId)}
+                onGoStockSettlement={(sourceTradeId) => goToEditorAnchor("stock-settlement-record", sourceTradeId)}
                 onClosePanel={() => setIsOpen(false)}
                 onIgnoreHistoryCandidate={ignoreHistoryCandidate}
                 onUnignoreHistoryCandidate={unignoreHistoryCandidate}
@@ -3345,6 +3353,7 @@ function HistoryDiscoveryPreview({
   onGoEntry,
   onGoClose,
   onGoAssignment,
+  onGoStockSettlement,
   onClosePanel,
   onIgnoreHistoryCandidate,
   onUnignoreHistoryCandidate,
@@ -3361,6 +3370,7 @@ function HistoryDiscoveryPreview({
   onGoEntry: () => void;
   onGoClose: (sourceTradeId?: string) => void;
   onGoAssignment: (sourceTradeId?: string) => void;
+  onGoStockSettlement: (sourceTradeId?: string) => void;
   onClosePanel: () => void;
   onIgnoreHistoryCandidate: (item: SaxoHistoryDiscoveryItem) => void;
   onUnignoreHistoryCandidate: (item: SaxoHistoryDiscoveryItem) => void;
@@ -3388,6 +3398,11 @@ function HistoryDiscoveryPreview({
   const entryReflectedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "entry" && isActualReflection(item)).length;
   const closeReflectedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "close" && isActualReflection(item)).length;
   const assignmentReflectedCount = historyItems.filter(isPendingAssignmentReflection).length;
+  const stockSettlementReflectedItems = historyItems.filter(
+    (item) => getSaxoHistoryCandidateTarget(item) === "stock_settlement" && isActualReflection(item),
+  );
+  const stockSettlementReflectedCount = stockSettlementReflectedItems.length;
+  const firstReflectedStockSettlementItem = stockSettlementReflectedItems[0];
   const assignmentCompletedCount = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "assignment" && isCompletedAssignmentReflection(reflectionStates[item.id])).length;
   const assignmentImportantCount = historyItems.filter(
     (item) => {
@@ -3486,7 +3501,7 @@ function HistoryDiscoveryPreview({
             <p className="text-sm leading-6 text-slate-700">
               {brokenCount > 0
                 ? "監査用の復旧候補があります。通常の未入力候補とは分けて表示しています。必要な場合だけ各行から再作成してください。"
-                : "履歴候補から反映候補を作成済みです。建玉開始の履歴は3-A、通常決済の履歴は7、P売り権利行使の履歴は6-A 現物株の取得記録で確認してください。"}
+                : "履歴候補から反映候補を作成済みです。建玉開始の履歴は3-A、通常決済の履歴は7、P売り権利行使の履歴は6-A、N口座株式売却の履歴は6-Bで確認してください。"}
             </p>
             {!hasCreatableItems ? (
               <div className="rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-bold text-teal-900">
@@ -3500,6 +3515,7 @@ function HistoryDiscoveryPreview({
               <div className="rounded bg-white px-3 py-2">建玉開始の確認待ち: {entryReflectedCount}件</div>
               <div className="rounded bg-white px-3 py-2">決済実績の確認待ち: {closeReflectedCount}件</div>
               <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認待ち: {assignmentReflectedCount}件</div>
+              <div className="rounded bg-white px-3 py-2 sm:col-span-2">株式譲渡記録の確認待ち: {stockSettlementReflectedCount}件</div>
               {assignmentCompletedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認済み: {assignmentCompletedCount}件</div> : null}
               {brokenCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">監査用の復旧候補: {brokenCount}件（候補実体が見つかりません。必要な場合だけ行ごとに再作成します）</div> : null}
               {ignoredCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">無視済み: {ignoredCount}件（復旧対象から除外）</div> : null}
@@ -3519,6 +3535,11 @@ function HistoryDiscoveryPreview({
               {assignmentReflectedCount > 0 ? (
                 <button type="button" className="rounded-md bg-red-600 px-3 py-2 text-sm font-bold text-white" onClick={() => onGoAssignment(firstReflectedAssignmentItem?.id)}>
                   6-A 現物株取得へ移動（{assignmentReflectedCount}件）
+                </button>
+              ) : null}
+              {stockSettlementReflectedCount > 0 ? (
+                <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white" onClick={() => onGoStockSettlement(firstReflectedStockSettlementItem?.id)}>
+                  6-B 株式譲渡へ移動（{stockSettlementReflectedCount}件）
                 </button>
               ) : null}
               <button type="button" className="rounded-md border border-slate-300 px-3 py-2 text-sm font-bold text-slate-800" onClick={onClosePanel}>
@@ -3583,6 +3604,8 @@ function HistoryDiscoveryPreview({
                           ? () => onGoClose(item.id)
                           : getSaxoHistoryCandidateTarget(item) === "assignment"
                             ? () => onCreateDraftAndOpen(item)
+                          : getSaxoHistoryCandidateTarget(item) === "stock_settlement"
+                            ? () => onGoStockSettlement(item.id)
                           : getSaxoHistoryCandidateTarget(item) === "entry"
                             ? onGoEntry
                             : () => undefined
@@ -3610,6 +3633,8 @@ function HistoryDiscoveryPreview({
                 ? "決済実績への反映候補"
                 : getSaxoHistoryCandidateTarget(historyDraft) === "assignment"
                   ? "権利行使・現物株取得への反映候補"
+                : getSaxoHistoryCandidateTarget(historyDraft) === "stock_settlement"
+                  ? "株式譲渡記録への反映候補"
                 : getSaxoHistoryCandidateTarget(historyDraft) === "entry"
                   ? "建玉開始の約定確認への反映候補"
                   : "要確認の履歴候補"}
@@ -3713,8 +3738,10 @@ function HistoryCandidateRow({
                   ? "6-A確認済み / 現物株取得反映済みです。追加の6-A確認は不要です。"
                 : reflectionState.status === "official"
                   ? "正式保存済みです。重複作成は不要です。"
-                : target === "assignment"
-                  ? "6-Aで現物株取得を確認してください。通常の買戻し決済としては扱いません。"
+                  : target === "assignment"
+                    ? "6-Aで現物株取得を確認してください。通常の買戻し決済としては扱いません。"
+                  : target === "stock_settlement"
+                    ? "6-Bで株式譲渡記録を確認してください。"
                   : `${getHistoryCandidateDestinationLabel(item)}で確認してください`}
             </div>
             {!isAssignmentCompleted ? (
@@ -3727,7 +3754,7 @@ function HistoryCandidateRow({
                 }`}
                 onClick={onGoTarget}
               >
-                {target === "assignment" ? "推奨: 6-Aで現物株取得を確認" : target === "close" ? "この履歴を決済実績で確認" : "この履歴を3-Aで確認"}
+                  {target === "assignment" ? "推奨: 6-Aで現物株取得を確認" : target === "close" ? "この履歴を決済実績で確認" : target === "stock_settlement" ? "この履歴を株式譲渡記録で確認" : "この履歴を3-Aで確認"}
               </button>
             ) : null}
           </div>
@@ -3774,7 +3801,7 @@ function HistoryCandidateRow({
             onClick={() => onCreateDraftAndOpen(item)}
           >
             <FilePlus2 size={13} />
-            {target === "assignment" ? "推奨: 権利行使候補を作成して6-Aへ進む" : target === "close" ? "決済実績候補を作成して7へ進む" : "建玉開始候補を作成して3-Aへ進む"}
+            {target === "assignment" ? "推奨: 権利行使候補を作成して6-Aへ進む" : target === "close" ? "決済実績候補を作成して7へ進む" : target === "stock_settlement" ? "株式譲渡候補を作成して6-Bへ進む" : "建玉開始候補を作成して3-Aへ進む"}
           </button>
         )}
       </div>
@@ -3803,14 +3830,16 @@ function getHistoryDisplayPriority(item: SaxoHistoryDiscoveryItem): number {
   const target = getSaxoHistoryCandidateTarget(item);
   if (target === "assignment") return 0;
   if (target === "close") return 1;
-  if (target === "entry") return 2;
-  return 3;
+  if (target === "stock_settlement") return 2;
+  if (target === "entry") return 3;
+  return 4;
 }
 
 function getHistoryCandidateTargetLabel(item: SaxoHistoryDiscoveryItem): string {
   const target = getSaxoHistoryCandidateTarget(item);
   if (target === "unknown") return "要確認";
   if (target === "assignment") return "権利行使履歴";
+  if (target === "stock_settlement") return "株式売却履歴";
   return target === "close" ? "決済履歴" : "建玉開始履歴";
 }
 
@@ -3818,12 +3847,14 @@ function getHistoryCandidateDestinationLabel(item: SaxoHistoryDiscoveryItem): st
   const target = getSaxoHistoryCandidateTarget(item);
   if (target === "unknown") return "自動反映なし";
   if (target === "assignment") return "6-A. 現物株の取得記録";
+  if (target === "stock_settlement") return "6-B. 株式譲渡記録";
   return target === "close" ? "7. 決済実績" : "3-A. 建玉開始の約定確認";
 }
 
-function getHistoryCandidateAnchorId(item: SaxoHistoryDiscoveryItem): "option-entry-executions" | "option-close-executions" | "stock-acquisition-record" {
+function getHistoryCandidateAnchorId(item: SaxoHistoryDiscoveryItem): "option-entry-executions" | "option-close-executions" | "stock-acquisition-record" | "stock-settlement-record" {
   const target = getSaxoHistoryCandidateTarget(item);
   if (target === "assignment") return "stock-acquisition-record";
+  if (target === "stock_settlement") return "stock-settlement-record";
   return target === "close" ? "option-close-executions" : "option-entry-executions";
 }
 
@@ -4420,6 +4451,7 @@ function getSaxoOrderCategoryNotice(order: SaxoApiOrderSnapshot, category: SaxoO
 function formatHistorySide(item: SaxoHistoryDiscoveryItem): string {
   const target = getSaxoHistoryCandidateTarget(item);
   if (target === "assignment") return "買 / 権利行使候補";
+  if (target === "stock_settlement") return "売 / 株式譲渡候補";
   if (item.buySell === "buy") return target === "close" ? "買 / 決済候補" : "買 / 建玉開始候補";
   if (item.buySell === "sell") return target === "close" ? "売 / 決済候補" : "売 / 建玉開始候補";
   return "売買不明 / ユーザー確認";
@@ -4788,6 +4820,22 @@ function createHistoryReflectionStates(
       }
       continue;
     }
+    const stockSettlementRecord = target === "stock_settlement"
+      ? simulations.find((simulation) => {
+          const settlement = simulation.stockSettlement;
+          if (!settlement?.enabled) return false;
+          return historyKeys.some((key) => key && settlement.memo?.includes(key));
+        })
+      : undefined;
+    if (stockSettlementRecord?.stockSettlement) {
+      states[item.id] = {
+        status: "candidate",
+        simulationId: stockSettlementRecord.id,
+        recordId: stockSettlementRecord.stockSettlement.memo ?? stockSettlementRecord.id,
+        target,
+      };
+      continue;
+    }
     states[item.id] = hasReflectedKey
       ? { status: "broken", target, reason: "作成済みフラグだけが残っており、対応する反映候補または正式保存済み実績が見つかりません。" }
       : { status: "none" };
@@ -4927,6 +4975,7 @@ function createReflectionSummary({
   const entryCandidates = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "entry").length;
   const closeCandidates = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "close").length;
   const assignmentCandidates = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "assignment").length;
+  const stockSettlementCandidates = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "stock_settlement").length;
   const unknownHistoryCandidates = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) === "unknown").length;
   const actionableHistoryItems = historyItems.filter((item) => getSaxoHistoryCandidateTarget(item) !== "unknown");
   const reflectedHistoryCount = actionableHistoryItems.filter((item) => {
@@ -4976,7 +5025,7 @@ function createReflectionSummary({
             : anyHistoryReflected
               ? `反映済み${reflectedHistoryCount}件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要${createNeededHistoryCount}件`
               : createNeededHistoryCount > 0
-                ? `建玉${entryCandidates}件 / 決済${closeCandidates}件 / 権利行使${assignmentCandidates}件 / 追加で作成が必要${createNeededHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
+                ? `建玉${entryCandidates}件 / 決済${closeCandidates}件 / 権利行使${assignmentCandidates}件 / 株式譲渡${stockSettlementCandidates}件 / 追加で作成が必要${createNeededHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
                 : `反映済み0件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要0件`,
       actionable: historyActionable,
       actionLabel: historyActionable

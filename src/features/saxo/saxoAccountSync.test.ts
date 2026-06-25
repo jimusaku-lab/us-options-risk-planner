@@ -539,6 +539,34 @@ describe("Saxo read-only account sync", () => {
         price: 207.5,
       }),
     ).toBe("unknown");
+    expect(
+      getSaxoHistoryCandidateTarget({
+        id: "n-stock-sale",
+        kind: "trade",
+        accountCode: "N",
+        assetType: "Stock",
+        symbol: "NVDA",
+        buySell: "sell",
+        quantity: 100,
+        price: 202.76,
+        transactionCost: 18.26,
+        tradeDate: "2026-06-23",
+      }),
+    ).toBe("stock_settlement");
+    expect(
+      getSaxoHistoryCandidateTarget({
+        id: "n-stock-sale-no-account-code",
+        kind: "trade",
+        assetType: "Stock",
+        symbol: "NVIDIA Corp.",
+        buySell: "sell",
+        quantity: 100,
+        price: 202.76,
+        bookedAmount: 20257.74,
+        transactionCost: -18.26,
+        tradeDate: "2026-06-23",
+      }),
+    ).toBe("stock_settlement");
   });
 
   it("creates a stable Saxo history key independent of list index ids", () => {

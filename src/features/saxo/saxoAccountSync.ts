@@ -695,12 +695,13 @@ export type SaxoEntryHistoryMatch = {
   reasons: string[];
 };
 
-export type SaxoHistoryCandidateTarget = "entry" | "close" | "assignment" | "unknown";
+export type SaxoHistoryCandidateTarget = "entry" | "close" | "assignment" | "stock_settlement" | "unknown";
 export const SAXO_CLOSE_ACCOUNT_CONFIRMATION_WARNING =
   "Saxo履歴側の口座情報が建玉側と一致しない、または信頼できないため、正式保存前にN/P口座を確認してください。";
 
 export function getSaxoHistoryCandidateTarget(item: SaxoHistoryDiscoveryItem): SaxoHistoryCandidateTarget {
   if (isSaxoHistoryPutAssignmentOptionCandidate(item)) return "assignment";
+  if (isSaxoHistoryStockSettlementCandidate(item)) return "stock_settlement";
   if (!isSaxoOptionHistoryItem(item)) return "unknown";
   if (item.kind === "closed_position") return "close";
   if (item.openClose === "close") return "close";
@@ -715,6 +716,22 @@ export function getSaxoHistoryCandidateTarget(item: SaxoHistoryDiscoveryItem): S
 function isSaxoOptionHistoryItem(item: SaxoHistoryDiscoveryItem): boolean {
   const assetType = (item.assetType ?? "").toLowerCase();
   return assetType.includes("option") || Boolean(resolveSaxoHistoryOptionContract(item));
+}
+
+export function isSaxoHistoryStockSettlementCandidate(item: SaxoHistoryDiscoveryItem): boolean {
+  const assetType = (item.assetType ?? "").toLowerCase();
+  if (!assetType.includes("stock") || assetType.includes("option")) return false;
+  if (item.buySell !== "sell") return false;
+  if (item.accountCode === "P") return false;
+  const quantity = item.quantity !== undefined ? Math.abs(item.quantity) : undefined;
+  if (quantity === undefined || quantity < 1) return false;
+  if (item.price === undefined || !Number.isFinite(item.price) || item.price <= 0) return false;
+  if (item.accountCode !== "N") {
+    const hasNonZeroBooking = item.bookedAmount !== undefined && Math.abs(item.bookedAmount) > 0.0001;
+    const hasTransactionCost = item.transactionCost !== undefined && Math.abs(item.transactionCost) > 0.0001;
+    if (!hasNonZeroBooking && !hasTransactionCost) return false;
+  }
+  return Boolean(resolveSaxoHistoryUnderlyingSymbol(item));
 }
 
 export function isSaxoHistoryPutAssignmentOptionCandidate(item: SaxoHistoryDiscoveryItem): boolean {
@@ -1223,12 +1240,6 @@ function normalizeSymbol(value: string): string {
 
 function parseLikelyTicker(value: string): string | undefined {
   const text = value.trim();
-  const firstToken = text.match(/^([A-Z][A-Z0-9.]{0,9})(?:[\s/:_-]|$)/i)?.[1];
-  const normalized = firstToken ? normalizeSymbol(firstToken) : "";
-  if (normalized && !["PUT", "CALL", "STOCKOPTION", "OVERSEAS", "LISTED", "EQUITIES", "OPTION"].includes(normalized)) {
-    return normalized;
-  }
-
   const knownNames: Array<[RegExp, string]> = [
     [/NVIDIA|NVIDIA CORP/i, "NVDA"],
     [/AMAZON|AMAZON\.COM/i, "AMZN"],
@@ -1237,7 +1248,15 @@ function parseLikelyTicker(value: string): string | undefined {
     [/TESLA/i, "TSLA"],
     [/MICROSOFT/i, "MSFT"],
   ];
-  return knownNames.find(([pattern]) => pattern.test(text))?.[1];
+  const known = knownNames.find(([pattern]) => pattern.test(text))?.[1];
+  if (known) return known;
+
+  const firstToken = text.match(/^([A-Z][A-Z0-9.]{0,9})(?:[\s/:_-]|$)/i)?.[1];
+  const normalized = firstToken ? normalizeSymbol(firstToken) : "";
+  if (normalized && !["PUT", "CALL", "STOCKOPTION", "OVERSEAS", "LISTED", "EQUITIES", "OPTION"].includes(normalized)) {
+    return normalized;
+  }
+  return undefined;
 }
 
 function normalizeDate(value: string): string {
