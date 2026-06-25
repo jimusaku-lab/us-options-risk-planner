@@ -20,11 +20,29 @@ const phaseLabels: Record<WheelPhase, string> = {
 const nRoute: WheelPhase[] = ["n_cash", "n_short_put", "n_stock_holding", "n_covered_call", "n_called_away"];
 const pRoute: WheelPhase[] = ["p_short_put", "p_assigned_stock", "p_to_n_transfer_pending", "n_stock_holding", "n_covered_call"];
 
+function isCurrentNShortPutLike(simulation: TradeSimulation): boolean {
+  const hasShortPutLeg = simulation.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
+  const hasConfirmedEntry = (simulation.optionEntryExecutions ?? []).some((execution) => execution.confirmed);
+  const isNLike =
+    simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ||
+    simulation.accountCode === "N" ||
+    simulation.accountCurrency === "USD";
+  return (
+    (simulation.strategyType === "short_put" || hasShortPutLeg) &&
+    simulation.status !== "closed" &&
+    simulation.status !== "expired" &&
+    (simulation.status !== "planned" || hasConfirmedEntry) &&
+    isNLike
+  );
+}
+
 export function WheelPanel({
   cycles,
   events = [],
   stockTransfers = [],
   simulations = [],
+  selectedSimulation,
+  selectedNShortPutActive = false,
   stockEvaluationsByCycleId = {},
   focusRequest,
   onCreateFromSelected,
@@ -36,6 +54,8 @@ export function WheelPanel({
   events?: WheelEvent[];
   stockTransfers?: StockTransferEvent[];
   simulations?: TradeSimulation[];
+  selectedSimulation?: TradeSimulation;
+  selectedNShortPutActive?: boolean;
   stockEvaluationsByCycleId?: Record<string, StockHoldingEvaluation>;
   focusRequest?: { ticker?: string; requestId: number } | null;
   onCreateFromSelected?: () => void;
@@ -114,6 +134,13 @@ export function WheelPanel({
               events={events.filter((event) => event.wheelCycleId === cycle.id)}
               stockTransfers={stockTransfers.filter((transfer) => transfer.destinationWheelCycleId === cycle.id)}
               simulations={simulations}
+              selectedSimulation={selectedSimulation}
+              forceCurrentNShortPut={
+                selectedNShortPutActive &&
+                (cycles.length === 1 ||
+                  !selectedSimulation?.ticker.trim() ||
+                  selectedSimulation.ticker.toUpperCase() === cycle.ticker.toUpperCase())
+              }
               stockEvaluation={stockEvaluationsByCycleId[cycle.id]}
               onCreateCoveredCallFromCycle={onCreateCoveredCallFromCycle}
               highlighted={Boolean(highlightedTicker) && cycle.ticker.toUpperCase() === highlightedTicker}
@@ -130,6 +157,8 @@ function WheelCycleCard({
   events,
   stockTransfers,
   simulations,
+  selectedSimulation,
+  forceCurrentNShortPut,
   stockEvaluation,
   onCreateCoveredCallFromCycle,
   highlighted,
@@ -138,14 +167,64 @@ function WheelCycleCard({
   events: WheelEvent[];
   stockTransfers: StockTransferEvent[];
   simulations: TradeSimulation[];
+  selectedSimulation?: TradeSimulation;
+  forceCurrentNShortPut?: boolean;
   stockEvaluation?: StockHoldingEvaluation;
   onCreateCoveredCallFromCycle?: (cycle: WheelCycle) => void;
   highlighted?: boolean;
 }) {
   const fx = cycle.referenceFxRateJPY ?? 0;
-  const isNWheelActive = cycle.currentPhase.startsWith("n_");
-  const cameFromPTransfer = stockTransfers.length > 0 || cycle.linkedSimulationIds.some((id) => id.includes("transfer"));
-  const route = !isNWheelActive || cameFromPTransfer ? pRoute : nRoute;
+  const relatedCoveredCalls = simulations.filter(
+    (simulation) =>
+      simulation.strategyType === "covered_call" &&
+      simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" &&
+      simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase(),
+  );
+  const hasActiveCoveredCall = relatedCoveredCalls.some((simulation) => ["planned", "open"].includes(simulation.status));
+  const hasClosedCoveredCall = relatedCoveredCalls.some((simulation) => ["closed", "assigned", "expired"].includes(simulation.status));
+  const hasCoveredCallOpenedEvent = events.some((event) => event.type === "covered_call_opened");
+  const candidateSimulations = Array.from(
+    new Map((selectedSimulation ? [selectedSimulation, ...simulations] : simulations).map((simulation) => [simulation.id, simulation])).values(),
+  );
+  const openNShortPuts = candidateSimulations.filter(
+    (simulation) =>
+      isCurrentNShortPutLike(simulation) &&
+      (simulation.ticker.trim() === "" || simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase()),
+  );
+  const hasTickerMatchedOpenNShortPut = openNShortPuts.some(
+    (simulation) =>
+      simulation.ticker.trim() !== "" &&
+      simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase(),
+  );
+  const hasOpenNShortPut =
+    forceCurrentNShortPut ||
+    hasTickerMatchedOpenNShortPut ||
+    (openNShortPuts.length === 1 &&
+      cycle.currentAccountCode === "N" &&
+      cycle.currentShares <= 0 &&
+      ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase));
+  const inferredSoldAfterClosedCoveredCall =
+    cycle.currentPhase === "n_stock_holding" &&
+    cycle.currentShares > 0 &&
+    hasClosedCoveredCall &&
+    !hasActiveCoveredCall &&
+    hasCoveredCallOpenedEvent;
+  const canDisplayOpenNShortPut =
+    hasOpenNShortPut &&
+    cycle.currentAccountCode === "N" &&
+    (cycle.currentPhase === "n_short_put" ||
+      cycle.currentPhase === "n_cash" ||
+      cycle.currentPhase === "n_called_away" ||
+      inferredSoldAfterClosedCoveredCall);
+  const displayPhase: WheelPhase = canDisplayOpenNShortPut
+    ? "n_short_put"
+    : inferredSoldAfterClosedCoveredCall
+      ? "n_called_away"
+      : cycle.currentPhase;
+  const displayShares = canDisplayOpenNShortPut || inferredSoldAfterClosedCoveredCall ? 0 : cycle.currentShares;
+  const isNWheelActive = displayPhase.startsWith("n_");
+  const hasCurrentShares = displayShares > 0;
+  const route = isNWheelActive ? nRoute : pRoute;
   const existingCoveredCall = simulations.find(
     (simulation) =>
       simulation.strategyType === "covered_call" &&
@@ -153,10 +232,11 @@ function WheelCycleCard({
       simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase() &&
       ["planned", "open"].includes(simulation.status) &&
       (cycle.linkedSimulationIds.includes(simulation.id) ||
-        (simulation.stockPosition?.shares ?? 0) <= cycle.currentShares),
+        (simulation.stockPosition?.shares ?? 0) <= displayShares),
   );
-  const coveredCallContracts = Math.floor(cycle.currentShares / 100);
-  const canStartCoveredCall = cycle.currentPhase === "n_stock_holding";
+  const coveredCallContracts = Math.floor(displayShares / 100);
+  const canStartCoveredCall = displayPhase === "n_stock_holding" && hasCurrentShares;
+  const effectiveStockEvaluation = hasCurrentShares ? stockEvaluation : undefined;
   return (
     <div className={`rounded-md border p-3 text-sm ${highlighted ? "border-teal-500 bg-teal-50 ring-2 ring-teal-200" : "border-slate-200"}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -164,10 +244,10 @@ function WheelCycleCard({
           <div className="font-bold text-slate-950">
             {cycle.ticker} / {isNWheelActive ? "N口座ホイール管理" : "ホイール準備中（P口座）"}
           </div>
-          <div className="mt-1 text-slate-600">現在: {phaseLabels[cycle.currentPhase]}</div>
+          <div className="mt-1 text-slate-600">現在: {phaseLabels[displayPhase]}</div>
         </div>
         <div className="rounded bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700">
-          {currentAccountStatusLabel(cycle.currentPhase)}
+          {currentAccountStatusLabel(displayPhase)}
         </div>
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-4">
@@ -178,27 +258,27 @@ function WheelCycleCard({
           label="累積損益"
           value={`${formatUSD(cycle.cumulativeTotalPnlUSD)}${fx > 0 ? ` / 参考 ${formatJPY(cycle.cumulativeTotalPnlUSD * fx)}` : ""}`}
         />
-        <Metric label="現在株数" value={`${cycle.currentShares}株`} />
+        <Metric label="現在株数" value={`${displayShares}株`} />
         <Metric label="平均取得単価" value={formatUSD(cycle.averageCostUSD)} />
         <Metric
           label="未実現株式評価"
-          value={stockEvaluation?.unrealizedPnlUSD === undefined ? "未計算" : `${stockEvaluation.unrealizedPnlUSD >= 0 ? "+" : ""}${formatUSD(stockEvaluation.unrealizedPnlUSD)}`}
+          value={effectiveStockEvaluation?.unrealizedPnlUSD === undefined ? "未計算" : `${effectiveStockEvaluation.unrealizedPnlUSD >= 0 ? "+" : ""}${formatUSD(effectiveStockEvaluation.unrealizedPnlUSD)}`}
         />
-        <Metric label="次の候補" value={nextActionLabel(cycle.currentPhase)} />
+        <Metric label="次の候補" value={nextActionLabel(displayPhase)} />
       </div>
-      {stockEvaluation ? (
+      {effectiveStockEvaluation ? (
         <div className="mt-3">
-          <StockHoldingEvaluationCard evaluation={stockEvaluation} compact />
+          <StockHoldingEvaluationCard evaluation={effectiveStockEvaluation} compact />
         </div>
       ) : null}
-      <PhaseStepper route={route} currentPhase={cycle.currentPhase} />
+      <PhaseStepper route={route} currentPhase={displayPhase} />
       {canStartCoveredCall ? (
         <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-950">
           <div className="font-bold">次の工程: N口座カバードコール</div>
           {cycle.currentShares >= 100 ? (
             <>
               <p className="mt-1">
-                N口座で{cycle.currentShares}株保有中です。保有100株につき1枚まで、最大{coveredCallContracts}枚のC売り下書きを作成できます。
+                N口座で{displayShares}株保有中です。保有100株につき1枚まで、最大{coveredCallContracts}枚のC売り下書きを作成できます。
               </p>
               <button
                 className="mt-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800"
@@ -295,7 +375,8 @@ function nextActionLabel(phase: WheelPhase): string {
   if (phase === "p_assigned_stock" || phase === "p_to_n_transfer_pending") return "P→N移管を確認";
   if (phase === "n_stock_holding") return "C売り候補を確認";
   if (phase === "n_covered_call") return "満期保有か買戻し";
-  if (phase === "n_short_put" || phase === "p_short_put") return "権利行使時の資金確認";
+  if (phase === "n_short_put") return "満期保有、買戻し、または権利行使時の株式取得";
+  if (phase === "p_short_put") return "権利行使時の資金確認";
   if (phase === "n_called_away") return "N現金待機へ戻す";
   return "次のP売り候補を確認";
 }
@@ -304,6 +385,9 @@ function currentAccountStatusLabel(phase: WheelPhase): string {
   if (phase === "p_short_put") return "現在: P口座でプット売り中 / N口座合流前";
   if (phase === "p_assigned_stock") return "現在: P口座で株式取得済み / N口座合流前";
   if (phase === "p_to_n_transfer_pending") return "現在: P口座 / N口座へ移管待ち";
+  if (phase === "n_short_put") return "現在: N口座プット売り中 / 満期・買戻し・権利行使確認";
+  if (phase === "n_called_away") return "現在: N口座株式売却済み / N現金待機へ";
+  if (phase === "n_cash") return "現在: N現金待機";
   if (phase.startsWith("n_")) return "現在: N口座ホイール";
   return "現在: サイクル終了";
 }

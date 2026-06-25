@@ -83,6 +83,9 @@ export default function App() {
   const [saxoOrderCandidates, setSaxoOrderCandidates] = useState<SaxoApiOrderSnapshot[]>([]);
   const [saxoPositionCandidates, setSaxoPositionCandidates] = useState<SaxoApiPositionSnapshot[]>([]);
   const [saxoHistoryCandidates, setSaxoHistoryCandidates] = useState<SaxoHistoryDiscoveryItem[]>([]);
+  const [saxoHasPendingReflection, setSaxoHasPendingReflection] = useState(true);
+  const [isSaxoDetailOpen, setIsSaxoDetailOpen] = useState(false);
+  const [hasSaxoDetailUserState, setHasSaxoDetailUserState] = useState(false);
   const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
   const candidatePanelRef = useRef<HTMLDivElement | null>(null);
   const {
@@ -1183,6 +1186,7 @@ export default function App() {
     onOpenHistoryTarget: openSelectedSimulationHistoryTarget,
     onOpenWheelManagement: openWheelManagement,
     onDownloadJson: downloadJson,
+    onPendingStateChange: setSaxoHasPendingReflection,
   };
 
   if (!selected) {
@@ -1344,6 +1348,19 @@ export default function App() {
   const taxBucketSummary = calculateTaxBucketSummary(simulations);
   const denominators = historyPerformance.denominators;
   const primaryWithNet = historyPerformance.primaryDenominator;
+  const denominatorPremiumDisplay = calculateDashboardPremiumDisplay(selectedWithAccount);
+  const denominatorsForDisplay =
+    !historyResultMode && denominatorPremiumDisplay.annualReturnPct !== undefined
+      ? denominators.map((row) =>
+          row.isPrimary ||
+          (row.currency === "USD" &&
+            row.amountUSD !== undefined &&
+            primaryWithNet.amountUSD !== undefined &&
+            Math.abs(row.amountUSD - primaryWithNet.amountUSD) < 0.01)
+            ? { ...row, annualReturnPct: denominatorPremiumDisplay.annualReturnPct ?? row.annualReturnPct }
+            : row,
+        )
+      : denominators;
   const nisaComparison = calculateNisaComparison({
     netProfitJPY: taxResult.netProfitJPY,
     denominatorJPY: primary.amountJPY,
@@ -1356,10 +1373,15 @@ export default function App() {
     coveredCallCoverage: selectedCoveredCallCoverage,
   });
   const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
+  const hasActionableWarnings = countableWarnings.length > 0;
   const checklist = generateChecklist(selectedWithAccount).map((item) => ({
     ...item,
     passed: selected.preOrderChecklist?.[item.id] ?? false,
   }));
+  const checklistComplete = checklist.length > 0 && checklist.every((item) => item.passed);
+  const hasOnlyInfoWarnings = warnings.length > 0 && !hasActionableWarnings;
+  const tradeJudgmentQuiet = selected.status === "open" && !hasActionableWarnings && checklistComplete;
+  const isUnsettledForTax = !historyResultMode && (selected.status === "planned" || selected.status === "open");
   const updateChecklist = (id: string, checked: boolean) => {
     upsertSimulation({
       ...selected,
@@ -1385,7 +1407,19 @@ export default function App() {
     selectedCoveredCallCoverage.requiredShares > 0 &&
     selectedCoveredCallCoverage.coveredShares >= selectedCoveredCallCoverage.requiredShares &&
     selectedCoveredCallCoverage.missingShares === 0;
+  const selectedNShortPutActiveForWheel =
+    selectedWithAccount.status !== "closed" &&
+    selectedWithAccount.status !== "expired" &&
+    selectedWithAccount.accountCurrency === "USD" &&
+    selectedWithAccount.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
   const compactCoveredCallMode = orderPrepCoveredCallMode || openCoveredCallManagementMode;
+  const shouldCollapseSaxoPanel = compactCoveredCallMode || (selected.status === "open" && !saxoHasPendingReflection);
+  const collapseSaxoPanel = shouldCollapseSaxoPanel || hasSaxoDetailUserState;
+  const saxoPanelSubtitle = saxoHasPendingReflection
+    ? "API接続・取得・反映待ちは必要時だけ確認します。"
+    : "反映待ち候補がないため、接続・同期は必要時だけ開きます。";
+  const collapseAccountOverview =
+    compactCoveredCallMode || (selected.status === "open" && pendingCashEffects.length === 0);
 
   return (
     <main className="min-h-screen bg-slate-100 text-slate-950">
@@ -1473,9 +1507,14 @@ export default function App() {
               />
             ) : null}
             <CollapsibleSection
-              title={compactCoveredCallMode ? "Saxo API詳細" : undefined}
-              subtitle={compactCoveredCallMode ? "API接続・取得・反映待ちは必要時だけ確認します。" : undefined}
-              collapsed={compactCoveredCallMode}
+              title={collapseSaxoPanel ? "Saxo API詳細" : undefined}
+              subtitle={collapseSaxoPanel ? saxoPanelSubtitle : undefined}
+              collapsed={collapseSaxoPanel}
+              open={collapseSaxoPanel ? isSaxoDetailOpen : undefined}
+              onOpenChange={(open) => {
+                setHasSaxoDetailUserState(true);
+                setIsSaxoDetailOpen(open);
+              }}
             >
               <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
             </CollapsibleSection>
@@ -1495,9 +1534,15 @@ export default function App() {
               </div>
             ) : null}
             <CollapsibleSection
-              title={compactCoveredCallMode ? "口座全体の余力・証拠金詳細" : undefined}
-              subtitle={compactCoveredCallMode ? "主要カードを確認した後、必要な場合だけ口座全体を確認します。" : undefined}
-              collapsed={compactCoveredCallMode}
+              title={collapseAccountOverview ? "口座全体の余力・証拠金詳細" : undefined}
+              subtitle={
+                collapseAccountOverview
+                  ? pendingCashEffects.length > 0
+                    ? "未反映現金増減を含め、必要時だけ口座全体を確認します。"
+                    : "未反映現金増減がないため、必要時だけ口座全体を確認します。"
+                  : undefined
+              }
+              collapsed={collapseAccountOverview}
             >
               <AccountOverview
                 workspace={activeWorkspace}
@@ -1696,7 +1741,7 @@ export default function App() {
                     />
                     <RiskPanel warnings={warnings} checklist={[]} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
                     <DenominatorTable
-                      denominators={denominators}
+                      denominators={denominatorsForDisplay}
                       collapsible
                       defaultOpen={false}
                       title="分母比較"
@@ -1714,40 +1759,95 @@ export default function App() {
                       taxBucketSummary={taxBucketSummary}
                     />
                     <ScenarioCards scenarios={scenarios} />
-                    <DenominatorChart denominators={denominators} />
+                    <DenominatorChart denominators={denominatorsForDisplay} />
                   </div>
                 </CollapsibleSection>
               </>
             ) : !historyResultMode ? (
               <>
-                <DenominatorTable denominators={denominators} />
-                <AnnualReturnFormula
-                  simulation={selectedWithAccount}
-                  primaryDenominator={primaryWithNet}
-                  taxResult={taxResult}
-                />
-                <TaxComparisonCard
-                  taxResult={taxResult}
-                  nisaComparison={nisaComparison}
-                  stockSettlementTax={stockSettlementTax}
-                  taxBucketSummary={taxBucketSummary}
-                />
-                <ScenarioCards scenarios={scenarios} />
-                <CloseDecisionCard
-                  simulation={selected}
-                  saxoOrderCandidates={saxoOrderCandidates}
-                  onChange={upsertSimulation}
-                  focusRequest={closeDecisionFocusRequest}
-                  onExecutionDraft={() => {
-                    setIsEditorOpen(true);
-                    setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
-                  }}
-                />
-                <section className="grid gap-4 xl:grid-cols-2">
-                  <PayoffChart simulation={selectedWithAccount} points={payoff} />
-                  <DenominatorChart denominators={denominators} />
+                <section className="grid gap-4">
+                  <div className="px-1">
+                    <h2 className="text-lg font-bold text-slate-950">
+                      取引判断: {tradeJudgmentQuiet ? "問題なし" : "要確認"}
+                    </h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      {tradeJudgmentQuiet
+                        ? "次に確認: 必要時だけ反対売買判断を開きます。"
+                        : "反対売買判断、リスク警告、注文前チェックリストを確認します。"}
+                    </p>
+                    {hasOnlyInfoWarnings ? (
+                      <p className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm leading-6 text-sky-950">
+                        情報メモ {warnings.length}件。警告や注文前NGはありません。
+                      </p>
+                    ) : null}
+                    {tradeJudgmentQuiet ? (
+                      <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-950">
+                        注文前チェックリストは全項目確認済みです。
+                      </p>
+                    ) : null}
+                  </div>
+                  <CollapsibleSection
+                    title="反対売買判断"
+                    subtitle="途中決済を検討する時だけ開きます。"
+                    collapsed={!hasActionableWarnings}
+                  >
+                    <CloseDecisionCard
+                      simulation={selected}
+                      saxoOrderCandidates={saxoOrderCandidates}
+                      onChange={upsertSimulation}
+                      focusRequest={closeDecisionFocusRequest}
+                      onExecutionDraft={() => {
+                        setIsEditorOpen(true);
+                        setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
+                      }}
+                    />
+                  </CollapsibleSection>
+                  {hasActionableWarnings || !checklistComplete ? (
+                    <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                  ) : (
+                    <CollapsibleSection
+                      title="リスク警告・注文前チェックリスト詳細"
+                      subtitle="警告なし、全チェック済みのため折り畳んでいます。"
+                      collapsed
+                    >
+                      <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                    </CollapsibleSection>
+                  )}
                 </section>
-                <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                <section className="grid gap-4">
+                  <div className="px-1">
+                    <h2 className="text-lg font-bold text-slate-950">損益・分母</h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      満期時の損益図、分母の大きさ、分母比較、年率換算の根拠をまとめて確認します。
+                    </p>
+                  </div>
+                  <section className="grid gap-4 xl:grid-cols-2">
+                    <PayoffChart simulation={selectedWithAccount} points={payoff} />
+                    <DenominatorChart denominators={denominatorsForDisplay} />
+                  </section>
+                  <DenominatorTable denominators={denominatorsForDisplay} />
+                  <AnnualReturnFormula
+                    simulation={selectedWithAccount}
+                    primaryDenominator={primaryWithNet}
+                    taxResult={taxResult}
+                  />
+                </section>
+                <section className="grid gap-4">
+                  <div className="px-1">
+                    <h2 className="text-lg font-bold text-slate-950">税務・ケース別参考</h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      税務区分、NISA等との比較、株価ケース別の参考値をまとめて確認します。
+                    </p>
+                  </div>
+                  <TaxComparisonCard
+                    taxResult={taxResult}
+                    nisaComparison={nisaComparison}
+                    stockSettlementTax={stockSettlementTax}
+                    taxBucketSummary={taxBucketSummary}
+                    isUnsettled={isUnsettledForTax}
+                  />
+                  <ScenarioCards scenarios={scenarios} compactUnsettled={isUnsettledForTax} />
+                </section>
               </>
             ) : null}
             {activeWorkspace === "live" ? (
@@ -1764,6 +1864,8 @@ export default function App() {
                   stockEvaluationsByCycleId={stockEvaluationsByWheelId}
                   focusRequest={wheelFocusRequest}
                   onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
+                  selectedSimulation={selectedWithAccount}
+                  selectedNShortPutActive={selectedNShortPutActiveForWheel}
                   selectedTransferRecorded={selectedStockTransferRecorded}
                   onCreateTransferFromSelected={canCreateStockTransferFromSelected ? () => createStockTransferFromSimulation(selected) : undefined}
                   onCreateCoveredCallFromCycle={(cycle) => createCoveredCallFromWheelCycle(cycle.id)}

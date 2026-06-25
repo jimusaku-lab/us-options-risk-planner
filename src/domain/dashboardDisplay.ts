@@ -9,6 +9,7 @@ import {
   calculateTotalPremiumReceivedJPY,
   calculateTotalPremiumReceivedUSD,
 } from "./calculations";
+import { calculateDenominators, getPrimaryDenominator } from "./denominators";
 
 const HISTORY_STATUSES = new Set(["closed", "assigned", "expired"]);
 
@@ -49,7 +50,11 @@ function getFxRateOrZero(simulation: TradeSimulation): number {
 }
 
 function getDisplayDte(simulation: TradeSimulation): number {
-  const calculatedDte = calculateDte(simulation.entryDate, simulation.expiryDate);
+  const confirmedEntryDate = (simulation.optionEntryExecutions ?? [])
+    .filter((execution) => execution.confirmed && execution.tradeDate)
+    .map((execution) => execution.tradeDate)
+    .sort()[0];
+  const calculatedDte = calculateDte(confirmedEntryDate ?? simulation.entryDate, simulation.expiryDate);
   if (Number.isFinite(calculatedDte) && calculatedDte > 0) return calculatedDte;
   return Math.max(0, simulation.dte);
 }
@@ -139,6 +144,13 @@ function calculateNAccountStockDenominatorUSD(simulation: TradeSimulation): numb
   return simulation.stockPosition.shares * simulation.stockPosition.averageCostUSD;
 }
 
+function calculateNAccountPrimaryDenominatorUSD(simulation: TradeSimulation): number | undefined {
+  if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT") return undefined;
+  const primary = getPrimaryDenominator(calculateDenominators(simulation, 0));
+  if (primary.amountUSD !== undefined && primary.amountUSD > 0) return primary.amountUSD;
+  return calculateNAccountStockDenominatorUSD(simulation);
+}
+
 function calculatePlannedPremiumDisplay(
   simulation: TradeSimulation,
   basis: "planned" | "open_unconfirmed",
@@ -156,7 +168,7 @@ function calculatePlannedPremiumDisplay(
   const feeJPY = calculateManualFeeJPY(simulation);
   const netAfterFeesUSD = premiumUSD - feeUSD;
   const netAfterFeesJPY = premiumJPY - feeJPY;
-  const denominatorUSD = calculateNAccountStockDenominatorUSD(simulation);
+  const denominatorUSD = calculateNAccountPrimaryDenominatorUSD(simulation);
   const denominatorJPY = simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT"
     ? simulation.customDenominatorJPY ?? 0
     : undefined;
@@ -229,7 +241,7 @@ export function calculateDashboardPremiumDisplay(simulation: TradeSimulation): D
       ? calculateNetInitialPremiumUSD(simulation)
       : premiumJPY / (getFxRateOrZero(simulation) || 1);
   const dte = getDisplayDte(simulation);
-  const denominatorUSD = calculateNAccountStockDenominatorUSD(simulation);
+  const denominatorUSD = calculateNAccountPrimaryDenominatorUSD(simulation);
   const annualReturnPct =
     simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" && denominatorUSD && denominatorUSD > 0
       ? calculateAnnualReturnPercentByCurrency({ netProfit: premiumUSD, denominator: denominatorUSD, dte })

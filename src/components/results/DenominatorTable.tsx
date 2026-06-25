@@ -1,14 +1,39 @@
 import type { DenominatorResult } from "@/types/domain";
+import type { ReactNode } from "react";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 function formatComponent(component: DenominatorResult["components"][number]): string {
   if (component.label === "現物株時価" && component.amountJPY === 0) {
     return "現物株なし";
   }
+  if (component.amountJPY === 0 && (component.amountUSD ?? 0) === 0) {
+    return `${component.label}: 対象外`;
+  }
   if (component.amountUSD !== undefined) {
-    return `${component.label}: ${formatUSD(component.amountUSD)} / 参考 ${formatJPY(component.amountJPY)}`;
+    return `${component.label}: ${formatUSD(component.amountUSD)} / ${
+      component.amountJPY > 0 ? `参考 ${formatJPY(component.amountJPY)}` : "参考JPY未計算"
+    }`;
   }
   return `${component.label}: ${formatJPY(component.amountJPY)}`;
+}
+
+function hasDenominatorAmount(row: DenominatorResult): boolean {
+  return row.currency === "USD" ? (row.amountUSD ?? 0) > 0 : row.amountJPY > 0;
+}
+
+function formatDenominatorAmount(row: DenominatorResult): ReactNode {
+  if (!hasDenominatorAmount(row)) return "対象外";
+  if (row.currency === "USD") {
+    return (
+      <>
+        <span className="block">{formatUSD(row.amountUSD ?? 0)}</span>
+        <span className="block text-xs text-slate-500">
+          {row.amountJPY > 0 ? `参考 ${formatJPY(row.amountJPY)}` : "参考JPY未計算"}
+        </span>
+      </>
+    );
+  }
+  return formatJPY(row.amountJPY);
 }
 
 type DenominatorTableProps = {
@@ -26,6 +51,8 @@ export function DenominatorTable({
   title = "分母比較",
   subtitle = "どの資金を分母にした利回りかを必ず確認",
 }: DenominatorTableProps) {
+  const visibleRows = denominators.filter((row) => row.isPrimary || hasDenominatorAmount(row));
+  const hiddenRows = denominators.filter((row) => !row.isPrimary && !hasDenominatorAmount(row));
   const table = (
     <div className="p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -43,23 +70,18 @@ export function DenominatorTable({
             </tr>
           </thead>
           <tbody>
-            {denominators.map((row) => (
+            {visibleRows.map((row) => (
               <tr key={row.mode} className={row.isPrimary ? "bg-teal-50" : "border-b border-slate-100"}>
                 <td className="py-3 pr-3 font-semibold text-slate-900">
                   {row.label}
                   {row.isPrimary ? <span className="ml-2 rounded bg-teal-700 px-2 py-0.5 text-xs text-white">主分母</span> : null}
                 </td>
                 <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                  {row.currency === "USD" ? (
-                    <>
-                      <span className="block">{formatUSD(row.amountUSD ?? 0)}</span>
-                      <span className="block text-xs text-slate-500">参考 {formatJPY(row.amountJPY)}</span>
-                    </>
-                  ) : (
-                    formatJPY(row.amountJPY)
-                  )}
+                  {formatDenominatorAmount(row)}
                 </td>
-                <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatPct(row.annualReturnPct)}</td>
+                <td className="numeric-input py-3 pr-3 text-right font-semibold">
+                  {hasDenominatorAmount(row) ? formatPct(row.annualReturnPct) : "対象外"}
+                </td>
                 <td className="py-3 pr-3 text-slate-600">
                   {row.components.map(formatComponent).join(" / ")}
                 </td>
@@ -68,6 +90,11 @@ export function DenominatorTable({
           </tbody>
         </table>
       </div>
+      {hiddenRows.length > 0 ? (
+        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-600">
+          対象外: {hiddenRows.map((row) => row.label).join("、")}
+        </div>
+      ) : null}
     </div>
   );
 

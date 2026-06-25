@@ -11,6 +11,12 @@ import {
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
+function formatReferenceJPY(value: number | undefined): string {
+  return value !== undefined && Number.isFinite(value) && Math.abs(value) > 0.5
+    ? `参考JPY ${formatJPY(value)}`
+    : "参考JPY未計算";
+}
+
 type SummaryCardsProps = {
   simulation: TradeSimulation;
   primaryDenominator: DenominatorResult;
@@ -98,13 +104,11 @@ export function SummaryCards({
           ? `手数料後 ${isN ? formatUSD(premiumDisplay.netAfterFeesUSD) : formatJPY(premiumDisplay.netAfterFeesJPY ?? 0)}。`
           : "",
         isN
-          ? premiumDisplay.effectiveFxRateJPY
-            ? `参考JPY ${formatJPY(premiumDisplay.premiumJPY)}。`
-            : "参考JPY未計算。"
+          ? `${formatReferenceJPY(premiumDisplay.premiumJPY)}。`
           : "",
       ].filter(Boolean).join(" ")
     : isN
-      ? `N口座のUSD主計算。参考JPY ${formatJPY(premiumJPY)}。`
+      ? `N口座のUSD主計算。${formatReferenceJPY(premiumJPY)}。`
       : historyMode
         ? "終了済みのP口座プット売りで確定したオプション収入です。"
         : "P口座JPY決済。手数料・税金は別カードで控除します。";
@@ -113,7 +117,7 @@ export function SummaryCards({
   const denominatorCardNote = usePremiumDisplay && premiumDisplay.coveredCallAssignmentEstimate
     ? [
         `取得原価ベース。${formatUSD(premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD)}。`,
-        premiumDisplay.effectiveFxRateJPY ? `参考JPY ${formatJPY(summaryDenominatorJPY)}。` : "参考JPY未計算。",
+        `${formatReferenceJPY(summaryDenominatorJPY)}。`,
         premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD !== undefined &&
         Math.abs(premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD - premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD) > 0.005
           ? `参考: 現在株価ベース ${formatUSD(premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD)}。`
@@ -122,7 +126,7 @@ export function SummaryCards({
       ].filter(Boolean).join(" ")
     : [
         primaryDenominator.currency === "USD"
-          ? `${primaryDenominator.label}。参考JPY ${formatJPY(primaryDenominator.amountJPY)}。`
+          ? `${primaryDenominator.label}。${formatReferenceJPY(primaryDenominator.amountJPY)}。`
           : primaryDenominator.label,
         denominatorFormula,
       ].filter(Boolean).join(" / ");
@@ -190,7 +194,7 @@ export function SummaryCards({
           {
             title: "P権利行使時の追加買付資金",
             value: isN ? formatUSD(putAssignmentUSD) : formatJPY(putAssignmentJPY),
-            note: isN ? `N口座内のUSD買付資金。参考JPY ${formatJPY(putAssignmentJPY)}。` : "権利行使された場合に株を買い受けるための概算資金です。",
+            note: isN ? `N口座内のUSD買付資金。${formatReferenceJPY(putAssignmentJPY)}。` : "権利行使された場合に株を買い受けるための概算資金です。",
           },
         ]
       : []),
@@ -204,8 +208,12 @@ export function SummaryCards({
           : okStatusNote
             ? okStatusNote
           : isN
-            ? `チケット証拠金 ${formatUSD(simulation.brokerMarginUSD ?? 0)} / 使用証拠金 ${formatUSD(usedMarginUSD)}`
-            : `チケット証拠金 ${formatJPY(simulation.brokerMarginJPY)} / 使用証拠金 ${formatJPY(usedMarginJPY)}`,
+            ? (simulation.brokerMarginUSD ?? 0) > 0 || usedMarginUSD > 0
+              ? `チケット証拠金 ${formatUSD(simulation.brokerMarginUSD ?? 0)} / 使用証拠金 ${formatUSD(usedMarginUSD)}`
+              : "証拠金: 対象外または未計算"
+            : simulation.brokerMarginJPY > 0 || usedMarginJPY > 0
+              ? `チケット証拠金 ${formatJPY(simulation.brokerMarginJPY)} / 使用証拠金 ${formatJPY(usedMarginJPY)}`
+              : "証拠金: 対象外または未計算",
       warning: primaryWarning,
     },
   ];

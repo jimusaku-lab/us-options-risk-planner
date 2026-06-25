@@ -1,7 +1,7 @@
 import type { ScenarioResult } from "@/types/domain";
 import { formatJPY } from "@/lib/format";
 
-export function ScenarioCards({ scenarios }: { scenarios: ScenarioResult[] }) {
+export function ScenarioCards({ scenarios, compactUnsettled = false }: { scenarios: ScenarioResult[]; compactUnsettled?: boolean }) {
   return (
     <section className="grid gap-3 lg:grid-cols-3">
       {scenarios.map((scenario) => (
@@ -10,8 +10,10 @@ export function ScenarioCards({ scenarios }: { scenarios: ScenarioResult[] }) {
           <div className="mt-2 text-sm font-semibold text-slate-700">{scenario.stockPriceCondition}</div>
           <dl className="mt-4 grid gap-2 text-sm">
             <div>
-              <dt className="text-slate-500">プレミアム</dt>
-              <dd className="numeric-input font-bold text-emerald-700">{formatJPY(scenario.premiumJPY)}</dd>
+              <dt className="text-slate-500">{compactUnsettled ? "プレミアム参考" : "プレミアム"}</dt>
+              <dd className="numeric-input font-bold text-emerald-700">
+                {compactUnsettled && Math.abs(scenario.premiumJPY) < 0.5 ? "満期時に確定" : formatJPY(scenario.premiumJPY)}
+              </dd>
             </div>
             <div>
               <dt className="text-slate-500">株数の変化</dt>

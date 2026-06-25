@@ -1,4 +1,5 @@
 import type { DenominatorResult, OptionLeg, TaxResult, TradeSimulation } from "@/types/domain";
+import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
 import {
   calculateNetInitialPremiumJPY,
   calculateNetInitialPremiumUSD,
@@ -42,16 +43,31 @@ export function AnnualReturnFormula({
   primaryDenominator,
   taxResult,
 }: AnnualReturnFormulaProps) {
-  const premiumJPY = calculateNetInitialPremiumJPY(simulation);
-  const premiumUSD = calculateNetInitialPremiumUSD(simulation);
+  const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
+  const usePremiumDisplay = premiumDisplay.basis !== "history";
+  const premiumJPY = usePremiumDisplay ? premiumDisplay.premiumJPY : calculateNetInitialPremiumJPY(simulation);
+  const premiumUSD = usePremiumDisplay ? premiumDisplay.premiumUSD : calculateNetInitialPremiumUSD(simulation);
   const totalFeesJPY = calculateTotalFeesJPY(simulation);
   const totalFeesUSD = calculateTotalFeesUSD(simulation);
   const denominatorJPY = primaryDenominator.amountJPY;
   const denominatorUSD = primaryDenominator.amountUSD ?? 0;
-  const days = simulation.dte;
   const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const days = usePremiumDisplay ? premiumDisplay.dte : simulation.dte;
+  const annualReturnPct =
+    usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
+      ? premiumDisplay.annualReturnPct
+      : primaryDenominator.annualReturnPct;
   const periodReturnPct = isN ? (denominatorUSD > 0 ? (premiumUSD / denominatorUSD) * 100 : 0) : denominatorJPY > 0 ? (premiumJPY / denominatorJPY) * 100 : 0;
-  const netProfitUSD = (simulation.referenceFxRateJPY ?? simulation.fxRateJPY) > 0 ? taxResult.netProfitJPY / (simulation.referenceFxRateJPY ?? simulation.fxRateJPY) : 0;
+  const netProfitUSD =
+    usePremiumDisplay && premiumDisplay.netAfterFeesUSD !== undefined
+      ? premiumDisplay.netAfterFeesUSD
+      : (simulation.referenceFxRateJPY ?? simulation.fxRateJPY) > 0
+        ? taxResult.netProfitJPY / (simulation.referenceFxRateJPY ?? simulation.fxRateJPY)
+        : 0;
+  const netAnnualReturnPct =
+    usePremiumDisplay && premiumDisplay.netAnnualReturnPct !== undefined
+      ? premiumDisplay.netAnnualReturnPct
+      : taxResult.netAnnualReturnPct;
   const netPeriodReturnPct = isN ? (denominatorUSD > 0 ? (netProfitUSD / denominatorUSD) * 100 : 0) : denominatorJPY > 0 ? (taxResult.netProfitJPY / denominatorJPY) * 100 : 0;
 
   return (
@@ -62,8 +78,8 @@ export function AnnualReturnFormula({
             <span className="block text-base font-bold text-slate-950">年率換算の計算根拠</span>
             <span className="mt-1 block text-sm text-slate-600">
               {isN
-                ? `${formatUSD(premiumUSD)} ÷ ${formatUSD(denominatorUSD)} × 365 ÷ ${days}日 = ${formatPct(primaryDenominator.annualReturnPct)}`
-                : `${formatJPY(premiumJPY)} ÷ ${formatJPY(denominatorJPY)} × 365 ÷ ${days}日 = ${formatPct(primaryDenominator.annualReturnPct)}`}
+                ? `${formatUSD(premiumUSD)} ÷ ${formatUSD(denominatorUSD)} × 365 ÷ ${days}日 = ${formatPct(annualReturnPct)}`
+                : `${formatJPY(premiumJPY)} ÷ ${formatJPY(denominatorJPY)} × 365 ÷ ${days}日 = ${formatPct(annualReturnPct)}`}
             </span>
           </span>
           <span className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700">
@@ -80,7 +96,7 @@ export function AnnualReturnFormula({
                 </p>
                 <p className="numeric-input font-semibold text-slate-950">
                   {isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY)} ÷ {isN ? formatUSD(denominatorUSD) : formatJPY(denominatorJPY)} × 365 ÷ {days}日 × 100
-                  = {formatPct(primaryDenominator.annualReturnPct)}
+                  = {formatPct(annualReturnPct)}
                 </p>
                 <p className="text-slate-600">
                   日数は {simulation.entryDate} から {simulation.expiryDate} までの暦日数です。営業日数ではありません。
@@ -95,7 +111,7 @@ export function AnnualReturnFormula({
                 </p>
                 <p className="numeric-input font-semibold text-slate-950">
                   {isN ? formatUSD(netProfitUSD) : formatJPY(taxResult.netProfitJPY)} ÷ {isN ? formatUSD(denominatorUSD) : formatJPY(denominatorJPY)} × 365 ÷ {days}日 × 100
-                  = {formatPct(taxResult.netAnnualReturnPct)}
+                  = {formatPct(netAnnualReturnPct)}
                 </p>
                 <p className="text-slate-600">
                   税引後利益は、受取プレミアムから手数料等 {isN ? `${formatUSD(totalFeesUSD)} / 参考 ${formatJPY(totalFeesJPY)}` : formatJPY(totalFeesJPY)} と概算税額 {formatJPY(taxResult.taxJPY)} を差し引いた値です。

@@ -116,6 +116,7 @@ export function SaxoReadOnlyPanel({
   onOpenHistoryTarget,
   onOpenWheelManagement,
   onDownloadJson,
+  onPendingStateChange,
 }: {
   workspace: WorkspaceMode;
   accountInputs: AccountInputs;
@@ -134,6 +135,7 @@ export function SaxoReadOnlyPanel({
   onOpenHistoryTarget?: (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record", sourceTradeId?: string) => void;
   onOpenWheelManagement?: (ticker?: string) => void;
   onDownloadJson?: () => void;
+  onPendingStateChange?: (hasPending: boolean) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [showConnectionDetails, setShowConnectionDetails] = useState(false);
@@ -392,6 +394,10 @@ export function SaxoReadOnlyPanel({
     }),
     [accountInputs, historyEndpoints, historyReflectionStates, mappedOrders, mappedSnapshots, positionRows, simulations, stockTransfers],
   );
+
+  useEffect(() => {
+    onPendingStateChange?.(reflectionSummary.hasPending);
+  }, [onPendingStateChange, reflectionSummary.hasPending]);
 
   function createHistoryDraft(item: SaxoHistoryDiscoveryItem, openAfterCreate = false): boolean {
     const target = getSaxoHistoryCandidateTarget(item);

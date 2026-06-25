@@ -9,28 +9,30 @@ export function TaxComparisonCard({
   nisaComparison,
   stockSettlementTax,
   taxBucketSummary,
+  isUnsettled = false,
 }: {
   taxResult: TaxResult;
   nisaComparison: NisaComparison;
   stockSettlementTax: StockSettlementTaxResult;
   taxBucketSummary: TaxBucketSummary;
+  isUnsettled?: boolean;
 }) {
   const [showHistorySummary, setShowHistorySummary] = useState(false);
   const hasStockSettlement = stockSettlementTax.enabled;
-  return (
-    <section className="grid gap-4">
+  const details = (
+    <>
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-lg font-bold text-slate-950">オプション税引後カード</h2>
         <dl className="mt-4 grid gap-3 text-sm">
           <Row label="税務上の想定区分" value="先物取引に係る雑所得等" />
-          <Row label="税前利益" value={formatJPY(taxResult.grossProfitJPY)} />
-          <Row label="手数料・費用控除後利益" value={formatJPY(taxResult.feeAdjustedProfitJPY)} />
-          <Row label="課税対象利益" value={formatJPY(taxResult.taxableProfitJPY)} />
-          <Row label="想定税額" value={formatJPY(taxResult.taxJPY)} tone="red" />
-          <Row label="税引後利益" value={formatJPY(taxResult.netProfitJPY)} tone="green" />
-          <Row label="税前年率" value={formatPct(taxResult.grossAnnualReturnPct)} />
-          <Row label="税引後年率" value={formatPct(taxResult.netAnnualReturnPct)} tone="green" />
+          <Row label="税前利益" value={isUnsettled ? "決済後に集計" : formatJPY(taxResult.grossProfitJPY)} />
+          <Row label="手数料・費用控除後利益" value={isUnsettled ? "決済後に集計" : formatJPY(taxResult.feeAdjustedProfitJPY)} />
+          <Row label="課税対象利益" value={isUnsettled ? "未確定" : formatJPY(taxResult.taxableProfitJPY)} />
+          <Row label="想定税額" value={isUnsettled ? "未確定" : formatJPY(taxResult.taxJPY)} tone={isUnsettled ? undefined : "red"} />
+          <Row label="税引後利益" value={isUnsettled ? "未確定" : formatJPY(taxResult.netProfitJPY)} tone={isUnsettled ? undefined : "green"} />
+          <Row label="税前年率" value={isUnsettled ? "未確定" : formatPct(taxResult.grossAnnualReturnPct)} />
+          <Row label="税引後年率" value={isUnsettled ? "未確定" : formatPct(taxResult.netAnnualReturnPct)} tone={isUnsettled ? undefined : "green"} />
         </dl>
         <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm leading-6 text-amber-950">
           この税額は、オプション損益を「先物取引に係る雑所得等」として扱う前提の概算です。証券会社、口座種別、商品区分、決済方法により確認が必要です。
@@ -40,13 +42,13 @@ export function TaxComparisonCard({
         <h2 className="text-lg font-bold text-slate-950">NISA等の非課税口座比較</h2>
         <dl className="mt-4 grid gap-3 text-sm">
           <Row label="NISA等の比較対象年率" value={formatPct(nisaComparison.expectedAnnualReturnPct)} />
-          <Row label="NISA等で同じ分母・同じ日数なら" value={formatJPY(nisaComparison.comparisonProfitJPY)} />
+          <Row label="NISA等で同じ分母・同じ日数なら" value={isUnsettled ? "シミュレーション値" : formatJPY(nisaComparison.comparisonProfitJPY)} />
           <Row
             label="オプション税引後利益との差額"
-            value={formatJPY(nisaComparison.netAdvantageJPY, { signed: true })}
-            tone={nisaComparison.netAdvantageJPY >= 0 ? "green" : "red"}
+            value={isUnsettled ? "未確定" : formatJPY(nisaComparison.netAdvantageJPY, { signed: true })}
+            tone={isUnsettled ? undefined : nisaComparison.netAdvantageJPY >= 0 ? "green" : "red"}
           />
-          <Row label="NISA等を上回るための税前利益" value={formatJPY(nisaComparison.requiredGrossProfitToBeatJPY)} />
+          <Row label="NISA等を上回るための税前利益" value={isUnsettled ? "シミュレーション値" : formatJPY(nisaComparison.requiredGrossProfitToBeatJPY)} />
           <Row label="必要な税前年率（NISA等を上回る目安）" value={formatPct(nisaComparison.requiredGrossAnnualReturnPct)} />
         </dl>
       </div>
@@ -64,8 +66,8 @@ export function TaxComparisonCard({
         <dl className="mt-4 grid gap-3 text-sm">
           <Row
             label="先物取引に係る雑所得等"
-            value={formatJPY(taxResult.feeAdjustedProfitJPY, { signed: true })}
-            tone={taxResult.feeAdjustedProfitJPY >= 0 ? "green" : "red"}
+            value={isUnsettled ? "決済後に集計" : formatJPY(taxResult.feeAdjustedProfitJPY, { signed: true })}
+            tone={isUnsettled ? undefined : taxResult.feeAdjustedProfitJPY >= 0 ? "green" : "red"}
           />
           <Row
             label="上場株式等の譲渡所得等"
@@ -101,6 +103,27 @@ export function TaxComparisonCard({
       </div>
       </div>
       {showHistorySummary ? <TaxBucketSummaryCard summary={taxBucketSummary} /> : null}
+    </>
+  );
+
+  if (isUnsettled) {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="text-lg font-bold text-slate-950">税務・ケース別参考</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          建玉中のため税務実績は未確定です。決済・満期・権利行使後に集計します。
+        </p>
+        <details className="mt-3 rounded-md border border-slate-200 bg-slate-50">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-bold text-slate-800">税務シミュレーション詳細を開く</summary>
+          <div className="border-t border-slate-200 p-3">{details}</div>
+        </details>
+      </section>
+    );
+  }
+
+  return (
+    <section className="grid gap-4">
+      {details}
     </section>
   );
 }

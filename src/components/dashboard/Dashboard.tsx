@@ -131,9 +131,17 @@ export function Dashboard({
               const isHistoryRow = endedStatuses.has(simulation.status);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
+              const historyCloseResults = historyPerformance?.optionCloseExecutionResults ?? [];
+              const historyRealizedUsd = historyCloseResults.reduce((sum, result) => sum + result.realizedPnlUSD, 0);
+              const historyRealizedJpy = historyCloseResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
+              const isNAccountRow = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+              const hasHistoryCloseResults = isHistoryRow && historyCloseResults.length > 0;
               const premium = historyPerformance?.premiumJPY ?? premiumDisplay.premiumJPY;
-              const premiumDisplayUSD = isHistoryRow
-                ? premium / ((simulation.referenceFxRateJPY ?? simulation.fxRateJPY) || 1)
+              const displayPremiumJPY = hasHistoryCloseResults ? historyRealizedJpy : premium;
+              const premiumDisplayUSD = hasHistoryCloseResults && isNAccountRow
+                ? historyRealizedUsd
+                : isHistoryRow
+                ? displayPremiumJPY / ((simulation.referenceFxRateJPY ?? simulation.fxRateJPY) || 1)
                 : premiumDisplay.premiumUSD;
               const hasEffectiveFx = premiumDisplay.effectiveFxRateJPY !== null;
               const primary =
@@ -233,17 +241,24 @@ export function Dashboard({
                       <span className="font-bold text-slate-500">未入力</span>
                     ) : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
                       <>
-                        {!isHistoryRow ? <span className="block text-[11px] font-bold text-slate-500">{premiumDisplay.label}</span> : null}
+                        <span className="block text-[11px] font-bold text-slate-500">{isHistoryRow ? "実現損益" : premiumDisplay.label}</span>
                         <span className="block">{formatUSD(premiumDisplayUSD)}</span>
+                        {hasHistoryCloseResults && isNAccountRow ? (
+                          <span className="block text-xs text-slate-500">
+                            建玉時 {formatUSD(historyCloseResults[0].entryPremiumUSD - historyCloseResults[0].openCommissionUSD)} / 決済支払 -{formatUSD(historyCloseResults[0].closeCostUSD + historyCloseResults[0].closeCommissionUSD)}
+                          </span>
+                        ) : null}
                         {!isHistoryRow && premiumDisplay.netAfterFeesUSD !== undefined && Math.abs(premiumDisplay.netAfterFeesUSD - premiumDisplay.premiumUSD) > 0.005 ? (
                           <span className="block text-xs text-slate-500">手数料後 {formatUSD(premiumDisplay.netAfterFeesUSD)}</span>
                         ) : null}
-                        <span className="block text-xs text-slate-500">{hasEffectiveFx ? `参考 ${formatJPY(premium)}` : "参考JPY未計算"}</span>
+                        <span className="block text-xs text-slate-500">
+                          {hasEffectiveFx && Math.abs(displayPremiumJPY) > 0.5 ? `参考 ${formatJPY(displayPremiumJPY)}` : "参考JPY未計算"}
+                        </span>
                       </>
                     ) : (
                       <>
-                        {!isHistoryRow ? <span className="block text-[11px] font-bold text-slate-500">{premiumDisplay.label}</span> : null}
-                        <span className="block">{formatJPY(premium)}</span>
+                        <span className="block text-[11px] font-bold text-slate-500">{isHistoryRow ? "実現損益" : premiumDisplay.label}</span>
+                        <span className="block">{formatJPY(displayPremiumJPY)}</span>
                         {!isHistoryRow && premiumDisplay.netAfterFeesJPY !== undefined && Math.abs(premiumDisplay.netAfterFeesJPY - premiumDisplay.premiumJPY) > 0.5 ? (
                           <span className="block text-xs text-slate-500">手数料後 {formatJPY(premiumDisplay.netAfterFeesJPY)}</span>
                         ) : null}
@@ -255,7 +270,9 @@ export function Dashboard({
                     {primary.currency === "USD" ? (
                       <>
                         <span className="block">{formatUSD(primary.amountUSD ?? 0)}</span>
-                        <span className="block text-xs text-slate-500">{hasEffectiveFx ? `参考 ${formatJPY(primary.amountJPY)}` : "参考JPY未計算"}</span>
+                        <span className="block text-xs text-slate-500">
+                          {hasEffectiveFx && Math.abs(primary.amountJPY) > 0.5 ? `参考 ${formatJPY(primary.amountJPY)}` : "参考JPY未計算"}
+                        </span>
                       </>
                     ) : (
                       formatJPY(primary.amountJPY)
