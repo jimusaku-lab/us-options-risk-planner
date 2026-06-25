@@ -8,6 +8,7 @@
     "dev:saxo-api": "node server/saxo-readonly-server.mjs",
     "dev:all": "sh -c 'trap \"kill 0\" INT TERM EXIT; npm run dev:saxo-api & npm run dev'",
     "build": "tsc -b && vite build",
+    "build:pages": "GITHUB_PAGES=true npm run build",
     "preview": "vite preview",
     "test": "vitest --run",
     "test:watch": "vitest"
