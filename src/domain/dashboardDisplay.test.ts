@@ -198,4 +198,105 @@ describe("dashboard premium display", () => {
     expect(display.coveredCallAssignmentEstimate?.costBasisDenominatorUSD).toBeCloseTo(20_750, 8);
     expect(display.coveredCallAssignmentEstimate?.annualReturnPct).toBeGreaterThan(0);
   });
+
+  it("calculates confirmed N short put annual return from USD premium and cash-secured denominator when FX is zero", () => {
+    const simulation: TradeSimulation = {
+      ...createPlannedCoveredCall({
+        id: "nvda-p195-n",
+        status: "open",
+        name: "NVDA P195 N short put",
+        strategyType: "short_put",
+        currentPriceUSD: 201.8,
+        fxRateJPY: 0,
+        referenceFxRateJPY: 0,
+        entryDate: "2026-06-23",
+        expiryDate: "2026-07-24",
+        dte: 0,
+        stockPosition: null,
+        denominatorMode: "cash_secured",
+        optionLegs: [
+          {
+            id: "put-leg",
+            type: "put",
+            side: "sell",
+            strikeUSD: 195,
+            premiumUSD: 5.9,
+            quantity: 1,
+            expiryDate: "2026-07-24",
+          },
+        ],
+        optionEntryExecutions: [
+          {
+            id: "confirmed-entry",
+            legId: "put-leg",
+            tradeDate: "2026-06-23",
+            contracts: 1,
+            fillPriceUSD: 5.9,
+            settlementCurrency: "USD",
+            commissionUSD: 2.25,
+            inputMode: "USD_EXECUTION_CALC",
+            source: "saxo_api_estimate",
+            confirmed: true,
+          },
+        ],
+      }),
+    };
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(display.basis).toBe("confirmed");
+    expect(display.dte).toBe(31);
+    expect(display.premiumUSD).toBeCloseTo(587.75, 8);
+    expect(display.premiumJPY).toBe(0);
+    expect(display.annualReturnPct).toBeCloseTo(35.5, 1);
+  });
+
+  it("uses confirmed entry trade date for open-position DTE display", () => {
+    const simulation: TradeSimulation = {
+      ...createPlannedCoveredCall({
+        id: "nvda-p195-n-shifted-entry",
+        status: "open",
+        name: "NVDA P195 N short put",
+        strategyType: "short_put",
+        currentPriceUSD: 201.8,
+        fxRateJPY: 0,
+        referenceFxRateJPY: 0,
+        entryDate: "2026-06-24",
+        expiryDate: "2026-07-24",
+        dte: 0,
+        stockPosition: null,
+        denominatorMode: "cash_secured",
+        optionLegs: [
+          {
+            id: "put-leg",
+            type: "put",
+            side: "sell",
+            strikeUSD: 195,
+            premiumUSD: 5.9,
+            quantity: 1,
+            expiryDate: "2026-07-24",
+          },
+        ],
+        optionEntryExecutions: [
+          {
+            id: "confirmed-entry",
+            legId: "put-leg",
+            tradeDate: "2026-06-23",
+            contracts: 1,
+            fillPriceUSD: 5.9,
+            settlementCurrency: "USD",
+            commissionUSD: 2.25,
+            inputMode: "USD_EXECUTION_CALC",
+            source: "saxo_api_estimate",
+            confirmed: true,
+          },
+        ],
+      }),
+    };
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(display.dte).toBe(31);
+    expect(display.annualReturnPct).toBeCloseTo(35.5, 1);
+  });
 });

@@ -48,14 +48,22 @@ export function calculatePayoffSeries(simulation: TradeSimulation, displayMode: 
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
   const minReference = rangeValues.length > 0 ? Math.min(...rangeValues) : Math.min(simulation.currentPriceUSD, ...strikes);
   const maxReference = rangeValues.length > 0 ? Math.max(...rangeValues) : Math.max(simulation.currentPriceUSD, ...strikes);
+  const isPracticalPutSell =
+    simulation.strategyType === "short_put" && simulation.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
   const shouldUsePracticalRange =
-    simulation.strategyType === "covered_call" && displayMode !== "theoretical";
+    (simulation.strategyType === "covered_call" || isPracticalPutSell) && displayMode !== "theoretical";
   const min = displayMode === "theoretical"
     ? 0
-    : shouldUsePracticalRange
+    : isPracticalPutSell
+      ? Math.max(1, Math.floor(minReference * 0.65))
+      : shouldUsePracticalRange
       ? Math.max(1, Math.floor(minReference * 0.85))
       : Math.max(0, Math.floor(minReference * 0.55));
-  const max = shouldUsePracticalRange ? Math.ceil(maxReference * 1.15) : Math.ceil(maxReference * 1.35);
+  const max = isPracticalPutSell
+    ? Math.ceil(maxReference * 1.25)
+    : shouldUsePracticalRange
+      ? Math.ceil(maxReference * 1.15)
+      : Math.ceil(maxReference * 1.35);
   const step = Math.max(1, Math.round((max - min) / 48));
   const points: PayoffPoint[] = [];
   for (let price = min; price <= max; price += step) {
@@ -104,6 +112,9 @@ export function calculatePayoffSummary(simulation: TradeSimulation, displayMode:
 
   const coveredCallDisplayLabel = getCoveredCallDisplayModeLabel(displayMode);
   const coveredCallIsTheoretical = coveredCallSummary && displayMode === "theoretical";
+  const isPracticalPutSell =
+    simulation.strategyType === "short_put" && simulation.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
+  const putSellIsTheoretical = isPracticalPutSell && displayMode === "theoretical";
 
   return {
     breakevens,
@@ -113,15 +124,23 @@ export function calculatePayoffSummary(simulation: TradeSimulation, displayMode:
       ? coveredCallIsTheoretical
         ? "理論上の最大評価損"
         : "表示レンジ下限の評価損"
-      : undefined,
-    maxLossNote: coveredCallSummary
+      : isPracticalPutSell
+        ? putSellIsTheoretical
+          ? "理論最大損失（株価0ドル想定）"
+          : "実用レンジ下限の評価損"
+        : undefined,
+    maxLossNote: coveredCallSummary || isPracticalPutSell
       ? coveredCallIsTheoretical
         ? "株価0ドル想定。保有株込み。実現損ではありません。この価格で自動売却されるという意味ではありません。"
-        : "初期表示は短期カバードコール判断に使う実用レンジです。株価0ドルまで含めた理論上の最大評価損は、理論最大レンジで確認できます。"
+        : putSellIsTheoretical
+          ? "株価0ドル想定。プット売りの理論上の最大損失です。満期時に権利行使されると株式取得となり、取得直後に評価損を抱える可能性があります。"
+          : isPracticalPutSell
+            ? "初期表示は現在株価・権利行使価格・損益分岐点を中心にした実用レンジです。株価0ドルまで含めた理論値は理論最大レンジで確認できます。"
+            : "初期表示は短期カバードコール判断に使う実用レンジです。株価0ドルまで含めた理論上の最大評価損は、理論最大レンジで確認できます。"
       : undefined,
     maxProfitLabel: hasLongCall ? "無制限（株価上昇側）" : formatPayoffJPY(maxPnl),
-    displayModeLabel: coveredCallSummary ? coveredCallDisplayLabel : undefined,
-    displayModeOptions: coveredCallSummary ? ["実用レンジ", "理論最大レンジ", "オプション単体", "機会損益"] : undefined,
+    displayModeLabel: coveredCallSummary || isPracticalPutSell ? coveredCallDisplayLabel : undefined,
+    displayModeOptions: coveredCallSummary || isPracticalPutSell ? ["実用レンジ", "理論最大レンジ", "オプション単体", "機会損益"] : undefined,
     hasLongOption,
     formulas: coveredCallSummary
       ? coveredCallSummary.formulas
@@ -188,10 +207,20 @@ function samplePayoffExtremes(simulation: TradeSimulation, breakevens: number[],
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
   const minReference = rangeValues.length > 0 ? Math.min(...rangeValues) : Math.min(simulation.currentPriceUSD, ...strikes);
   const maxReference = rangeValues.length > 0 ? Math.max(...rangeValues) : Math.max(simulation.currentPriceUSD, ...strikes);
-  const isCoveredCallPractical =
-    simulation.strategyType === "covered_call" && displayMode !== "theoretical";
-  const lowerBound = isCoveredCallPractical ? Math.max(1, minReference * 0.85) : 0;
-  const upperBound = isCoveredCallPractical ? maxReference * 1.15 : Math.max(simulation.currentPriceUSD, ...strikes, ...breakevens, 1) * 3;
+  const isPracticalPutSell =
+    simulation.strategyType === "short_put" && simulation.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
+  const isPracticalRange =
+    (simulation.strategyType === "covered_call" || isPracticalPutSell) && displayMode !== "theoretical";
+  const lowerBound = isPracticalPutSell && displayMode !== "theoretical"
+    ? Math.max(1, minReference * 0.65)
+    : isPracticalRange
+      ? Math.max(1, minReference * 0.85)
+      : 0;
+  const upperBound = isPracticalPutSell && displayMode !== "theoretical"
+    ? maxReference * 1.25
+    : isPracticalRange
+      ? maxReference * 1.15
+      : Math.max(simulation.currentPriceUSD, ...strikes, ...breakevens, 1) * 3;
   const prices = [lowerBound, simulation.currentPriceUSD, stockCost, ...strikes, ...breakevens, upperBound]
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0);
   return prices.map((price) => ({

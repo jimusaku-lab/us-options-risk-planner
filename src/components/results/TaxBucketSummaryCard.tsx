@@ -37,11 +37,11 @@ export function TaxBucketSummaryCard({ summary }: { summary: TaxBucketSummary })
               note="決済実績記録に入力した約定価格、数量、手数料を反映します。実績未入力の決済済み建玉は含めません。"
             />
             <SummaryRow
-              label="上場株式等の譲渡所得等"
+              label="P口座株式譲渡損益（JPY集計）"
               count={summary.stockSettlementCount}
               profitJPY={summary.stockRealizedGainJPY}
               annualReturnPct={summary.stockAnnualReturnPct}
-              note="現物株の譲渡記録をONにした履歴だけを集計します。オプション損益とは相殺しません。"
+              note="P口座のJPY課税集計です。N口座USDの株式譲渡は成績タブのN口座株式譲渡損益で別表示します。"
             />
           </tbody>
         </table>

@@ -17,9 +17,11 @@ import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 export function PayoffChart({ simulation, points }: { simulation: TradeSimulation; points: PayoffPoint[] }) {
   const isCoveredCall = simulation.strategyType === "covered_call";
+  const isShortPut = simulation.strategyType === "short_put" && simulation.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
+  const supportsDisplayModes = isCoveredCall || isShortPut;
   const [displayMode, setDisplayMode] = useState<PayoffDisplayMode>("practical");
-  const summary = calculatePayoffSummary(simulation, isCoveredCall ? displayMode : "theoretical");
-  const chartPoints = isCoveredCall ? calculatePayoffSeries(simulation, displayMode) : points;
+  const summary = calculatePayoffSummary(simulation, supportsDisplayModes ? displayMode : "theoretical");
+  const chartPoints = supportsDisplayModes ? calculatePayoffSeries(simulation, displayMode) : points;
   const calls = simulation.optionLegs.filter((leg) => leg.type === "call");
   const puts = simulation.optionLegs.filter((leg) => leg.type === "put");
   return (
@@ -119,7 +121,8 @@ function PayoffStat({ label, value, tone, note }: { label: string; value: string
 }
 
 export function DenominatorChart({ denominators }: { denominators: DenominatorResult[] }) {
-  const data = denominators.map((row) => ({
+  const hiddenRows = denominators.filter((row) => (row.currency === "USD" ? (row.amountUSD ?? 0) <= 0 : row.amountJPY <= 0));
+  const data = denominators.filter((row) => row.currency === "USD" ? (row.amountUSD ?? 0) > 0 : row.amountJPY > 0).map((row) => ({
     name: row.label.replace("ベース", ""),
     amountJPY: Math.round(row.amountJPY),
     annualReturnPct: row.annualReturnPct,
@@ -128,6 +131,11 @@ export function DenominatorChart({ denominators }: { denominators: DenominatorRe
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <h2 className="text-lg font-bold text-slate-950">分母別の大きさ</h2>
+      {hiddenRows.length > 0 ? (
+        <p className="mt-1 text-sm leading-6 text-slate-500">
+          対象外の0分母はグラフから除外しています。
+        </p>
+      ) : null}
       <div className="mt-4 h-72">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 10, right: 18, bottom: 44, left: 0 }}>

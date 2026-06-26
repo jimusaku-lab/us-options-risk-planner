@@ -19,6 +19,7 @@ export type HistoryPerformanceResult = {
   assignedPutDenominatorFx?: number;
   premiumJPY: number;
   realizedOptionProfitJPY: number;
+  realizedOptionProfitUSD: number;
   realizedOptionDays: number;
   taxGrossProfitJPY: number;
   grossDenominators: DenominatorResult[];
@@ -66,6 +67,7 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
   const hasCloseExecutionResults = optionCloseExecutionResults.length > 0;
   const requiresExecutionRecord = sanitized.status === "closed" || sanitized.status === "expired";
   const realizedOptionProfitJPY = optionCloseExecutionResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
+  const realizedOptionProfitUSD = optionCloseExecutionResults.reduce((sum, result) => sum + result.realizedPnlUSD, 0);
   const realizedOptionDays = hasCloseExecutionResults
     ? Math.max(
         1,
@@ -93,7 +95,26 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
         }
       : {}),
   };
-  const grossDenominators = calculateDenominators(taxSimulation, taxGrossProfitJPY);
+  const useUsdHistoryReturns =
+    sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT" &&
+    requiresExecutionRecord &&
+    hasCloseExecutionResults &&
+    Math.abs(realizedOptionProfitUSD) > 0.0001;
+  const applyUsdHistoryReturns = (rows: DenominatorResult[]) =>
+    useUsdHistoryReturns
+      ? rows.map((row) => {
+          const denominatorUSD = row.amountUSD ?? 0;
+          const annualReturnPct = denominatorUSD > 0 && taxSimulation.dte > 0
+            ? (realizedOptionProfitUSD / denominatorUSD / taxSimulation.dte) * 365 * 100
+            : 0;
+          return {
+            ...row,
+            annualReturnPct,
+            netAnnualReturnPct: annualReturnPct,
+          };
+        })
+      : rows;
+  const grossDenominators = applyUsdHistoryReturns(calculateDenominators(taxSimulation, taxGrossProfitJPY));
   const primaryGrossDenominator = getPrimaryDenominator(grossDenominators);
   const taxProfile = taxProfiles[sanitized.taxProfileId];
   const taxResult = calculateTaxResult({
@@ -102,7 +123,7 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
     denominatorJPY: primaryGrossDenominator.amountJPY,
     taxProfile,
   });
-  const denominators = calculateDenominators(taxSimulation, taxGrossProfitJPY, taxResult.netProfitJPY);
+  const denominators = applyUsdHistoryReturns(calculateDenominators(taxSimulation, taxGrossProfitJPY, taxResult.netProfitJPY));
   const primaryDenominator = getPrimaryDenominator(denominators);
 
   return {
@@ -116,6 +137,7 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
     assignedPutDenominatorFx,
     premiumJPY,
     realizedOptionProfitJPY,
+    realizedOptionProfitUSD,
     realizedOptionDays,
     taxGrossProfitJPY,
     grossDenominators,
