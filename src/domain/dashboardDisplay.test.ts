@@ -299,4 +299,59 @@ describe("dashboard premium display", () => {
     expect(display.dte).toBe(31);
     expect(display.annualReturnPct).toBeCloseTo(35.5, 1);
   });
+
+  it("shows planned long calls as paid premium with maximum loss and breakeven instead of premium annual return", () => {
+    const simulation: TradeSimulation = {
+      ...createPlannedCoveredCall({
+        id: "v-c335-long-call",
+        status: "planned",
+        name: "V C335 long call",
+        ticker: "V",
+        underlyingName: "Visa Inc.",
+        strategyType: "long_call",
+        currentPriceUSD: 336,
+        fxRateJPY: 161.65,
+        referenceFxRateJPY: 161.65,
+        entryDate: "2026-06-29",
+        expiryDate: "2026-11-20",
+        dte: 144,
+        stockPosition: null,
+        denominatorMode: "custom",
+        optionLegs: [
+          {
+            id: "call-leg",
+            type: "call",
+            side: "buy",
+            strikeUSD: 335,
+            premiumUSD: 22,
+            quantity: 1,
+            expiryDate: "2026-11-20",
+          },
+        ],
+        brokerCommissionUSD: 2.25,
+      }),
+    };
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(display.basis).toBe("planned");
+    expect(display.premiumDirection).toBe("paid");
+    expect(display.label).toBe("支払予定プレミアム");
+    expect(display.primaryAmountLabel).toBe("支払予定額");
+    expect(display.denominatorLabel).toBe("最大損失 / 支払額");
+    expect(display.annualReturnLabel).toBe("出口ライン確認");
+    expect(display.annualReturnPct).toBeUndefined();
+    expect(display.netAnnualReturnPct).toBeUndefined();
+    expect(display.premiumUSD).toBeCloseTo(-2_200, 8);
+    expect(display.premiumJPY).toBeCloseTo(-355_630, 8);
+    expect(display.netAfterFeesUSD).toBeCloseTo(-2_202.25, 8);
+    expect(display.netAfterFeesJPY).toBeCloseTo(-355_993.7125, 8);
+    expect(display.longOptionOrderDisplay?.paidPremiumJPY).toBeCloseTo(355_630, 8);
+    expect(display.longOptionOrderDisplay?.totalCostJPY).toBeCloseTo(355_993.7125, 8);
+    expect(display.longOptionOrderDisplay?.maximumLossJPY).toBeCloseTo(355_993.7125, 8);
+    expect(display.longOptionOrderDisplay?.breakevenUSD).toBeCloseTo(357.0225, 8);
+    expect(display.longOptionOrderDisplay?.currentPriceUSD).toBe(336);
+    expect(display.longOptionOrderDisplay?.strikeUSD).toBe(335);
+    expect(display.dte).toBe(144);
+  });
 });

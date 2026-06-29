@@ -537,8 +537,34 @@ function ApiPremiumCandidatePanel({
   );
 }
 
-function SaxoExitOrderStatus({ candidates, totalFetched }: { candidates: SaxoApiOrderSnapshot[]; totalFetched: number }) {
+type LongOptionExitOrderLineCandidate = {
+  profitTargetPriceUSD?: number;
+  stopLossPriceUSD?: number;
+};
+
+export function getLongOptionExitOrderLineCandidate(candidates: SaxoApiOrderSnapshot[]): LongOptionExitOrderLineCandidate {
+  const profitTargetPriceUSD = candidates.find(
+    (candidate) => candidate.price !== undefined && Number.isFinite(candidate.price) && candidate.price > 0,
+  )?.price;
+  const stopLossPriceUSD = candidates.find(
+    (candidate) => candidate.stopPrice !== undefined && Number.isFinite(candidate.stopPrice) && candidate.stopPrice > 0,
+  )?.stopPrice;
+  return { profitTargetPriceUSD, stopLossPriceUSD };
+}
+
+function SaxoExitOrderStatus({
+  candidates,
+  totalFetched,
+  longOptionLines,
+  onAdoptLongOptionLines,
+}: {
+  candidates: SaxoApiOrderSnapshot[];
+  totalFetched: number;
+  longOptionLines?: LongOptionExitOrderLineCandidate;
+  onAdoptLongOptionLines?: () => void;
+}) {
   const hasFetched = totalFetched > 0;
+  const hasLongOptionLines = Boolean(longOptionLines?.profitTargetPriceUSD || longOptionLines?.stopLossPriceUSD);
   return (
     <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-xs">
       <div className="font-bold text-slate-950">Saxo側出口注文</div>
@@ -563,6 +589,25 @@ function SaxoExitOrderStatus({ candidates, totalFetched }: { candidates: SaxoApi
             </li>
           ))}
         </ul>
+      ) : null}
+      {hasLongOptionLines ? (
+        <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-indigo-900">
+          <div className="font-bold">Saxo側の反対売買ライン候補</div>
+          {longOptionLines?.profitTargetPriceUSD ? (
+            <div className="mt-1">決済指値: {formatUSD(longOptionLines.profitTargetPriceUSD)}</div>
+          ) : null}
+          {longOptionLines?.stopLossPriceUSD ? (
+            <div className="mt-1">決済逆指値: {formatUSD(longOptionLines.stopLossPriceUSD)}</div>
+          ) : null}
+          {onAdoptLongOptionLines ? (
+            <button
+              className="mt-2 rounded border border-indigo-300 bg-white px-2 py-1 font-bold text-indigo-800 hover:bg-indigo-50"
+              onClick={onAdoptLongOptionLines}
+            >
+              アプリの利確/損切りラインへ反映
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
@@ -617,6 +662,7 @@ function LongOptionCloseCard({
     : Math.max(0, closePriceUSD - intrinsicValueUSD);
   const dte = calculateRemainingDaysUntilExpiry(leg.expiryDate);
   const orderCandidates = findOrderCandidatesForLeg(simulation, leg, saxoOrderCandidates).filter((order) => order.isExitCandidate);
+  const exitOrderLineCandidate = getLongOptionExitOrderLineCandidate(orderCandidates);
   const candidatePriceUSD = getPremiumCandidatePrice(apiCandidate);
   const label = `${leg.type === "call" ? "C" : "P"} ${leg.strikeUSD} ${leg.expiryDate}`;
 
@@ -696,7 +742,16 @@ function LongOptionCloseCard({
           onClosePlanChange({ closePriceUSD: price });
         }}
       />
-      <SaxoExitOrderStatus candidates={orderCandidates} totalFetched={saxoOrderCandidates.length} />
+      <SaxoExitOrderStatus
+        candidates={orderCandidates}
+        totalFetched={saxoOrderCandidates.length}
+        longOptionLines={exitOrderLineCandidate}
+        onAdoptLongOptionLines={
+          exitOrderLineCandidate.profitTargetPriceUSD || exitOrderLineCandidate.stopLossPriceUSD
+            ? () => onClosePlanChange(exitOrderLineCandidate)
+            : undefined
+        }
+      />
       {closePriceUSD !== undefined && closePriceUSD > 0 ? (
         <button
           className="mt-3 rounded-md bg-slate-950 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
@@ -723,7 +778,11 @@ function LongOptionCloseCard({
         />
         <Row
           label="利確/損切りライン"
-          value={`${formatUSD(profitTargetPriceUSD)} / ${formatUSD(stopLossPriceUSD)}（初期候補 +30% / -30%）`}
+          value={`${formatUSD(profitTargetPriceUSD)} / ${formatUSD(stopLossPriceUSD)}${
+            exitOrderLineCandidate.profitTargetPriceUSD || exitOrderLineCandidate.stopLossPriceUSD
+              ? "（Saxo候補あり）"
+              : "（初期候補 +30% / -30%）"
+          }`}
         />
         <Row label="残存日数" value={`${dte}日`} tone={dte <= 7 ? "amber" : undefined} />
         <Row label="本質的価値" value={intrinsicValueUSD === null ? "未計算" : `${formatUSD(intrinsicValueUSD)} / 株`} />

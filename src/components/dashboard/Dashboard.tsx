@@ -131,6 +131,7 @@ export function Dashboard({
               const isHistoryRow = endedStatuses.has(simulation.status);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
+              const longOptionDisplay = !isHistoryRow ? premiumDisplay.longOptionOrderDisplay : undefined;
               const historyCloseResults = historyPerformance?.optionCloseExecutionResults ?? [];
               const historyRealizedUsd = historyCloseResults.reduce((sum, result) => sum + result.realizedPnlUSD, 0);
               const historyRealizedJpy = historyCloseResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
@@ -174,6 +175,8 @@ export function Dashboard({
               const annualReturnLabel =
                 !isHistoryRow && !premiumDisplay.hasPremiumInput
                   ? "未入力"
+                  : longOptionDisplay
+                    ? premiumDisplay.annualReturnLabel ?? "出口ライン確認"
                   : isHistoryRow && primary.netAnnualReturnPct !== undefined
                   ? `${formatPct(primary.annualReturnPct)} / ${formatPct(primary.netAnnualReturnPct)}`
                   : premiumDisplay.annualReturnPct !== undefined
@@ -266,16 +269,32 @@ export function Dashboard({
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {isHistoryRow ? <span className="mb-1 block text-[11px] font-bold text-slate-500">実績分母</span> : null}
-                    {primary.currency === "USD" ? (
+                    {longOptionDisplay ? (
                       <>
+                        <span className="mb-1 block text-[11px] font-bold text-slate-500">{premiumDisplay.denominatorLabel}</span>
+                        <span className="block text-red-700">-{formatUSD(longOptionDisplay.maximumLossUSD)}</span>
+                        <span className="block text-xs text-slate-500">
+                          {hasEffectiveFx && Math.abs(longOptionDisplay.maximumLossJPY) > 0.5
+                            ? `参考 -${formatJPY(longOptionDisplay.maximumLossJPY)}`
+                            : "参考JPY未計算"}
+                        </span>
+                        <span className="mt-1 block text-[11px] font-semibold text-slate-500">
+                          損益分岐点 {formatUSD(longOptionDisplay.breakevenUSD)}
+                        </span>
+                      </>
+                    ) : primary.currency === "USD" ? (
+                      <>
+                        {isHistoryRow ? <span className="mb-1 block text-[11px] font-bold text-slate-500">実績分母</span> : null}
                         <span className="block">{formatUSD(primary.amountUSD ?? 0)}</span>
                         <span className="block text-xs text-slate-500">
                           {hasEffectiveFx && Math.abs(primary.amountJPY) > 0.5 ? `参考 ${formatJPY(primary.amountJPY)}` : "参考JPY未計算"}
                         </span>
                       </>
                     ) : (
-                      formatJPY(primary.amountJPY)
+                      <>
+                        {isHistoryRow ? <span className="mb-1 block text-[11px] font-bold text-slate-500">実績分母</span> : null}
+                        {formatJPY(primary.amountJPY)}
+                      </>
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
@@ -283,6 +302,13 @@ export function Dashboard({
                       <span className="block text-[11px] font-bold text-slate-500">プレミアム年率</span>
                     ) : null}
                     {annualReturnLabel}
+                    {longOptionDisplay ? (
+                      <span className="mt-1 block rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-indigo-900">
+                        <span className="block">現在株価 {formatUSD(longOptionDisplay.currentPriceUSD)} / 権利行使価格 {formatUSD(longOptionDisplay.strikeUSD)}</span>
+                        <span className="block">満期まで {premiumDisplay.dte}日</span>
+                        <span className="block">約定後は反対売買判断で利確/損切りラインを確認</span>
+                      </span>
+                    ) : null}
                     {isHistoryRow ? <span className="mt-1 block text-[11px] font-semibold text-slate-500">税前 / 税後</span> : null}
                     {!isHistoryRow && premiumDisplay.coveredCallAssignmentEstimate ? (
                       <span className="mt-2 block rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-sky-950">

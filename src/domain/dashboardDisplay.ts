@@ -4,6 +4,8 @@ import {
   calculateDte,
   calculateNetInitialPremiumJPY,
   calculateNetInitialPremiumUSD,
+  calculateTotalFeesJPY,
+  calculateTotalFeesUSD,
   calculateTotalPremiumPaidJPY,
   calculateTotalPremiumPaidUSD,
   calculateTotalPremiumReceivedJPY,
@@ -27,6 +29,10 @@ export type CoveredCallAssignmentEstimate = {
 export type DashboardPremiumDisplay = {
   basis: "planned" | "open_unconfirmed" | "confirmed" | "history";
   label: string;
+  premiumDirection: "received" | "paid";
+  primaryAmountLabel: string;
+  denominatorLabel: string;
+  annualReturnLabel?: string;
   hasPremiumInput: boolean;
   effectiveFxRateJPY: number | null;
   dte: number;
@@ -37,6 +43,23 @@ export type DashboardPremiumDisplay = {
   netAfterFeesJPY?: number;
   netAfterFeesUSD?: number;
   coveredCallAssignmentEstimate?: CoveredCallAssignmentEstimate;
+  longOptionOrderDisplay?: LongOptionOrderDisplay;
+};
+
+export type LongOptionOrderDisplay = {
+  optionType: "call" | "put";
+  paidPremiumUSD: number;
+  paidPremiumJPY: number;
+  feeUSD: number;
+  feeJPY: number;
+  totalCostUSD: number;
+  totalCostJPY: number;
+  maximumLossUSD: number;
+  maximumLossJPY: number;
+  breakevenUSD: number;
+  strikeUSD: number;
+  currentPriceUSD: number;
+  quantity: number;
 };
 
 export function getEffectiveFxRateJPY(simulation: TradeSimulation): number | null {
@@ -92,6 +115,53 @@ function hasLegPremiumInput(simulation: TradeSimulation): boolean {
   return simulation.optionLegs.some(
     (leg) => leg.quantity > 0 && Number.isFinite(leg.premiumUSD) && leg.premiumUSD > 0,
   );
+}
+
+function getSingleLongOptionLeg(simulation: TradeSimulation) {
+  const longLegs = simulation.optionLegs.filter((leg) => leg.side === "buy");
+  const shortLegs = simulation.optionLegs.filter((leg) => leg.side === "sell");
+  if (shortLegs.length > 0 || longLegs.length !== 1) return undefined;
+  const leg = longLegs[0];
+  if (simulation.strategyType === "long_call" && leg.type !== "call") return undefined;
+  if (simulation.strategyType === "long_put" && leg.type !== "put") return undefined;
+  return leg;
+}
+
+function calculateLongOptionOrderDisplay(params: {
+  simulation: TradeSimulation;
+  feeUSD: number;
+  feeJPY: number;
+}): LongOptionOrderDisplay | undefined {
+  const leg = getSingleLongOptionLeg(params.simulation);
+  if (!leg || leg.quantity <= 0) return undefined;
+  const effectiveFxRateJPY = getEffectiveFxRateJPY(params.simulation) ?? 0;
+  const paidPremiumUSD = calculateTotalPremiumPaidUSD(params.simulation);
+  const paidPremiumJPY =
+    params.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+      ? paidPremiumUSD * effectiveFxRateJPY
+      : calculateTotalPremiumPaidJPY(params.simulation);
+  const totalCostUSD = paidPremiumUSD + params.feeUSD;
+  const totalCostJPY = paidPremiumJPY + params.feeJPY;
+  const feePerShareUSD = params.feeUSD / Math.max(1, leg.quantity * 100);
+  const breakevenUSD =
+    leg.type === "call"
+      ? leg.strikeUSD + leg.premiumUSD + feePerShareUSD
+      : Math.max(0, leg.strikeUSD - leg.premiumUSD - feePerShareUSD);
+  return {
+    optionType: leg.type,
+    paidPremiumUSD,
+    paidPremiumJPY,
+    feeUSD: params.feeUSD,
+    feeJPY: params.feeJPY,
+    totalCostUSD,
+    totalCostJPY,
+    maximumLossUSD: totalCostUSD,
+    maximumLossJPY: totalCostJPY,
+    breakevenUSD,
+    strikeUSD: leg.strikeUSD,
+    currentPriceUSD: params.simulation.currentPriceUSD,
+    quantity: leg.quantity,
+  };
 }
 
 function calculateCoveredCallAssignmentEstimate(params: {
@@ -166,6 +236,7 @@ function calculatePlannedPremiumDisplay(
       : calculateTotalPremiumReceivedJPY(simulation) - calculateTotalPremiumPaidJPY(simulation);
   const feeUSD = calculateManualFeeUSD(simulation);
   const feeJPY = calculateManualFeeJPY(simulation);
+  const longOptionOrderDisplay = calculateLongOptionOrderDisplay({ simulation, feeUSD, feeJPY });
   const netAfterFeesUSD = premiumUSD - feeUSD;
   const netAfterFeesJPY = premiumJPY - feeJPY;
   const denominatorUSD = calculateNAccountPrimaryDenominatorUSD(simulation);
@@ -175,22 +246,38 @@ function calculatePlannedPremiumDisplay(
 
   return {
     basis,
-    label: basis === "planned" ? "予定プレミアム" : "約定未確認プレミアム",
+    label: longOptionOrderDisplay
+      ? basis === "planned"
+        ? "支払予定プレミアム"
+        : "約定未確認の支払プレミアム"
+      : basis === "planned"
+        ? "予定プレミアム"
+        : "約定未確認プレミアム",
+    premiumDirection: longOptionOrderDisplay ? "paid" : "received",
+    primaryAmountLabel: longOptionOrderDisplay
+      ? basis === "planned"
+        ? "支払予定額"
+        : "約定未確認の支払額"
+      : "受取プレミアム",
+    denominatorLabel: longOptionOrderDisplay ? "最大損失 / 支払額" : "使用分母",
+    annualReturnLabel: longOptionOrderDisplay ? "出口ライン確認" : undefined,
     hasPremiumInput: hasLegPremiumInput(simulation),
     effectiveFxRateJPY,
     dte,
     premiumJPY,
     premiumUSD,
-    annualReturnPct:
-      simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+    annualReturnPct: longOptionOrderDisplay
+      ? undefined
+      : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
         ? denominatorUSD && denominatorUSD > 0
           ? calculateAnnualReturnPercentByCurrency({ netProfit: premiumUSD, denominator: denominatorUSD, dte })
           : undefined
         : denominatorJPY && denominatorJPY > 0
           ? calculateAnnualReturnPercentByCurrency({ netProfit: premiumJPY, denominator: denominatorJPY, dte })
           : undefined,
-    netAnnualReturnPct:
-      simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+    netAnnualReturnPct: longOptionOrderDisplay
+      ? undefined
+      : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
         ? denominatorUSD && denominatorUSD > 0
           ? calculateAnnualReturnPercentByCurrency({ netProfit: netAfterFeesUSD, denominator: denominatorUSD, dte })
           : undefined
@@ -199,6 +286,7 @@ function calculatePlannedPremiumDisplay(
           : undefined,
     netAfterFeesJPY,
     netAfterFeesUSD,
+    longOptionOrderDisplay,
     coveredCallAssignmentEstimate: calculateCoveredCallAssignmentEstimate({
       simulation,
       premiumUSD,
@@ -219,6 +307,9 @@ export function calculateDashboardPremiumDisplay(simulation: TradeSimulation): D
     return {
       basis: "history",
       label: "確定プレミアム",
+      premiumDirection: premiumUSD < 0 ? "paid" : "received",
+      primaryAmountLabel: premiumUSD < 0 ? "支払済みプレミアム" : "受取プレミアム",
+      denominatorLabel: "実績分母",
       hasPremiumInput: true,
       effectiveFxRateJPY: getEffectiveFxRateJPY(simulation),
       dte: getDisplayDte(simulation),
@@ -242,19 +333,29 @@ export function calculateDashboardPremiumDisplay(simulation: TradeSimulation): D
       : premiumJPY / (getFxRateOrZero(simulation) || 1);
   const dte = getDisplayDte(simulation);
   const denominatorUSD = calculateNAccountPrimaryDenominatorUSD(simulation);
+  const feeUSD = calculateTotalFeesUSD(simulation);
+  const feeJPY = calculateTotalFeesJPY(simulation);
+  const longOptionOrderDisplay = calculateLongOptionOrderDisplay({ simulation, feeUSD, feeJPY });
   const annualReturnPct =
-    simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" && denominatorUSD && denominatorUSD > 0
+    !longOptionOrderDisplay && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" && denominatorUSD && denominatorUSD > 0
       ? calculateAnnualReturnPercentByCurrency({ netProfit: premiumUSD, denominator: denominatorUSD, dte })
       : undefined;
   return {
     basis: "confirmed",
-    label: "建玉時プレミアム",
+    label: longOptionOrderDisplay ? "建玉時支払プレミアム" : "建玉時プレミアム",
+    premiumDirection: longOptionOrderDisplay ? "paid" : "received",
+    primaryAmountLabel: longOptionOrderDisplay ? "建玉時支払額" : "受取プレミアム",
+    denominatorLabel: longOptionOrderDisplay ? "最大損失 / 支払額" : "使用分母",
+    annualReturnLabel: longOptionOrderDisplay ? "反対売買で決済" : undefined,
     hasPremiumInput: true,
     effectiveFxRateJPY: getEffectiveFxRateJPY(simulation),
     dte,
     premiumJPY,
     premiumUSD,
     annualReturnPct,
+    netAfterFeesJPY: longOptionOrderDisplay ? -longOptionOrderDisplay.totalCostJPY : undefined,
+    netAfterFeesUSD: longOptionOrderDisplay ? -longOptionOrderDisplay.totalCostUSD : undefined,
+    longOptionOrderDisplay,
     coveredCallAssignmentEstimate: calculateCoveredCallAssignmentEstimate({
       simulation,
       premiumUSD,

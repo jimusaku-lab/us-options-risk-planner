@@ -54,6 +54,7 @@ export function SummaryCards({
 }: SummaryCardsProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
   const usePremiumDisplay = !historyMode && premiumDisplay.basis !== "history";
+  const longOptionDisplay = usePremiumDisplay ? premiumDisplay.longOptionOrderDisplay : undefined;
   const premiumJPY = usePremiumDisplay ? premiumDisplay.premiumJPY : calculateNetInitialPremiumJPY(simulation);
   const premiumUSD = usePremiumDisplay ? premiumDisplay.premiumUSD : calculateNetInitialPremiumUSD(simulation);
   const putAssignmentJPY = calculatePutAssignmentCapitalTotalJPY(simulation);
@@ -98,7 +99,13 @@ export function SummaryCards({
   const summaryDenominatorCurrency =
     usePremiumDisplay && premiumDisplay.coveredCallAssignmentEstimate ? "USD" : primaryDenominator.currency;
   const premiumCardNote = usePremiumDisplay
-    ? [
+    ? longOptionDisplay
+      ? [
+          `${premiumDisplay.label} ${formatUSD(longOptionDisplay.paidPremiumUSD)}。`,
+          `手数料込み ${formatUSD(longOptionDisplay.totalCostUSD)}。`,
+          isN ? `${formatReferenceJPY(longOptionDisplay.totalCostJPY)}。` : "",
+        ].filter(Boolean).join(" ")
+      : [
         `${premiumDisplay.label}。`,
         premiumDisplay.netAfterFeesUSD !== undefined && Math.abs(premiumDisplay.netAfterFeesUSD - premiumDisplay.premiumUSD) > 0.005
           ? `手数料後 ${isN ? formatUSD(premiumDisplay.netAfterFeesUSD) : formatJPY(premiumDisplay.netAfterFeesJPY ?? 0)}。`
@@ -113,8 +120,12 @@ export function SummaryCards({
         ? "終了済みのP口座プット売りで確定したオプション収入です。"
         : "P口座JPY決済。手数料・税金は別カードで控除します。";
   const denominatorCardValue =
-    summaryDenominatorCurrency === "USD" ? formatUSD(summaryDenominatorUSD ?? 0) : formatJPY(summaryDenominatorJPY);
-  const denominatorCardNote = usePremiumDisplay && premiumDisplay.coveredCallAssignmentEstimate
+    longOptionDisplay
+      ? `-${formatUSD(longOptionDisplay.maximumLossUSD)}`
+      : summaryDenominatorCurrency === "USD" ? formatUSD(summaryDenominatorUSD ?? 0) : formatJPY(summaryDenominatorJPY);
+  const denominatorCardNote = longOptionDisplay
+    ? `支払プレミアムと手数料の合計です。${formatReferenceJPY(longOptionDisplay.maximumLossJPY)}。`
+    : usePremiumDisplay && premiumDisplay.coveredCallAssignmentEstimate
     ? [
         `取得原価ベース。${formatUSD(premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD)}。`,
         `${formatReferenceJPY(summaryDenominatorJPY)}。`,
@@ -131,12 +142,16 @@ export function SummaryCards({
         denominatorFormula,
       ].filter(Boolean).join(" / ");
   const annualCardValue =
-    usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
+    longOptionDisplay
+      ? formatUSD(longOptionDisplay.breakevenUSD)
+      : usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
       ? `予定 ${formatPct(premiumDisplay.annualReturnPct)}${
           premiumDisplay.netAnnualReturnPct !== undefined ? ` / 手数料後 ${formatPct(premiumDisplay.netAnnualReturnPct)}` : ""
         }`
       : `${formatPct(primaryDenominator.annualReturnPct)} / ${formatPct(taxResult.netAnnualReturnPct)}`;
-  const annualCardNote = usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
+  const annualCardNote = longOptionDisplay
+    ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)} / 権利行使価格 ${formatUSD(longOptionDisplay.strikeUSD)}。満期まで${premiumDisplay.dte}日。約定後は反対売買判断で利確/損切りラインを確認します。`
+    : usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
     ? `プレミアム年率。${premiumDisplay.dte}日換算。権利行使時想定は別カードで確認します。`
     : historyMode
       ? historyAnnualFormula
@@ -145,8 +160,12 @@ export function SummaryCards({
 
   const cards = [
     {
-      title: historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
-      value: isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
+      title: longOptionDisplay
+        ? premiumDisplay.primaryAmountLabel
+        : historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
+      value: longOptionDisplay
+        ? `-${isN ? formatUSD(longOptionDisplay.totalCostUSD) : formatJPY(longOptionDisplay.totalCostJPY)}`
+        : isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
       note: premiumCardNote,
     },
     ...(!historyMode && coveredCallAssignmentPreview && !assignmentEstimate
@@ -162,12 +181,16 @@ export function SummaryCards({
         ]
       : []),
     {
-      title: historyMode ? "この履歴の年率分母" : "使用分母",
+      title: longOptionDisplay
+        ? "最大損失"
+        : historyMode ? "この履歴の年率分母" : "使用分母",
       value: usePremiumDisplay ? denominatorCardValue : historyDenominatorValue,
       note: denominatorCardNote,
     },
     {
-      title: historyMode ? "この履歴のオプション年率" : "年率",
+      title: longOptionDisplay
+        ? "損益分岐点"
+        : historyMode ? "この履歴のオプション年率" : "年率",
       value: annualCardValue,
       note: annualCardNote,
     },
