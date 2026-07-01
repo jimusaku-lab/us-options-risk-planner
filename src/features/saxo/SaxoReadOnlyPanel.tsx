@@ -2419,6 +2419,9 @@ type ReflectionSummary = {
   positionLine: { detail: string; actionable: boolean };
   orderLine: { detail: string; actionable: boolean };
   historyLine: { detail: string; actionable: boolean; actionLabel: string };
+  nextActionDetail?: string;
+  hasNewPositionCandidates: boolean;
+  historyIsSupplemental: boolean;
   hasPending: boolean;
 };
 
@@ -2439,6 +2442,17 @@ const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
         <h3 className="text-sm font-bold text-slate-950">{summary.hasPending ? "反映待ちがあります" : "反映待ちはありません"}</h3>
         <span className="text-xs font-semibold text-slate-600">取得後に次の確認先を表示します</span>
       </div>
+      {summary.nextActionDetail ? (
+        <div
+          className={`mt-2 rounded-md border px-3 py-2 text-sm font-bold ${
+            summary.hasNewPositionCandidates
+              ? "border-teal-300 bg-white text-teal-900"
+              : "border-slate-200 bg-white text-slate-800"
+          }`}
+        >
+          {summary.nextActionDetail}
+        </div>
+      ) : null}
       <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
         {summary.accountLines.map((line) => (
           <PendingLine
@@ -2450,9 +2464,23 @@ const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
             onClick={line.target === "mapping" ? onShowMapping : onShowSnapshot}
           />
         ))}
-        <PendingLine label="建玉候補" detail={summary.positionLine.detail} actionLabel="候補を確認" disabled={!summary.positionLine.actionable} onClick={onShowPositions} />
+        <PendingLine
+          label="建玉候補"
+          detail={summary.positionLine.detail}
+          actionLabel={summary.hasNewPositionCandidates ? "建玉候補を確認して反映" : "候補を確認"}
+          disabled={!summary.positionLine.actionable}
+          tone={summary.hasNewPositionCandidates ? "primary" : undefined}
+          onClick={onShowPositions}
+        />
         <PendingLine label="注文候補" detail={summary.orderLine.detail} actionLabel="確認する" disabled={!summary.orderLine.actionable} onClick={onShowOrders} />
-        <PendingLine label="履歴候補" detail={summary.historyLine.detail} actionLabel={summary.historyLine.actionLabel} disabled={!summary.historyLine.actionable} onClick={onShowHistory} />
+        <PendingLine
+          label="履歴候補"
+          detail={summary.historyLine.detail}
+          actionLabel={summary.historyLine.actionLabel}
+          disabled={!summary.historyLine.actionable}
+          tone={summary.historyIsSupplemental ? "muted" : undefined}
+          onClick={onShowHistory}
+        />
       </div>
     </div>
   );
@@ -2463,23 +2491,37 @@ function PendingLine({
   detail,
   actionLabel,
   disabled,
+  tone,
   onClick,
 }: {
   label: string;
   detail: string;
   actionLabel: string;
   disabled: boolean;
+  tone?: "primary" | "muted";
   onClick: () => void;
 }) {
+  const containerClass =
+    tone === "primary"
+      ? "border-teal-300 bg-white shadow-sm"
+      : tone === "muted"
+        ? "border-slate-100 bg-slate-50 text-slate-500"
+        : "border-white/70 bg-white";
+  const buttonClass =
+    tone === "primary"
+      ? "border-teal-700 bg-teal-700 text-white hover:bg-teal-800"
+      : tone === "muted"
+        ? "border-slate-200 bg-white text-slate-600"
+        : "border-slate-300 text-slate-800";
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-white/70 bg-white px-3 py-2">
+    <div className={`flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 ${containerClass}`}>
       <div>
         <div className="text-xs font-bold text-slate-500">{label}</div>
         <div className="mt-0.5 font-semibold text-slate-900">{detail}</div>
       </div>
       <button
         type="button"
-        className="rounded-md border border-slate-300 px-2 py-1 text-xs font-bold text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+        className={`rounded-md border px-2 py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40 ${buttonClass}`}
         onClick={onClick}
         disabled={disabled}
       >
@@ -2893,10 +2935,19 @@ function PositionsPreview({
         <StatChip label="N口座" value={`${assignedN}件`} />
       </div>
       {positions.length > 0 ? (
-        <p className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
+        <p
+          className={`mt-2 rounded-md border px-3 py-2 text-xs leading-5 ${
+            actionRequiredRegularRows.length > 0
+              ? "border-teal-300 bg-teal-50 text-teal-950"
+              : "border-slate-200 bg-slate-50 text-slate-700"
+          }`}
+        >
           {actionRequiredRows > 0
             ? `今回処理が必要なのは、Saxoで約定済みまたは未反映の建玉${actionRequiredRows}件です。`
             : "今回追加で反映が必要なSaxo建玉はありません。"}
+          {actionRequiredRegularRows.length > 0
+            ? " 次に押す主操作は、各候補の「建玉入力へ下書き反映」です。下書き作成後に3-Aで正式保存してください。"
+            : ""}
           {confirmedCurrentHoldingRows > 0
             ? " 照合済みの現在保有は、新しく反映する必要はありません。"
             : ""}
@@ -3444,7 +3495,7 @@ function HistoryDiscoveryPreview({
         <div>
           <h3 className="text-sm font-bold text-slate-950">履歴候補</h3>
           <p className="mt-1 text-xs leading-5 text-slate-600">
-            履歴系endpointから、建玉開始確認・決済実績へ流し込む候補を確認します。正式保存や現金残高反映は行いません。
+            履歴候補は、建玉候補を下書き反映した後に約定確認・決済実績を補完するための確認欄です。正式保存や現金残高反映は行いません。
           </p>
         </div>
         <span className={`rounded px-2 py-1 text-xs font-bold ${statusClass}`}>{statusLabel}</span>
@@ -3461,7 +3512,7 @@ function HistoryDiscoveryPreview({
         {!fetchedAt ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm leading-6 text-slate-700">
-              履歴候補は未取得です。Saxo履歴を取得すると、建玉開始確認や決済実績に使える候補を表示します。
+              履歴候補は未取得です。先に建玉候補を反映し、必要に応じてSaxo履歴から約定確認や決済実績を補完します。
             </p>
             <button
               type="button"
@@ -3482,7 +3533,7 @@ function HistoryDiscoveryPreview({
                 </div>
               ) : null}
               <p>
-                履歴候補があります。必要な候補を確認し、反映候補を作成してください。
+                履歴候補があります。新規建玉候補が残っている場合は先に建玉入力へ下書き反映し、その後で履歴候補から約定確認・決済実績を補完してください。
                 {brokenCount > 0 ? ` 監査用の復旧候補が${brokenCount}件あります。通常の未入力候補とは分けて確認します。` : ""}
                 {unknownCount > 0 ? ` 対象外または確認不要の履歴候補が${unknownCount}件あります。Stock履歴は通常の3-A/7候補として自動反映しません。` : ""}
                 {ignoredCount > 0 ? ` 無視済みの履歴候補が${ignoredCount}件あります。` : ""}
@@ -3961,7 +4012,7 @@ function PositionRow({
       {linkStatus === "linked" ? (
         <>
           <button
-            className="inline-flex items-center gap-1 rounded border border-teal-600 bg-teal-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-700"
+            className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-600 hover:bg-slate-50"
             onClick={() => onOpenLinked(row, "option-entry-executions")}
           >
             <CheckCircle2 size={13} />
@@ -4069,7 +4120,11 @@ function PositionRow({
       ) : null}
       {linkStatus === "unlinked" && position ? (
         <button
-          className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+          className={
+            isNewCandidate
+              ? "inline-flex items-center gap-1 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-40"
+              : "inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+          }
           onClick={() => onCreateDraft(position)}
           disabled={drafted || !canCreateDraft}
         >
@@ -4095,7 +4150,17 @@ function PositionRow({
   );
   return (
     <>
-      <tr className={`border-b border-slate-100 align-top ${highlighted ? "bg-teal-50" : ""}`}>
+      <tr
+        className={`border-b border-slate-100 align-top ${
+          highlighted
+            ? "bg-teal-50"
+            : linkStatus === "linked"
+              ? "bg-slate-50 text-slate-500"
+              : isNewCandidate
+                ? "bg-white"
+                : ""
+        }`}
+      >
         <td className="py-2 pr-3">
           <div className="font-bold text-slate-950">{label}</div>
           <div className="mt-0.5 text-xs text-slate-500">{position?.assetType ?? row.simulation?.name ?? "Saxo側に見つからない"}</div>
@@ -4994,6 +5059,15 @@ function createReflectionSummary({
   const positionActionable = newPositions > 0 || matchedPositions > 0 || unknownPositions > 0 || pendingStockTransferCandidateRows.length > 0;
   const orderActionable = orders.length > 0;
   const historyActionable = createNeededHistoryCount > 0;
+  const hasNewPositionCandidates = newPositions > 0;
+  const historyIsSupplemental = positionActionable && historyItems.length > 0;
+  const nextActionDetail = hasNewPositionCandidates
+    ? `次は建玉候補を反映: 建玉候補を開き、各候補の「建玉入力へ下書き反映」を押してください。履歴候補は建玉反映後の補完確認です。`
+    : positionActionable
+      ? "次は建玉候補を確認: 既存建玉との照合やP→N移管候補を先に整理してください。履歴候補は補完作業として後で確認します。"
+      : historyActionable
+        ? "次は履歴候補を確認: 建玉候補の未処理がなければ、決済実績・権利行使・株式譲渡候補を確認してください。"
+        : undefined;
   return {
     accountLines,
     positionLine: {
@@ -5034,6 +5108,9 @@ function createReflectionSummary({
           : "履歴候補を確認"
         : "履歴候補は確認済み",
     },
+    nextActionDetail,
+    hasNewPositionCandidates,
+    historyIsSupplemental,
     hasPending: accountLines.some((line) => line.actionable) || positionActionable || orderActionable || historyActionable,
   };
 }
