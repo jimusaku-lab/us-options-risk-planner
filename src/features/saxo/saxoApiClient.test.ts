@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchSaxoOptionPremiumCandidate } from "./saxoApiClient";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -43,5 +44,53 @@ describe("Saxo API client", () => {
     expect(requestUrl.searchParams.get("assetType")).toBe("StockOption");
     expect(requestUrl.searchParams.get("positionId")).toBe("7655451244");
     expect(requestUrl.searchParams.get("instrumentCode")).toBe("V/20X26C340:XCBF");
+  });
+
+  it("reports premium candidate AbortError as a Saxo price timeout instead of local API not running", async () => {
+    const timeoutSpy = vi.spyOn(window, "setTimeout");
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }));
+
+    await expect(fetchSaxoOptionPremiumCandidate({
+      symbol: "V",
+      expiry: "2026-11-20",
+      strike: 340,
+      optionType: "call",
+      accountKey: "XLu-live-account-key",
+      uic: 54341397,
+      assetType: "StockOption",
+    })).rejects.toThrow("Saxo価格取得がタイムアウトしました。Saxo側の応答待ちまたはレート制限の可能性があります。");
+
+    await expect(fetchSaxoOptionPremiumCandidate({
+      symbol: "V",
+      expiry: "2026-11-20",
+      strike: 340,
+      optionType: "call",
+      accountKey: "XLu-live-account-key",
+      uic: 54341397,
+      assetType: "StockOption",
+    })).rejects.not.toThrow("SaxoローカルAPIが起動していません");
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 20_000);
+  });
+
+  it("surfaces Saxo API rate limit messages from premium candidate lookup", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        message: "Saxo APIレート制限に達しました。少し時間を置いて再試行してください。",
+      }),
+    })));
+
+    await expect(fetchSaxoOptionPremiumCandidate({
+      symbol: "V",
+      expiry: "2026-11-20",
+      strike: 340,
+      optionType: "call",
+      accountKey: "XLu-live-account-key",
+      uic: 54341397,
+      assetType: "StockOption",
+    })).rejects.toThrow("Saxo APIレート制限に達しました");
   });
 });

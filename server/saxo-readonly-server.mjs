@@ -424,6 +424,14 @@ async function saxoGet(path, query) {
   });
   if (!apiResponse.ok) {
     const text = await apiResponse.text();
+    if (apiResponse.status === 429) {
+      const retryAfter = apiResponse.headers.get("retry-after");
+      throw new HttpError(
+        429,
+        "saxo_rate_limit",
+        `Saxo APIレート制限に達しました。少し時間を置いて再試行してください。${retryAfter ? ` Retry-After: ${retryAfter}.` : ""} ${text.slice(0, 200)}`,
+      );
+    }
     throw new HttpError(apiResponse.status, "saxo_api_error", `Saxo API取得に失敗しました: ${apiResponse.status} ${text.slice(0, 200)}`);
   }
   lastSyncedAt = new Date().toISOString();
@@ -1414,7 +1422,9 @@ function normalizeDiscoveryResult(endpoint, label, result) {
 function classifySaxoFailure(error) {
   const message = error instanceof Error ? error.message : "";
   if (/not_connected|未接続/.test(message)) return "未接続";
+  if (/429|RateLimitExceeded|rate.?limit|レート制限/i.test(message)) return "Saxo APIレート制限";
   if (error instanceof HttpError) {
+    if (error.status === 429 || error.code === "saxo_rate_limit") return "Saxo APIレート制限";
     if (error.status === 401) return "権限不足または再接続必要";
     if (error.status === 403) return "権限不足";
     if (error.status === 404) return "未対応";

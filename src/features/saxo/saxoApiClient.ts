@@ -11,6 +11,8 @@ import type {
 
 const SAXO_LOCAL_API_BASE = import.meta.env.VITE_SAXO_LOCAL_API_BASE ?? "http://127.0.0.1:18787";
 const PUBLIC_GITHUB_PAGES_ORIGIN = "https://jimusaku-lab.github.io";
+const DEFAULT_FETCH_TIMEOUT_MS = 5_000;
+const PREMIUM_CANDIDATE_FETCH_TIMEOUT_MS = 20_000;
 
 export type SaxoAccountsResponse = {
   environment: "sim" | "live";
@@ -117,7 +119,11 @@ export async function fetchSaxoOptionPremiumCandidate(input: {
   if (input.assetType) params.set("assetType", input.assetType);
   if (input.positionId) params.set("positionId", input.positionId);
   if (input.instrumentCode) params.set("instrumentCode", input.instrumentCode);
-  return fetchJson(`/api/saxo/options/premium-candidate?${params.toString()}`);
+  return fetchJson(`/api/saxo/options/premium-candidate?${params.toString()}`, undefined, {
+    timeoutMs: PREMIUM_CANDIDATE_FETCH_TIMEOUT_MS,
+    timeoutMessage:
+      "Saxo価格取得がタイムアウトしました。Saxo側の応答待ちまたはレート制限の可能性があります。少し時間を置いて再試行してください。",
+  });
 }
 
 export function startSaxoAuth(): void {
@@ -125,14 +131,18 @@ export function startSaxoAuth(): void {
   window.location.assign(`${SAXO_LOCAL_API_BASE}/api/saxo/auth/start?${params.toString()}`);
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+async function fetchJson<T>(
+  url: string,
+  init?: RequestInit,
+  options?: { timeoutMs?: number; timeoutMessage?: string },
+): Promise<T> {
   let response: Response;
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+  const timeoutId = window.setTimeout(() => controller.abort(), options?.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
   try {
     response = await fetch(`${SAXO_LOCAL_API_BASE}${url}`, { ...init, signal: controller.signal });
   } catch (error) {
-    throw new Error(createLocalApiFetchFailureMessage(error));
+    throw new Error(createLocalApiFetchFailureMessage(error, options?.timeoutMessage));
   } finally {
     window.clearTimeout(timeoutId);
   }
@@ -147,9 +157,9 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-function createLocalApiFetchFailureMessage(error: unknown): string {
+function createLocalApiFetchFailureMessage(error: unknown, timeoutMessage?: string): string {
   if (error instanceof DOMException && error.name === "AbortError") {
-    return "SaxoローカルAPIの応答がタイムアウトしました。ローカルAPIが起動中か、127.0.0.1:18787 に接続できるか確認してください。";
+    return timeoutMessage ?? "SaxoローカルAPIの応答がタイムアウトしました。少し時間を置いて再試行してください。";
   }
   if (typeof window !== "undefined" && window.location.origin === PUBLIC_GITHUB_PAGES_ORIGIN) {
     return "SaxoローカルAPIに到達できません。API未起動、公開版Origin許可不足、またはChromeのCORS/Private Network Accessブロックの可能性があります。公開版用の起動コマンドでローカルAPIを起動してください。";
