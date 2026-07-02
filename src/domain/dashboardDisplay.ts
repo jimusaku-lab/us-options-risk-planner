@@ -58,7 +58,7 @@ export type LongOptionOrderDisplay = {
   maximumLossJPY: number;
   breakevenUSD: number;
   strikeUSD: number;
-  currentPriceUSD: number;
+  currentPriceUSD?: number;
   quantity: number;
 };
 
@@ -147,6 +147,10 @@ function calculateLongOptionOrderDisplay(params: {
     leg.type === "call"
       ? leg.strikeUSD + leg.premiumUSD + feePerShareUSD
       : Math.max(0, leg.strikeUSD - leg.premiumUSD - feePerShareUSD);
+  const currentPriceUSD =
+    Number.isFinite(params.simulation.currentPriceUSD) && params.simulation.currentPriceUSD > 0
+      ? params.simulation.currentPriceUSD
+      : undefined;
   return {
     optionType: leg.type,
     paidPremiumUSD,
@@ -159,7 +163,7 @@ function calculateLongOptionOrderDisplay(params: {
     maximumLossJPY: totalCostJPY,
     breakevenUSD,
     strikeUSD: leg.strikeUSD,
-    currentPriceUSD: params.simulation.currentPriceUSD,
+    currentPriceUSD,
     quantity: leg.quantity,
   };
 }

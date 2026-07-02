@@ -294,6 +294,12 @@ export type SaxoOptionPremiumCandidate = {
   expiry?: string;
   strike?: number;
   optionType?: string;
+  accountKey?: string;
+  optionRootId?: number;
+  optionUic?: number;
+  assetType?: string;
+  positionId?: string;
+  instrumentCode?: string;
   bid?: number;
   ask?: number;
   last?: number;
@@ -633,8 +639,11 @@ function hasOptionShapeDiff(position: SaxoApiPositionSnapshot, leg: OptionLeg): 
 }
 
 export function resolveSaxoPositionSymbol(position: SaxoApiPositionSnapshot, simulations: TradeSimulation[] = []): string | undefined {
-  const direct = normalizeSymbol(position.symbol ?? "");
-  if (direct) return direct;
+  const directText = position.symbol?.trim() ?? "";
+  const directTicker = directText ? parseLikelyTicker(directText) : undefined;
+  if (directTicker) return directTicker;
+  const direct = normalizeSymbol(directText);
+  if (direct && /^[A-Z][A-Z0-9.]{0,9}$/.test(direct)) return direct;
 
   const textCandidates = [position.instrumentCode, position.underlyingName, position.displayName].filter(
     (value): value is string => Boolean(value?.trim()),
@@ -711,6 +720,33 @@ export function getSaxoHistoryCandidateTarget(item: SaxoHistoryDiscoveryItem): S
   if (item.buySell === "sell") return "entry";
   if (item.buySell === "buy") return "entry";
   return "unknown";
+}
+
+export function getSaxoHistoryCandidateTargetForSimulations(
+  item: SaxoHistoryDiscoveryItem,
+  simulations: TradeSimulation[],
+): SaxoHistoryCandidateTarget {
+  const baseTarget = getSaxoHistoryCandidateTarget(item);
+  if (baseTarget === "assignment" || baseTarget === "stock_settlement") return baseTarget;
+  if (!isSaxoOptionHistoryItem(item)) return "unknown";
+  if (item.kind === "closed_position") return "close";
+  if (item.openClose === "close") return "close";
+  if (item.openClose === "open") return "entry";
+
+  const optionType = resolveSaxoHistoryOptionType(item);
+  if (item.buySell === "buy" && optionType === "call") {
+    const entryMatches = findSaxoHistoryOptionLegMatches(simulations, item, "entry")
+      .filter(({ simulation, leg }) => simulation.strategyType === "long_call" && leg.type === "call" && leg.side === "buy");
+    if (entryMatches.length > 0) return "entry";
+
+    const closeMatches = findSaxoHistoryOptionLegMatches(simulations, item, "close")
+      .filter(({ leg }) => leg.type === "call" && leg.side === "sell");
+    if (closeMatches.length > 0) return "close";
+
+    return "unknown";
+  }
+
+  return baseTarget;
 }
 
 function isSaxoOptionHistoryItem(item: SaxoHistoryDiscoveryItem): boolean {
@@ -880,7 +916,9 @@ export function getSaxoHistoryOptionLegMatchDiagnostics(
   if (target === "entry") {
     if (leg.side === "sell" && item.buySell !== "sell") nonAccountMismatches.push("建玉開始候補ですが、売り建て脚に対応する履歴の売買区分が売ではありません。");
     if (leg.side === "buy" && item.buySell !== "buy") nonAccountMismatches.push("建玉開始候補ですが、買い建て脚に対応する履歴の売買区分が買ではありません。");
-    if (resolvedHistoryTarget !== "entry") nonAccountMismatches.push(`履歴候補の判定が建玉開始ではありません（判定: ${resolvedHistoryTarget}）。`);
+    if (item.kind === "closed_position" || item.openClose === "close") {
+      nonAccountMismatches.push(`履歴候補の判定が建玉開始ではありません（判定: ${resolvedHistoryTarget}）。`);
+    }
   } else if (target !== "unknown") {
     if (leg.side === "sell" && item.buySell !== "buy") nonAccountMismatches.push("決済候補ですが、売り建て脚に対する反対売買の買履歴ではありません。");
     if (leg.side === "buy" && item.buySell !== "sell") nonAccountMismatches.push("決済候補ですが、買い建て脚に対する反対売買の売履歴ではありません。");
@@ -1058,7 +1096,6 @@ export function findEntryHistoryMatches(
 ): SaxoEntryHistoryMatch[] {
   if (position.kind !== "option") return [];
   const matches = historyItems
-    .filter((item) => getSaxoHistoryCandidateTarget(item) === "entry")
     .filter((item) => isStrictEntryHistoryCandidate(position, item))
     .map((item) => scoreEntryHistoryMatch(position, item))
     .filter((match) => match.score >= 5)
@@ -1068,6 +1105,7 @@ export function findEntryHistoryMatches(
 }
 
 function isStrictEntryHistoryCandidate(position: SaxoApiPositionSnapshot, item: SaxoHistoryDiscoveryItem): boolean {
+  if (item.kind === "closed_position" || item.openClose === "close") return false;
   if (item.accountCode && position.accountAssignment !== item.accountCode) return false;
   if (item.accountKey && position.accountKey && item.accountKey !== position.accountKey && item.accountKey !== maskSaxoIdentifier(position.accountKey)) return false;
   const itemOptionType = resolveSaxoHistoryOptionType(item);
@@ -1079,7 +1117,7 @@ function isStrictEntryHistoryCandidate(position: SaxoApiPositionSnapshot, item: 
   if (position.side === "short" && item.buySell !== "sell") return false;
   if (position.side === "long" && item.buySell !== "buy") return false;
   if (position.quantity !== undefined && item.quantity !== undefined && Math.abs(Math.abs(item.quantity) - Math.abs(position.quantity)) > 0.0001) return false;
-  const positionSymbol = normalizeSymbol(position.symbol ?? "");
+  const positionSymbol = resolveSaxoPositionSymbol(position) ?? normalizeSymbol(position.symbol ?? "");
   const itemSymbol = resolveSaxoHistoryUnderlyingSymbol(item) ?? normalizeSymbol(item.symbol ?? "");
   if (positionSymbol && itemSymbol && positionSymbol !== itemSymbol) return false;
   if (position.uic !== undefined && item.uic !== undefined && position.uic !== item.uic) return false;
@@ -1094,7 +1132,8 @@ function scoreEntryHistoryMatch(position: SaxoApiPositionSnapshot, item: SaxoHis
   const itemOptionType = resolveSaxoHistoryOptionType(item);
   const itemStrike = resolveSaxoHistoryStrike(item);
   const itemExpiry = resolveSaxoHistoryExpiry(item);
-  if (itemSymbol && normalizeSymbol(position.symbol ?? "") === itemSymbol) {
+  const positionSymbol = resolveSaxoPositionSymbol(position) ?? normalizeSymbol(position.symbol ?? "");
+  if (itemSymbol && positionSymbol === itemSymbol) {
     score += 4;
     reasons.push("銘柄一致");
   }
@@ -1199,7 +1238,7 @@ function resolveSaxoHistoryOptionContract(
   return parseSaxoOptionContract(item.symbol ?? "") ?? parseSaxoOptionContract(item.instrumentCode ?? "");
 }
 
-function parseSaxoOptionContract(value: string): { optionType: "call" | "put"; strike: number; expiry?: string } | undefined {
+export function parseSaxoOptionContract(value: string): { optionType: "call" | "put"; strike: number; expiry?: string } | undefined {
   const text = value.trim().toUpperCase();
   const match = text.match(/(?:^|[/:\s_-])(\d{1,2})([FGHJKMNQUVXZ])(\d{2})([CP])(\d+(?:\.\d+)?)/);
   if (!match) return undefined;
@@ -1247,6 +1286,7 @@ function parseLikelyTicker(value: string): string | undefined {
     [/APPLE/i, "AAPL"],
     [/TESLA/i, "TSLA"],
     [/MICROSOFT/i, "MSFT"],
+    [/VISA(?:\s+INC|\s+CLASS|\b)/i, "V"],
   ];
   const known = knownNames.find(([pattern]) => pattern.test(text))?.[1];
   if (known) return known;

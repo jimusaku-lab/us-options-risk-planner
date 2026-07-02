@@ -49,7 +49,7 @@ export function CloseDecisionCard({
     if (!focusRequest?.anchorId) return;
     setIsOpen(true);
     window.setTimeout(() => {
-      const target = document.getElementById(focusRequest.anchorId);
+      const target = document.getElementById(focusRequest.anchorId) ?? document.getElementById("close-decision");
       target?.scrollIntoView({ behavior: "smooth", block: "center" });
       const input = target?.querySelector<HTMLInputElement>("input");
       input?.focus();
@@ -61,6 +61,7 @@ export function CloseDecisionCard({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-bold text-slate-950">反対売買判断</h2>
         <button
+          type="button"
           className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           onClick={() => setIsOpen((current) => !current)}
         >
@@ -110,6 +111,24 @@ export function CloseDecisionCard({
       )}
     </section>
   );
+}
+
+export function buildSaxoOptionPremiumCandidateInput(
+  simulation: TradeSimulation,
+  leg: OptionLeg,
+): Parameters<typeof fetchSaxoOptionPremiumCandidate>[0] {
+  const instrumentCode = simulation.fixtureMeta?.saxoInstrumentCode ?? leg.brokerSymbol;
+  return {
+    symbol: simulation.ticker,
+    expiry: leg.expiryDate,
+    strike: leg.strikeUSD,
+    optionType: leg.type,
+    accountKey: simulation.fixtureMeta?.saxoAccountKey,
+    uic: simulation.fixtureMeta?.saxoUic,
+    assetType: simulation.fixtureMeta?.saxoUic || instrumentCode ? "StockOption" : undefined,
+    positionId: simulation.fixtureMeta?.saxoPositionId,
+    instrumentCode,
+  };
 }
 
 function LegCloseCard({
@@ -199,12 +218,7 @@ function LegCloseCard({
     setIsLoadingApiCandidate(true);
     setApiCandidateMessage("");
     try {
-      const candidate = await fetchSaxoOptionPremiumCandidate({
-        symbol: simulation.ticker,
-        expiry: leg.expiryDate,
-        strike: leg.strikeUSD,
-        optionType: leg.type,
-      });
+      const candidate = await fetchSaxoOptionPremiumCandidate(buildSaxoOptionPremiumCandidateInput(simulation, leg));
       setApiCandidate(candidate);
       setApiCandidateMessage(candidate.message);
     } catch (error) {
@@ -651,8 +665,9 @@ function LongOptionCloseCard({
   const profitPct = estimatedProfitUSD === null || paidPremiumUSD <= 0 ? null : (estimatedProfitUSD / paidPremiumUSD) * 100;
   const profitTargetPriceUSD = leg.closePlan?.profitTargetPriceUSD ?? roundOptionPrice(leg.premiumUSD * 1.3);
   const stopLossPriceUSD = leg.closePlan?.stopLossPriceUSD ?? roundOptionPrice(leg.premiumUSD * 0.7);
+  const hasUnderlyingPrice = Number.isFinite(simulation.currentPriceUSD) && simulation.currentPriceUSD > 0;
   const intrinsicValueUSD =
-    closePriceUSD === undefined || closePriceUSD <= 0
+    closePriceUSD === undefined || closePriceUSD <= 0 || !hasUnderlyingPrice
       ? null
       : leg.type === "call"
         ? Math.max(0, simulation.currentPriceUSD - leg.strikeUSD)
@@ -670,12 +685,7 @@ function LongOptionCloseCard({
     setIsLoadingApiCandidate(true);
     setApiCandidateMessage("");
     try {
-      const candidate = await fetchSaxoOptionPremiumCandidate({
-        symbol: simulation.ticker,
-        expiry: leg.expiryDate,
-        strike: leg.strikeUSD,
-        optionType: leg.type,
-      });
+      const candidate = await fetchSaxoOptionPremiumCandidate(buildSaxoOptionPremiumCandidateInput(simulation, leg));
       setApiCandidate(candidate);
       setApiCandidateMessage(candidate.message);
     } catch (error) {
@@ -891,6 +901,9 @@ function getStopRuleStatus({
       : { label: "損切りライン未到達", detail: `現在 ${formatUSD(closePrice)} / 目安 ${formatUSD(stopValue)}以上`, tone: undefined };
   }
   if (stopType === "stock_price_line") {
+    if (!Number.isFinite(simulation.currentPriceUSD) || simulation.currentPriceUSD <= 0) {
+      return { label: "原資産株価未取得", detail: `目安 ${formatUSD(stopValue)}。株価取得後に判定します。`, tone: "amber" };
+    }
     const crossed = leg.type === "put" ? simulation.currentPriceUSD <= stopValue : simulation.currentPriceUSD >= stopValue;
     return crossed
       ? { label: "株価ライン到達", detail: `現在 ${formatUSD(simulation.currentPriceUSD)} / 目安 ${formatUSD(stopValue)}`, tone: "red" }

@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BarChart3, ChevronUp, Database, Download, FileJson, HelpCircle, JapaneseYen, ListChecks, Plus, TrendingUp, Upload } from "lucide-react";
 import { calculatePendingAccountCashEffects, createAccountCashAdjustment } from "@/domain/accountCashEffects";
 import type { PendingAccountCashEffect } from "@/domain/accountCashEffects";
@@ -33,6 +33,7 @@ import {
   findSaxoAssignmentStockAcquisitionItem,
   getSaxoHistoryCandidateKeys,
   getSaxoHistoryCandidateTarget,
+  getSaxoHistoryCandidateTargetForSimulations,
   getSaxoHistoryStableKey,
   isSaxoHistoryMatchingCloseExecution,
   isSaxoHistoryMatchingEntryExecution,
@@ -72,6 +73,28 @@ import type { CandidateSymbol } from "@/types/candidates";
 import type { ChecklistItem, OptionCloseExecution, OptionEntryExecution, OptionLeg, PayoffPoint, RiskWarning, StockTransferEvent, TradeSimulation, WorkflowTask } from "@/types/domain";
 import type { YearlyPerformanceIssue } from "@/domain/yearlyPerformance";
 
+function parseTickerFromSaxoSymbol(value: string | undefined): string {
+  const text = value?.trim() ?? "";
+  if (!text) return "";
+  const leadingTicker = text.match(/^([A-Z][A-Z0-9.]{0,9})(?:[/:\s_-]|$)/i)?.[1] ?? "";
+  const ticker = normalizeTicker(leadingTicker);
+  return ticker && !["PUT", "CALL", "STOCKOPTION", "OPTION"].includes(ticker) ? ticker : "";
+}
+
+function recoverSimulationTicker(simulation: TradeSimulation, stockTransfers: StockTransferEvent[]): string {
+  const direct = normalizeTicker(simulation.ticker);
+  if (direct) return direct;
+  const fromSaxoInstrument = parseTickerFromSaxoSymbol(simulation.fixtureMeta?.saxoInstrumentCode);
+  if (fromSaxoInstrument) return fromSaxoInstrument;
+  for (const leg of simulation.optionLegs) {
+    const fromBrokerSymbol = parseTickerFromSaxoSymbol(leg.brokerSymbol);
+    if (fromBrokerSymbol) return fromBrokerSymbol;
+  }
+  const fromTransfer = stockTransfers.find((transfer) => transfer.sourceSimulationId === simulation.id)?.ticker;
+  if (fromTransfer) return normalizeTicker(fromTransfer);
+  return "";
+}
+
 export default function App() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
@@ -87,6 +110,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<"positions" | "performance">("positions");
   const [dashboardHistoryOpen, setDashboardHistoryOpen] = useState(false);
   const [coveredCallReferenceOpen, setCoveredCallReferenceOpen] = useState(false);
+  const [closeDecisionSectionOpen, setCloseDecisionSectionOpen] = useState(false);
   const [saxoOrderCandidates, setSaxoOrderCandidates] = useState<SaxoApiOrderSnapshot[]>([]);
   const [saxoPositionCandidates, setSaxoPositionCandidates] = useState<SaxoApiPositionSnapshot[]>([]);
   const [saxoHistoryCandidates, setSaxoHistoryCandidates] = useState<SaxoHistoryDiscoveryItem[]>([]);
@@ -127,6 +151,14 @@ export default function App() {
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
+  useEffect(() => {
+    simulations.forEach((simulation) => {
+      if (normalizeTicker(simulation.ticker)) return;
+      const ticker = recoverSimulationTicker(simulation, stockTransfers);
+      if (!ticker) return;
+      upsertSimulation({ ...simulation, ticker, underlyingName: simulation.underlyingName?.trim() || ticker });
+    });
+  }, [simulations, stockTransfers, upsertSimulation]);
   const selectedStockTransfer = selected ? getStockTransferForSimulation(selected, stockTransfers) : undefined;
   const selectedStockTransferRecorded = Boolean(selectedStockTransfer);
   const selectedLinkedWheelCycle = selected
@@ -284,7 +316,7 @@ export default function App() {
     setEditorFocusRequest({ anchorId: "simulation-editor", requestId: Date.now() + Math.random() });
     setQuoteStatus("Nカバードコール下書きを開きました。SaxoのC売り注文チケットを見ながら、満期日、権利行使価格、プレミアム、手数料を入力してください。");
   };
-  const createCandidateSimulation = (candidate: CandidateSymbol, strategyType: "covered_call" | "short_put") => {
+  const createCandidateSimulation = (candidate: CandidateSymbol, strategyType: "covered_call" | "short_put" | "long_call") => {
     const simulation = createSimulationFromCandidate({
       candidate,
       workspace: activeWorkspace,
@@ -294,7 +326,8 @@ export default function App() {
     });
     upsertSimulation(simulation);
     setIsEditorOpen(true);
-    setQuoteStatus(`${candidate.symbol} の${strategyType === "covered_call" ? "カバードコール" : "P売り"}建玉案を作成しました。`);
+    const strategyLabel = strategyType === "covered_call" ? "カバードコール" : strategyType === "long_call" ? "コール買い" : "P売り";
+    setQuoteStatus(`${candidate.symbol} の${strategyLabel}建玉案を作成しました。`);
   };
   const toggleCandidatesPanel = () => {
     if (isCandidatesOpen) {
@@ -326,7 +359,9 @@ export default function App() {
     const quantity = position.quantity !== undefined ? Math.max(1, Math.abs(position.quantity)) : 1;
     const historyMatches = findEntryHistoryMatches(position, historyItems);
     const bestHistory = historyMatches.length === 1 ? historyMatches[0].item : undefined;
-    const historyTicker = normalizeTicker(bestHistory?.symbol ?? "");
+    const historyTicker = bestHistory
+      ? resolveSaxoHistoryUnderlyingSymbol(bestHistory) ?? normalizeTicker(bestHistory.symbol ?? bestHistory.instrumentCode ?? "")
+      : "";
     const ticker = resolveSaxoPositionSymbol(position, simulations) ?? historyTicker;
     const fillPriceUSD = bestHistory?.price ?? position.premiumOpenPrice ?? position.currentOptionPrice ?? 0;
     const contracts = bestHistory?.quantity !== undefined ? Math.max(1, Math.abs(bestHistory.quantity)) : quantity;
@@ -392,7 +427,7 @@ export default function App() {
           putIntent: position.optionType === "put" ? "accept_assignment" : undefined,
           assignmentPolicy: "unknown",
           marketPriceUSD: position.currentOptionPrice,
-          brokerSymbol: position.instrumentCode,
+          brokerSymbol: position.instrumentCode ?? bestHistory?.instrumentCode ?? bestHistory?.symbol,
         },
       ],
       optionEntryExecutions: [
@@ -448,7 +483,7 @@ export default function App() {
         notes: "Saxo API read-onlyの現在建玉候補から作成した下書きです。API取得値だけで正式確認済み扱いにはしません。",
         saxoAccountKey: position.accountKey,
         saxoPositionId: position.positionId ?? position.id,
-        saxoInstrumentCode: position.instrumentCode,
+        saxoInstrumentCode: position.instrumentCode ?? bestHistory?.instrumentCode ?? bestHistory?.symbol,
         saxoUic: position.uic,
       },
     };
@@ -531,6 +566,10 @@ export default function App() {
           ? "multiple"
           : "unmatched";
     const diffs = describeSaxoPositionLinkDiffs(position, target, targetLeg, actualPremium, actualQuantity);
+    const historyTicker = bestHistory
+      ? resolveSaxoHistoryUnderlyingSymbol(bestHistory) ?? normalizeTicker(bestHistory.symbol ?? bestHistory.instrumentCode ?? "")
+      : "";
+    const resolvedTicker = resolveSaxoPositionSymbol(position, simulations) || historyTicker || target.ticker;
     const updatedLeg: OptionLeg = {
       ...targetLeg,
       type: position.optionType,
@@ -541,7 +580,7 @@ export default function App() {
       expiryDate: actualExpiry,
       isCovered: position.optionType === "call" ? true : targetLeg.isCovered,
       marketPriceUSD: position.currentOptionPrice ?? targetLeg.marketPriceUSD,
-      brokerSymbol: position.instrumentCode ?? targetLeg.brokerSymbol,
+      brokerSymbol: position.instrumentCode ?? bestHistory?.instrumentCode ?? bestHistory?.symbol ?? targetLeg.brokerSymbol,
     };
     const entryExecution: OptionEntryExecution = {
       id: `saxo-entry-${position.id}-${Date.now()}`,
@@ -585,7 +624,8 @@ export default function App() {
         : position.optionType === "put"
           ? "short_put"
           : "covered_call",
-      ticker: resolveSaxoPositionSymbol(position, simulations) ?? target.ticker,
+      ticker: resolvedTicker,
+      underlyingName: target.underlyingName || position.underlyingName || resolvedTicker,
       accountCode,
       accountEnvironment: isNAccount ? "PROD_N_USD_SETTLEMENT" : accountCode === "P" ? "PROD_P_JPY_SETTLEMENT" : target.accountEnvironment,
       accountCurrency: isNAccount ? "USD" : "JPY",
@@ -607,7 +647,7 @@ export default function App() {
         notes: "Saxo API read-onlyの約定済み現在建玉と注文前建玉を紐づけました。正式確認前に3-Aで内容確認が必要です。",
         saxoAccountKey: position.accountKey,
         saxoPositionId: position.positionId ?? position.id,
-        saxoInstrumentCode: position.instrumentCode,
+        saxoInstrumentCode: position.instrumentCode ?? bestHistory?.instrumentCode ?? bestHistory?.symbol,
         saxoUic: position.uic,
       },
     };
@@ -910,7 +950,7 @@ export default function App() {
   };
 
   const applySaxoHistoryDraftToSelectedSimulation = (item: SaxoHistoryDiscoveryItem): SaxoHistoryDraftResult => {
-    const historyTarget = getSaxoHistoryCandidateTarget(item);
+    const historyTarget = getSaxoHistoryCandidateTargetForSimulations(item, useOptionsStore.getState().simulations);
     const historyKeys = getSaxoHistoryCandidateKeys(item);
     const primaryHistoryKey = getSaxoHistoryStableKey(item);
     if (historyTarget === "unknown") {
@@ -1151,7 +1191,7 @@ export default function App() {
       setIsEditorOpen(false);
       return;
     }
-    const historyTarget = getSaxoHistoryCandidateTarget(item);
+    const historyTarget = getSaxoHistoryCandidateTargetForSimulations(item, useOptionsStore.getState().simulations);
     const created = applySaxoHistoryDraftToSelectedSimulation(item);
     const targetId = created.simulationId ?? selected?.id ?? simulations[0]?.id;
     if (!targetId) return;
@@ -1175,7 +1215,10 @@ export default function App() {
     setIsEditorOpen(false);
   };
   const goToCloseDecision = (simulationId: string, warning: RiskWarning) => {
-    if (!warning.actionAnchorId) return;
+    if (!warning.actionAnchorId) {
+      setQuoteStatus("反対売買判断を開けませんでした。対象建玉を確認してください。");
+      return;
+    }
     selectSimulation(simulationId);
     if (warning.actionAnchorId === "wheel-management") {
       linkCoveredCallToWheelCycle(simulationId, warning.actionWheelCycleId);
@@ -1186,22 +1229,28 @@ export default function App() {
     }
     if (["option-entry-executions", "option-close-executions", "stock-acquisition-record", "stock-settlement-record"].includes(warning.actionAnchorId)) {
       setIsEditorOpen(true);
-      setEditorFocusRequest({ anchorId: warning.actionAnchorId, requestId: Date.now() });
+      setEditorFocusRequest({ anchorId: warning.actionAnchorId, requestId: Date.now() + Math.random() });
       return;
     }
+    setActiveView("positions");
     setIsEditorOpen(false);
-    setCloseDecisionFocusRequest({ anchorId: warning.actionAnchorId, requestId: Date.now() });
+    setCloseDecisionSectionOpen(true);
+    setCoveredCallReferenceOpen(true);
+    setCloseDecisionFocusRequest({ anchorId: warning.actionAnchorId || "close-decision", requestId: Date.now() + Math.random() });
   };
   const goToWorkflowTask = (simulationId: string, task: WorkflowTask) => {
     selectSimulation(simulationId);
     const anchorId = getWorkflowTargetAnchorId(task);
     if (task.targetAnchor === "close-decision") {
+      setActiveView("positions");
       setIsEditorOpen(false);
-      setCloseDecisionFocusRequest({ anchorId: task.focusField ?? anchorId, requestId: Date.now() });
+      setCloseDecisionSectionOpen(true);
+      setCoveredCallReferenceOpen(true);
+      setCloseDecisionFocusRequest({ anchorId: task.focusField ?? anchorId, requestId: Date.now() + Math.random() });
       return;
     }
     setIsEditorOpen(true);
-    setEditorFocusRequest({ anchorId, requestId: Date.now() });
+    setEditorFocusRequest({ anchorId, requestId: Date.now() + Math.random() });
   };
   const goToPendingCashEffectSource = (effect: PendingAccountCashEffect) => {
     selectSimulation(effect.sourceSimulationId);
@@ -1590,11 +1639,12 @@ export default function App() {
                 simulation={selectedWithAccount}
                 coverage={selectedCoveredCallCoverage}
                 onOpenCloseDecision={() => {
+                  setCloseDecisionSectionOpen(true);
                   setCoveredCallReferenceOpen(true);
                   const shortCall = openCoveredCallShortCalls[0];
                   setCloseDecisionFocusRequest({
                     anchorId: shortCall ? `close-decision-call-${shortCall.id}` : "close-decision",
-                    requestId: Date.now(),
+                    requestId: Date.now() + Math.random(),
                   });
                   window.setTimeout(() => {
                     document.getElementById("covered-call-reference-info")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1800,7 +1850,13 @@ export default function App() {
                 <CollapsibleSection title="上昇/レンジ/下落シナリオ" subtitle="必要時だけシナリオ別の満期想定を確認します。" collapsed>
                   <ScenarioCards scenarios={scenarios} />
                 </CollapsibleSection>
-                <CollapsibleSection title="反対売買判断" subtitle="注文前では主表示にしません。建玉後や変更判断時に使います。" collapsed>
+                <CollapsibleSection
+                  title="反対売買判断"
+                  subtitle="注文前では主表示にしません。建玉後や変更判断時に使います。"
+                  collapsed
+                  open={closeDecisionSectionOpen}
+                  onOpenChange={setCloseDecisionSectionOpen}
+                >
                   <CloseDecisionCard
                     simulation={selected}
                     saxoOrderCandidates={saxoOrderCandidates}
@@ -1888,6 +1944,8 @@ export default function App() {
                     title="反対売買判断"
                     subtitle="途中決済を検討する時だけ開きます。"
                     collapsed={!hasActionableWarnings}
+                    open={closeDecisionSectionOpen}
+                    onOpenChange={setCloseDecisionSectionOpen}
                   >
                     <CloseDecisionCard
                       simulation={selected}

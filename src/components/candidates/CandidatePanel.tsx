@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from "react";
-import { AlertTriangle, Eye, FileUp, ListFilter, Plus, Trash2, X } from "lucide-react";
+import { Fragment, useMemo, useRef, useState } from "react";
+import { AlertTriangle, ChevronDown, ChevronRight, Eye, FileUp, ListFilter, Plus, Trash2, X } from "lucide-react";
 import type { CandidateImportSummary, CandidateSymbol } from "@/types/candidates";
 import type { TradeSimulation } from "@/types/domain";
 import { parseCandidateImport } from "@/lib/candidates";
 import { formatUSD } from "@/lib/format";
+import { CandidateDetailCard } from "./CandidateDetailCard";
 
 function formatCompact(value?: number): string {
   if (value === undefined) return "-";
@@ -37,13 +38,14 @@ export function CandidatePanel({
   onClear: () => void;
   onClose: () => void;
   onWatchOnly: (id: string, watchOnly: boolean) => void;
-  onCreateSimulation: (candidate: CandidateSymbol, strategy: "covered_call" | "short_put") => void;
+  onCreateSimulation: (candidate: CandidateSymbol, strategy: "covered_call" | "short_put" | "long_call") => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState("");
   const [showWatchOnly, setShowWatchOnly] = useState(true);
   const [showNearEarnings, setShowNearEarnings] = useState(true);
   const [query, setQuery] = useState("");
+  const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null);
   const existingSymbols = useMemo(
     () => new Set(simulations.map((simulation) => simulation.ticker.trim().toUpperCase()).filter(Boolean)),
     [simulations],
@@ -196,9 +198,10 @@ export function CandidatePanel({
         </div>
       ) : (
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[1180px] text-sm">
+          <table className="w-full min-w-[1240px] text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-left text-slate-500">
+                <th className="py-2 pr-3">詳細</th>
                 <th className="py-2 pr-3 text-right">Rank</th>
                 <th className="py-2 pr-3">銘柄</th>
                 <th className="py-2 pr-3">会社</th>
@@ -218,76 +221,104 @@ export function CandidatePanel({
               {visibleCandidates.map((candidate) => {
                 const hasPosition = existingSymbols.has(candidate.symbol);
                 const hasWarnings = (candidate.parseWarnings?.length ?? 0) > 0 || Boolean(candidate.earningsWarning);
+                const isExpanded = expandedCandidateId === candidate.id;
                 return (
-                  <tr key={candidate.id} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">{candidate.rank}</td>
-                    <td className="py-3 pr-3">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-bold text-slate-950">{candidate.symbol}</span>
-                        {hasPosition ? <span className="rounded bg-teal-100 px-1.5 py-0.5 text-[11px] font-bold text-teal-800">建玉あり</span> : null}
-                        {candidate.watchOnly ? <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[11px] font-bold text-slate-700">Watch</span> : null}
-                      </div>
-                    </td>
-                    <td className="py-3 pr-3 text-slate-700">{candidate.company}</td>
-                    <td className="numeric-input py-3 pr-3 text-right font-semibold">{candidate.priceUSD === undefined ? "-" : formatUSD(candidate.priceUSD)}</td>
-                    <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatPercentValue(candidate.changePercent)}</td>
-                    <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatCompact(candidate.volume)}</td>
-                    <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatCompact(candidate.marketCapUSD)}</td>
-                    <td className="py-3 pr-3 text-slate-700">{candidate.sector ?? "-"}</td>
-                    <td className={`py-3 pr-3 text-xs font-semibold ${hasWarnings ? "text-amber-700" : "text-slate-500"}`}>
-                      {candidate.earningsWarning || candidate.parseWarnings?.[0] || "-"}
-                    </td>
-                    <td className="py-3 pr-3 text-xs text-slate-700">
-                      <div className="flex flex-wrap gap-1">
-                        {candidate.strategyFitResults?.slice(0, 3).map((result) => (
-                          <span key={result.strategy} className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">
-                            {result.strategy}: {result.fitLevel}
-                          </span>
-                        ))}
-                        {candidate.technicalTimingPatterns?.[0] ? (
-                          <span className="rounded bg-teal-50 px-1.5 py-0.5 font-semibold text-teal-800">
-                            上昇転換コンボ候補: {candidate.technicalTimingPatterns[0].fitLevel}
-                          </span>
-                        ) : null}
-                        {candidate.syntheticForwardCandidates?.[0] ? (
-                          <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-semibold text-indigo-800">
-                            シンセティック: {candidate.syntheticForwardCandidates[0].fitLevel}
-                          </span>
-                        ) : null}
-                        {!candidate.strategyFitResults?.length && !candidate.technicalTimingPatterns?.length && !candidate.syntheticForwardCandidates?.length ? "-" : null}
-                      </div>
-                    </td>
-                    <td className="py-3 pr-3 text-xs text-slate-600">
-                      {candidate.screeningCandidate?.missingFields.length ? candidate.screeningCandidate.missingFields.slice(0, 3).join(", ") : "-"}
-                    </td>
-                    <td className="numeric-input py-3 pr-3 text-right font-bold text-slate-900">{candidate.score}</td>
-                    <td className="py-3 pr-3 text-right">
-                      <div className="flex justify-end gap-1.5">
+                  <Fragment key={candidate.id}>
+                    <tr className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="py-3 pr-3">
                         <button
                           className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 hover:border-slate-400 hover:bg-slate-50"
-                          title={candidate.watchOnly ? "Watch onlyを解除" : "Watch onlyにする"}
-                          onClick={() => onWatchOnly(candidate.id, !candidate.watchOnly)}
+                          aria-expanded={isExpanded}
+                          aria-label={`${candidate.symbol} 詳細を${isExpanded ? "閉じる" : "開く"}`}
+                          title={isExpanded ? "詳細を閉じる" : "詳細を開く"}
+                          onClick={() => setExpandedCandidateId(isExpanded ? null : candidate.id)}
                         >
-                          <Eye size={15} />
+                          {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                         </button>
-                        <button
-                          className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
-                          title="カバードコール候補として建玉案を作成"
-                          onClick={() => onCreateSimulation(candidate, "covered_call")}
-                        >
-                          <Plus size={15} />
-                          <span className="sr-only">Covered Call</span>
-                        </button>
-                        <button
-                          className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-2 text-xs font-bold text-slate-600 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800"
-                          title="P売り候補として建玉案を作成"
-                          onClick={() => onCreateSimulation(candidate, "short_put")}
-                        >
-                          P
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                      </td>
+                      <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">{candidate.rank}</td>
+                      <td className="py-3 pr-3">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-bold text-slate-950">{candidate.symbol}</span>
+                          {hasPosition ? <span className="rounded bg-teal-100 px-1.5 py-0.5 text-[11px] font-bold text-teal-800">建玉あり</span> : null}
+                          {candidate.watchOnly ? <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[11px] font-bold text-slate-700">Watch</span> : null}
+                        </div>
+                      </td>
+                      <td className="py-3 pr-3 text-slate-700">{candidate.company}</td>
+                      <td className="numeric-input py-3 pr-3 text-right font-semibold">{candidate.priceUSD === undefined ? "-" : formatUSD(candidate.priceUSD)}</td>
+                      <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatPercentValue(candidate.changePercent)}</td>
+                      <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatCompact(candidate.volume)}</td>
+                      <td className="numeric-input py-3 pr-3 text-right font-semibold">{formatCompact(candidate.marketCapUSD)}</td>
+                      <td className="py-3 pr-3 text-slate-700">{candidate.sector ?? "-"}</td>
+                      <td className={`py-3 pr-3 text-xs font-semibold ${hasWarnings ? "text-amber-700" : "text-slate-500"}`}>
+                        {candidate.earningsWarning || candidate.parseWarnings?.[0] || "-"}
+                      </td>
+                      <td className="py-3 pr-3 text-xs text-slate-700">
+                        <div className="flex flex-wrap gap-1">
+                          {candidate.strategyFitResults?.slice(0, 3).map((result) => (
+                            <span key={result.strategy} className="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">
+                              {result.strategy}: {result.fitLevel}
+                            </span>
+                          ))}
+                          {candidate.technicalTimingPatterns?.[0] ? (
+                            <span className="rounded bg-teal-50 px-1.5 py-0.5 font-semibold text-teal-800">
+                              上昇転換コンボ候補: {candidate.technicalTimingPatterns[0].fitLevel}
+                            </span>
+                          ) : null}
+                          {candidate.syntheticForwardCandidates?.[0] ? (
+                            <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-semibold text-indigo-800">
+                              シンセティック: {candidate.syntheticForwardCandidates[0].fitLevel}
+                            </span>
+                          ) : null}
+                          {!candidate.strategyFitResults?.length && !candidate.technicalTimingPatterns?.length && !candidate.syntheticForwardCandidates?.length ? "-" : null}
+                        </div>
+                      </td>
+                      <td className="py-3 pr-3 text-xs text-slate-600">
+                        {candidate.screeningCandidate?.missingFields.length ? candidate.screeningCandidate.missingFields.slice(0, 3).join(", ") : "-"}
+                      </td>
+                      <td className="numeric-input py-3 pr-3 text-right font-bold text-slate-900">{candidate.score}</td>
+                      <td className="py-3 pr-3 text-right">
+                        <div className="flex justify-end gap-1.5">
+                          <button
+                            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 hover:border-slate-400 hover:bg-slate-50"
+                            title={candidate.watchOnly ? "Watch onlyを解除" : "Watch onlyにする"}
+                            onClick={() => onWatchOnly(candidate.id, !candidate.watchOnly)}
+                          >
+                            <Eye size={15} />
+                          </button>
+                          <button
+                            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
+                            title="カバードコール候補として建玉案を作成"
+                            onClick={() => onCreateSimulation(candidate, "covered_call")}
+                          >
+                            <Plus size={15} />
+                            <span className="sr-only">Covered Call</span>
+                          </button>
+                          <button
+                            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-2 text-xs font-bold text-slate-600 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800"
+                            title="P売り候補として建玉案を作成"
+                            onClick={() => onCreateSimulation(candidate, "short_put")}
+                          >
+                            P
+                          </button>
+                          <button
+                            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-2 text-xs font-bold text-slate-600 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
+                            title="コール買い候補として建玉案を作成"
+                            onClick={() => onCreateSimulation(candidate, "long_call")}
+                          >
+                            LC
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded ? (
+                      <tr className="border-b border-slate-200 bg-slate-50/70">
+                        <td colSpan={14} className="px-3 py-4">
+                          <CandidateDetailCard candidate={candidate} />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
                 );
               })}
             </tbody>

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { parseCandidateCsv, parseCandidateImport, parseCompactNumber, parsePercent, parseUsdPrice } from "./candidates";
+import {
+  buildOptionChainQualityFromMoomooOption,
+  buildScreeningCandidateFromMoomooQuote,
+  normalizeMoomooScreeningRunToCandidateImport,
+  parseCandidateCsv,
+  parseCandidateImport,
+  parseCompactNumber,
+  parsePercent,
+  parseUsdPrice,
+} from "./candidates";
 
 describe("candidate parsers", () => {
   it("parses compatible numeric strings without zero filling", () => {
@@ -144,6 +153,121 @@ describe("candidate parsers", () => {
       "cash_secured_put_buy_to_own",
     ]);
     expect(result.candidates[0].technicalTimingPatterns?.[0].kind).toBe("upside_reversal_combo");
+  });
+
+  it("normalizes moomoo OpenD screening run fixtures into ScreeningCandidate without keeping secrets", () => {
+    const result = normalizeMoomooScreeningRunToCandidateImport(
+      {
+        source: "moomoo_opend",
+        asOf: "2026-06-30T09:00:00+09:00",
+        permissions: { usOption: "permission_missing" },
+        candidates: [
+          {
+            code: "US.NVDA",
+            name: "NVIDIA",
+            market: "US",
+            sector: "Technology",
+            lastPrice: 140,
+            fetchedAt: "2026-06-30T09:00:00+09:00",
+            delayStatus: "delayed",
+            historyBars: [{ close: 139 }, { close: 140 }],
+            token: "secret-token",
+            password: "secret-password",
+            accountId: "123456789",
+            localPath: "/Users/motomichi/private/moomoo.json",
+            options: [
+              {
+                type: "call",
+                expiry: "2026-12-18",
+                dte: 171,
+                strike: 145,
+              },
+            ],
+          },
+        ],
+      },
+      "2026-06-30T09:01:00+09:00",
+    );
+
+    expect(result.summary).toMatchObject({
+      totalRows: 1,
+      importedCount: 1,
+      errorCount: 0,
+      source: "moomoo_opend",
+      format: "json",
+      asOf: "2026-06-30T09:00:00+09:00",
+    });
+    expect(result.candidates[0].screeningCandidate).toMatchObject({
+      symbol: "NVDA",
+      dataSource: "moomoo",
+      missingFields: expect.arrayContaining([
+        "permissions.usOption",
+        "optionChainQuality.hasOptionChain",
+        "optionContracts.bidAsk",
+        "optionContracts.volume",
+        "optionContracts.openInterest",
+        "technicalSnapshot.historyBars",
+      ]),
+      riskFlags: expect.arrayContaining(["米国オプション権限不足", "履歴足不足"]),
+    });
+    expect(result.candidates[0].screeningCandidate?.optionChainQuality.qualityWarnings).toContain("米国オプション相場権限不足");
+    const serializedRaw = JSON.stringify(result.candidates[0].rawSourceRow);
+    expect(serializedRaw).not.toContain("secret-token");
+    expect(serializedRaw).not.toContain("secret-password");
+    expect(serializedRaw).not.toContain("123456789");
+    expect(serializedRaw).not.toContain("/Users/");
+  });
+
+  it("builds moomoo quote candidates and option quality warnings as pure common-core data", () => {
+    const candidate = buildScreeningCandidateFromMoomooQuote(
+      {
+        symbol: "US.MSFT",
+        name: "Microsoft",
+        lastPrice: 500,
+        fetchedAt: "2026-06-30T09:00:00+09:00",
+        historyBarCount: 260,
+        options: [
+          {
+            optionType: "call",
+            expirationDate: "2026-12-18",
+            dte: 171,
+            strikePrice: 515,
+            bid: 20,
+            ask: 21,
+            volume: 100,
+            openInterest: 1200,
+            impliedVolatility: 0.32,
+          },
+          {
+            optionType: "put",
+            expirationDate: "2026-08-21",
+            dte: 52,
+            strikePrice: 475,
+            bid: 12,
+            ask: 13,
+            volume: 80,
+            openInterest: 900,
+          },
+        ],
+      },
+      { asOf: "2026-06-30T09:00:00+09:00", usOptionPermission: "ok" },
+    );
+    const quality = buildOptionChainQualityFromMoomooOption([
+      { optionType: "call", bid: 20, ask: 21, volume: 100, openInterest: 1200 },
+    ]);
+
+    expect(candidate.symbol).toBe("MSFT");
+    expect(candidate.optionChainQuality.hasOptionChain).toBe(true);
+    expect(candidate.missingFields).not.toContain("optionChainQuality.hasOptionChain");
+    expect(candidate.candidateStrategies.map((strategy) => strategy.strategy)).toEqual([
+      "long_call",
+      "cash_secured_put_buy_to_own",
+    ]);
+    expect(quality).toMatchObject({
+      hasOptionChain: true,
+      volume: 100,
+      openInterest: 1200,
+    });
   });
 
   it("normalizes moomoo-compatible CSV and maps ticker to symbol", () => {

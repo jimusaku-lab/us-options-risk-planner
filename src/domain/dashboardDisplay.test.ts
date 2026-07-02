@@ -354,4 +354,42 @@ describe("dashboard premium display", () => {
     expect(display.longOptionOrderDisplay?.strikeUSD).toBe(335);
     expect(display.dte).toBe(144);
   });
+
+  it("keeps missing long-call underlying price undefined instead of treating it as zero", () => {
+    const simulation: TradeSimulation = {
+      ...createPlannedCoveredCall({
+        id: "v-c340-long-call",
+        status: "planned",
+        name: "V C340 long call",
+        ticker: "V",
+        strategyType: "long_call",
+        currentPriceUSD: 0,
+        fxRateJPY: 164.23105,
+        referenceFxRateJPY: 164.23105,
+        entryDate: "2026-06-30",
+        expiryDate: "2026-11-20",
+        dte: 143,
+        stockPosition: null,
+        denominatorMode: "custom",
+        optionLegs: [
+          {
+            id: "call-leg",
+            type: "call",
+            side: "buy",
+            strikeUSD: 340,
+            premiumUSD: 24.1,
+            quantity: 1,
+            expiryDate: "2026-11-20",
+          },
+        ],
+        brokerCommissionUSD: 2.25,
+      }),
+    };
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(display.longOptionOrderDisplay?.currentPriceUSD).toBeUndefined();
+    expect(display.longOptionOrderDisplay?.maximumLossUSD).toBeCloseTo(2_412.25, 8);
+    expect(display.longOptionOrderDisplay?.breakevenUSD).toBeCloseTo(364.1225, 8);
+  });
 });

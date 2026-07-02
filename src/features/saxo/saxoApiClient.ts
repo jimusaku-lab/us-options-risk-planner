@@ -101,6 +101,10 @@ export async function fetchSaxoOptionPremiumCandidate(input: {
   strike: number;
   optionType: "call" | "put";
   accountKey?: string;
+  uic?: number;
+  assetType?: string;
+  positionId?: string;
+  instrumentCode?: string;
 }): Promise<SaxoOptionPremiumCandidate> {
   const params = new URLSearchParams({
     symbol: input.symbol,
@@ -109,11 +113,16 @@ export async function fetchSaxoOptionPremiumCandidate(input: {
     optionType: input.optionType,
   });
   if (input.accountKey) params.set("accountKey", input.accountKey);
+  if (Number.isFinite(input.uic)) params.set("uic", String(input.uic));
+  if (input.assetType) params.set("assetType", input.assetType);
+  if (input.positionId) params.set("positionId", input.positionId);
+  if (input.instrumentCode) params.set("instrumentCode", input.instrumentCode);
   return fetchJson(`/api/saxo/options/premium-candidate?${params.toString()}`);
 }
 
 export function startSaxoAuth(): void {
-  window.location.assign(`${SAXO_LOCAL_API_BASE}/api/saxo/auth/start`);
+  const params = new URLSearchParams({ returnUrl: window.location.href });
+  window.location.assign(`${SAXO_LOCAL_API_BASE}/api/saxo/auth/start?${params.toString()}`);
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {

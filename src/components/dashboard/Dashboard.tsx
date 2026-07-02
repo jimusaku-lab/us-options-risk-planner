@@ -21,6 +21,16 @@ const statusClassName = {
 
 const endedStatuses = new Set(["closed", "assigned", "expired"]);
 
+export function getSimulationTickerDisplayLabel(simulation: TradeSimulation): string {
+  const direct = simulation.ticker.trim();
+  if (direct) return direct.toUpperCase();
+  const saxoSymbol = simulation.fixtureMeta?.saxoInstrumentCode ?? simulation.optionLegs.find((leg) => leg.brokerSymbol)?.brokerSymbol ?? "";
+  const optionSymbolTicker = saxoSymbol.match(/^([A-Z][A-Z0-9.]{0,9})(?:[/:\s_-]|$)/i)?.[1]?.toUpperCase();
+  if (optionSymbolTicker && !["PUT", "CALL", "STOCKOPTION", "OPTION"].includes(optionSymbolTicker)) return optionSymbolTicker;
+  const underlying = simulation.underlyingName?.trim();
+  return underlying || "銘柄未設定";
+}
+
 export function Dashboard({
   simulations,
   stockTransfers = [],
@@ -162,6 +172,7 @@ export function Dashboard({
                 callLeg ? `C ${formatUSD(callLeg.strikeUSD)}` : "",
                 putLeg ? `P ${formatUSD(putLeg.strikeUSD)}` : "",
               ].filter(Boolean).join(" / ") || "-";
+              const tickerLabel = getSimulationTickerDisplayLabel(simulation);
               const blockingCount = countableWarnings.filter((warning) => warning.blocking).length;
               const attentionCount = countableWarnings.filter((warning) => !warning.blocking).length;
               const warningLabel =
@@ -205,7 +216,7 @@ export function Dashboard({
                   onClick={() => onSelect(simulation.id)}
                 >
                   <td className="py-3 pr-3 font-bold text-slate-950">
-                    <span className="block">{simulation.ticker}</span>
+                    <span className="block">{tickerLabel}</span>
                     {stockAcquisitionSummary ? (
                       <div className="mt-2 max-w-[260px] rounded-md border border-violet-200 bg-violet-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-violet-950">
                         <div>現物株取得: {stockAcquisitionSummary.shares}株 @ {stockAcquisitionSummary.price}</div>
@@ -304,7 +315,9 @@ export function Dashboard({
                     {annualReturnLabel}
                     {longOptionDisplay ? (
                       <span className="mt-1 block rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-indigo-900">
-                        <span className="block">現在株価 {formatUSD(longOptionDisplay.currentPriceUSD)} / 権利行使価格 {formatUSD(longOptionDisplay.strikeUSD)}</span>
+                        <span className="block">
+                          {longOptionDisplay.currentPriceUSD !== undefined ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)}` : "現在株価未取得"} / 権利行使価格 {formatUSD(longOptionDisplay.strikeUSD)}
+                        </span>
                         <span className="block">満期まで {premiumDisplay.dte}日</span>
                         <span className="block">約定後は反対売買判断で利確/損切りラインを確認</span>
                       </span>
@@ -349,6 +362,7 @@ export function Dashboard({
                     ) : null}
                     {actionableWarning ? (
                       <button
+                        type="button"
                         className="mt-1 rounded border border-current px-2 py-1 text-[11px] font-bold hover:bg-white"
                         onClick={(event) => {
                           event.stopPropagation();
@@ -377,6 +391,7 @@ export function Dashboard({
                       </span>
                     ) : (
                       <button
+                        type="button"
                         className={`rounded-md border px-2 py-1 text-xs font-bold ${
                           primaryTask.severity === "danger"
                             ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100"

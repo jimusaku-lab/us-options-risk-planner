@@ -50,6 +50,57 @@ describe("CandidatePanel", () => {
     expect(screen.getByText("NVDA")).toBeInTheDocument();
     expect(screen.getByTitle("カバードコール候補として建玉案を作成")).toBeInTheDocument();
     expect(screen.getByTitle("P売り候補として建玉案を作成")).toBeInTheDocument();
+    expect(screen.getByTitle("コール買い候補として建玉案を作成")).toBeInTheDocument();
+  });
+
+  it("opens and closes candidate detail cards from each row", () => {
+    const candidate: CandidateSymbol = {
+      id: "moomoo-NVDA-1",
+      source: "moomoo_file_import",
+      importedAt: "2026-07-01T09:00:00+09:00",
+      rank: 1,
+      symbol: "NVDA",
+      company: "NVIDIA",
+      priceUSD: 140,
+      score: 80,
+      suggestedUse: "screening candidate",
+      strategyFitResults: [
+        {
+          strategy: "long_call",
+          fitLevel: "fit",
+          reasons: ["MACD is bullish"],
+          warnings: ["event date check"],
+          missingFields: ["optionContracts.delta"],
+          requiredChecks: [{ id: "profit_take", label: "利確ルール", passed: true }],
+          numericChecks: [{ id: "spread", label: "Bid/Ask spread", value: 0.08, max: 0.15, passed: true }],
+        },
+      ],
+      screeningCandidate: {
+        symbol: "NVDA",
+        name: "NVIDIA",
+        market: "US",
+        underlyingPrice: 140,
+        dataSource: "moomoo",
+        delayStatus: "delayed",
+        technicalSnapshot: { trendNotes: ["trend improving"] },
+        optionChainQuality: { hasOptionChain: true, qualityWarnings: ["Bid/Ask spread is wide"] },
+        candidateStrategies: [],
+        riskFlags: [],
+        missingFields: ["optionContracts.delta"],
+      },
+    };
+
+    render(<CandidatePanel {...baseProps} candidates={[candidate]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "NVDA 詳細を開く" }));
+
+    expect(screen.getByText("候補詳細")).toBeInTheDocument();
+    expect(screen.getByText("MACD is bullish")).toBeInTheDocument();
+    expect(screen.getAllByText("Bid/Ask spread is wide").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "NVDA 詳細を閉じる" }));
+
+    expect(screen.queryByText("候補詳細")).not.toBeInTheDocument();
   });
 
   it("shows import summary and screening fit results", () => {

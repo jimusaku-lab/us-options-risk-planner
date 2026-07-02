@@ -17,7 +17,7 @@ import {
 import { calculateStockSettlementTaxResult } from "@/domain/tax";
 import { getStatusLabel } from "@/domain/strategyLabels";
 import { NumberInput } from "@/components/ui/NumberInput";
-import { getSaxoHistoryCandidateTarget, isSaxoHistoryMatchingOptionLeg, type SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
+import { isSaxoHistoryMatchingOptionLeg, parseSaxoOptionContract, type SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
@@ -239,8 +239,10 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
       : simulation.stockPosition?.canSellAtStrike === false || callLeg?.callExitIntent === "covered_keep_stock"
         ? "keep_stock"
         : "can_sell";
-  const shortExitLegs = getShortOptionLegs(simulation);
   const optionEntryExecutions = simulation.optionEntryExecutions ?? [];
+  const recoveredEntryOptionLegs = recoverEntryOptionLegsFromSaxoDraft(simulation, optionEntryExecutions, saxoHistoryCandidates);
+  const entryOptionLegs = simulation.optionLegs.length > 0 ? simulation.optionLegs : recoveredEntryOptionLegs;
+  const shortExitLegs = getShortOptionLegs(simulation);
   const optionEntrySummary = calculateOptionEntryExecutionSummary(simulation);
   const showOptionEntryExecutions = ["planned", "open"].includes(simulation.status) || optionEntryExecutions.length > 0;
   const optionCloseExecutions = simulation.optionCloseExecutions ?? [];
@@ -349,7 +351,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const applyStatusTransitionDrafts = (nextStatus: SimulationStatus): Partial<TradeSimulation> => {
     if (simulation.status === "planned" && nextStatus === "open") {
       const existingLegIds = new Set(optionEntryExecutions.map((execution) => execution.legId));
-      const drafts = shortExitLegs
+      const drafts = entryOptionLegs
         .filter((leg) => !existingLegIds.has(leg.id))
         .map((leg) => createOptionEntryExecutionDraft({ simulation, leg }));
       if (drafts.length > 0 || optionEntryExecutions.length > 0) scrollToEditorAnchor("option-entry-executions");
@@ -573,6 +575,34 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     window.setTimeout(() => setHighlightedAnchorId((current) => (current === focusRequest.anchorId ? null : current)), 4500);
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [focusRequest?.requestId, focusRequest?.anchorId]);
+  useEffect(() => {
+    if (simulation.optionLegs.length > 0 || recoveredEntryOptionLegs.length === 0) return;
+    update({ optionLegs: recoveredEntryOptionLegs });
+  }, [
+    simulation.id,
+    simulation.optionLegs.length,
+    recoveredEntryOptionLegs.map((leg) => `${leg.id}:${leg.type}:${leg.side}:${leg.strikeUSD}:${leg.expiryDate}:${leg.quantity}:${leg.premiumUSD}`).join("|"),
+  ]);
+  useEffect(() => {
+    if (entryOptionLegs.length === 0 || optionEntryExecutions.length === 0) return;
+    const nextExecutions = optionEntryExecutions.map((execution) => {
+      if (entryOptionLegs.some((leg) => leg.id === execution.legId)) return execution;
+      const fallbackLeg = entryOptionLegs[0];
+      return {
+        ...execution,
+        legId: fallbackLeg.id,
+        contracts: execution.contracts > 0 ? execution.contracts : fallbackLeg.quantity,
+        fillPriceUSD: execution.fillPriceUSD > 0 ? execution.fillPriceUSD : fallbackLeg.premiumUSD,
+      };
+    });
+    if (nextExecutions.some((execution, index) => execution !== optionEntryExecutions[index])) {
+      update({ optionEntryExecutions: nextExecutions });
+    }
+  }, [
+    simulation.id,
+    entryOptionLegs.map((leg) => `${leg.id}:${leg.quantity}:${leg.premiumUSD}`).join("|"),
+    optionEntryExecutions.map((execution) => `${execution.id}:${execution.legId}`).join("|"),
+  ]);
   const hasMultipleAssignedRecords =
     simulation.status === "assigned" && Boolean(stockAcquisition.enabled && stockSettlement.enabled);
   const entryExecutionsConfirmed = optionEntryExecutions.length > 0 && optionEntryExecutions.every((execution) => execution.confirmed);
@@ -1154,7 +1184,8 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           ) : null}
           <div className="mt-3 grid gap-3">
             {optionEntryExecutions.map((execution) => {
-              const selectedLeg = shortExitLegs.find((leg) => leg.id === execution.legId) ?? shortExitLegs[0];
+              const selectedLeg = entryOptionLegs.find((leg) => leg.id === execution.legId) ?? entryOptionLegs[0];
+              const selectedLegId = selectedLeg?.id ?? "";
               const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
               const entryCandidates = findSaxoEntryCandidatesForExecution(simulation, execution, saxoHistoryCandidates);
               const isSaxoCurrentPositionEntry = execution.saxoSourceType === "current_position";
@@ -1306,16 +1337,16 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                   <div className="mt-3 grid gap-3 xl:grid-cols-4">
                     <Select
                       label="対象脚"
-                      value={execution.legId}
+                      value={selectedLegId}
                       onChange={(legId) => {
-                        const leg = shortExitLegs.find((item) => item.id === legId);
+                        const leg = entryOptionLegs.find((item) => item.id === legId);
                         updateOptionEntryExecution(execution.id, {
                           legId,
                           contracts: leg?.quantity ?? execution.contracts,
                           fillPriceUSD: leg?.premiumUSD ?? execution.fillPriceUSD,
                         });
                       }}
-                      options={shortExitLegs.map((leg) => [leg.id, getOptionLegLabel(leg)])}
+                      options={entryOptionLegs.map((leg) => [leg.id, getOptionLegLabel(leg)])}
                     />
                     <TextInput
                       label="取引日"
@@ -2463,7 +2494,9 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
 }
 
 function getOptionLegLabel(leg: OptionLeg): string {
-  return `${leg.type === "call" ? "C売り" : "P売り"} ${leg.strikeUSD} / ${leg.expiryDate} / ${leg.quantity}枚`;
+  const typeLabel = leg.type === "call" ? "C" : "P";
+  const sideLabel = leg.side === "buy" ? "買い" : "売り";
+  return `${typeLabel}${sideLabel} ${leg.strikeUSD} / ${leg.expiryDate} / ${leg.quantity}枚`;
 }
 
 function isLikelyNextStatus(current: SimulationStatus, next: SimulationStatus): boolean {
@@ -2497,6 +2530,70 @@ function getSaxoDraftMissingItems(simulation: TradeSimulation): string[] {
   if (!simulation.denominatorMode) items.push("主分母");
   if (simulation.nisaExpectedAnnualReturnPct === undefined) items.push("NISA等比較年率");
   return items;
+}
+
+function recoverEntryOptionLegsFromSaxoDraft(
+  simulation: TradeSimulation,
+  executions: OptionEntryExecution[],
+  candidates: SaxoHistoryDiscoveryItem[],
+): OptionLeg[] {
+  if (simulation.optionLegs.length > 0 || executions.length === 0) return [];
+  const recovered = executions
+    .map((execution) => recoverEntryOptionLegFromSaxoDraft(simulation, execution, candidates))
+    .filter((leg): leg is OptionLeg => Boolean(leg));
+  const seen = new Set<string>();
+  return recovered.filter((leg) => {
+    if (seen.has(leg.id)) return false;
+    seen.add(leg.id);
+    return true;
+  });
+}
+
+function recoverEntryOptionLegFromSaxoDraft(
+  simulation: TradeSimulation,
+  execution: OptionEntryExecution,
+  candidates: SaxoHistoryDiscoveryItem[],
+): OptionLeg | undefined {
+  const explicitCandidate = candidates.find((candidate) => (execution.historyCandidateIds ?? []).includes(candidate.id));
+  const contract =
+    parseSaxoOptionContract(simulation.fixtureMeta?.saxoInstrumentCode ?? "") ??
+    parseSaxoOptionContract(explicitCandidate?.instrumentCode ?? "") ??
+    parseSaxoOptionContract(explicitCandidate?.symbol ?? "");
+  const type =
+    contract?.optionType ??
+    (explicitCandidate?.optionType === "call" || explicitCandidate?.optionType === "put" ? explicitCandidate.optionType : undefined) ??
+    inferOptionTypeFromStrategy(simulation.strategyType);
+  const side =
+    inferOptionSideFromStrategy(simulation.strategyType) ??
+    (explicitCandidate?.buySell === "buy" ? "buy" : explicitCandidate?.buySell === "sell" ? "sell" : undefined);
+  const strikeUSD = contract?.strike ?? explicitCandidate?.strike;
+  const expiryDate = contract?.expiry ?? explicitCandidate?.expiry ?? simulation.expiryDate;
+  if (!type || !side || strikeUSD === undefined || !Number.isFinite(strikeUSD) || !expiryDate) return undefined;
+  return {
+    id: execution.legId || `recovered-entry-leg-${execution.id}`,
+    type,
+    side,
+    strikeUSD,
+    premiumUSD: execution.fillPriceUSD > 0 ? execution.fillPriceUSD : 0,
+    quantity: execution.contracts > 0 ? execution.contracts : 1,
+    expiryDate: normalizeEntryDate(expiryDate),
+    isCovered: type === "call" && side === "sell",
+    putIntent: type === "put" && side === "sell" ? "accept_assignment" : undefined,
+    assignmentPolicy: "unknown",
+    brokerSymbol: simulation.fixtureMeta?.saxoInstrumentCode ?? explicitCandidate?.instrumentCode ?? explicitCandidate?.symbol,
+  };
+}
+
+function inferOptionTypeFromStrategy(strategyType: StrategyType): OptionLeg["type"] | undefined {
+  if (strategyType === "long_call" || strategyType === "covered_call") return "call";
+  if (strategyType === "long_put" || strategyType === "short_put") return "put";
+  return undefined;
+}
+
+function inferOptionSideFromStrategy(strategyType: StrategyType): OptionLeg["side"] | undefined {
+  if (strategyType === "long_call" || strategyType === "long_put") return "buy";
+  if (strategyType === "covered_call" || strategyType === "short_put") return "sell";
+  return undefined;
 }
 
 function getStatusWorkflowNotice(previousStatus: SimulationStatus, nextStatus: SimulationStatus): { message: string; actionLabel: string; anchorId: string } | null {
@@ -2537,10 +2634,10 @@ function findSaxoEntryCandidatesForExecution(
   execution: OptionEntryExecution,
   candidates: SaxoHistoryDiscoveryItem[],
 ): SaxoHistoryDiscoveryItem[] {
-  const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
+  const leg = simulation.optionLegs.find((item) => item.id === execution.legId) ?? recoverEntryOptionLegFromSaxoDraft(simulation, execution, candidates);
   if (!leg) return [];
   const scored = candidates
-    .filter((candidate) => getSaxoHistoryCandidateTarget(candidate) === "entry")
+    .filter((candidate) => candidate.kind !== "closed_position" && candidate.openClose !== "close")
     .filter((candidate) => isSaxoHistoryMatchingOptionLeg(simulation, leg, candidate, "entry"))
     .map((candidate) => ({ candidate, score: scoreSaxoEntryCandidate(simulation, leg, execution, candidate) }))
     .filter((item) => item.score >= 5)

@@ -11,14 +11,17 @@ export function createSimulationFromCandidate(params: {
   candidate: CandidateSymbol;
   workspace: WorkspaceMode;
   settings: AppSettings;
-  strategyType: Extract<StrategyType, "covered_call" | "short_put">;
+  strategyType: Extract<StrategyType, "covered_call" | "short_put" | "long_call">;
   fxRateJPY?: number;
 }): TradeSimulation {
   const today = new Date();
   const entryDate = formatLocalDate(today);
-  const expiryDate = addDays(today, 45);
+  const isLongCall = params.strategyType === "long_call";
+  const dte = isLongCall ? 160 : 45;
+  const expiryDate = addDays(today, dte);
   const id = `${params.workspace}-candidate-${params.candidate.symbol}-${Date.now()}`;
   const isCoveredCall = params.strategyType === "covered_call";
+  const isShortPut = params.strategyType === "short_put";
   return {
     id,
     status: "planned",
@@ -32,7 +35,7 @@ export function createSimulationFromCandidate(params: {
     accountEnvironment: params.workspace === "demo" ? "DEMO_JPY_BASE" : "PROD_P_JPY_SETTLEMENT",
     entryDate,
     expiryDate,
-    dte: 45,
+    dte,
     accountCurrency: "JPY",
     referenceFxRateJPY: params.fxRateJPY ?? 0,
     stockPosition: isCoveredCall
@@ -45,23 +48,23 @@ export function createSimulationFromCandidate(params: {
       : null,
     optionLegs: [
       {
-        id: `${id}-${isCoveredCall ? "call" : "put"}`,
-        type: isCoveredCall ? "call" : "put",
-        side: "sell",
+        id: `${id}-${isShortPut ? "put" : "call"}`,
+        type: isShortPut ? "put" : "call",
+        side: isLongCall ? "buy" : "sell",
         strikeUSD: 0,
         premiumUSD: 0,
         quantity: 1,
         expiryDate,
         isCovered: isCoveredCall,
-        putIntent: isCoveredCall ? undefined : "accept_assignment",
-        assignmentPolicy: isCoveredCall ? "unknown" : "accept",
+        putIntent: isShortPut ? "accept_assignment" : undefined,
+        assignmentPolicy: isShortPut ? "accept" : "unknown",
       },
     ],
     brokerMarginJPY: 0,
     marginBufferMultiplier: params.settings.defaultMarginBufferMultiplier,
     marginUsagePercent: 0,
     availableCashJPY: 0,
-    denominatorMode: isCoveredCall ? "stock_plus_margin" : "cash_secured",
+    denominatorMode: isCoveredCall ? "stock_plus_margin" : isShortPut ? "cash_secured" : "broker_margin_only",
     profitTakeRule: {
       enabled: false,
       targetPremiumKeepPercent: 60,
@@ -77,7 +80,8 @@ export function createSimulationFromCandidate(params: {
     brokerCommissionUSD: DEFAULT_BROKER_COMMISSION_USD,
     beginnerMode: params.settings.beginnerMode,
     notes: [
-      `TradingView候補から作成: ${params.candidate.symbol}`,
+      `スクリーニング候補から作成: ${params.candidate.symbol}`,
+      isLongCall ? "コール買い候補。満期は160日目安の初期値です。" : "",
       `Imported at: ${params.candidate.importedAt}`,
       `Score: ${params.candidate.score}`,
       `Suggested use: ${params.candidate.suggestedUse}`,

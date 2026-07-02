@@ -5,10 +5,33 @@ import type { CandidateImportError, CandidateImportFormat, CandidateImportResult
 import type { OptionChainQuality, ScreeningCandidate, ScreeningDataSource, ScreeningDelayStatus, StrategyCandidateInput, SyntheticForwardLeg, TechnicalSnapshot } from "@/types/screening";
 
 type CandidateRow = Record<string, unknown>;
+export type MoomooOptionPermission = "ok" | "permission_missing" | "unknown";
+
+export type MoomooScreeningRun = {
+  source?: unknown;
+  asOf?: unknown;
+  permissions?: {
+    usOption?: unknown;
+  };
+  candidates?: unknown;
+  quotes?: unknown;
+  results?: unknown;
+};
+
+export type MoomooQuoteInput = CandidateRow & {
+  options?: unknown;
+  optionContracts?: unknown;
+  callOption?: unknown;
+  putOption?: unknown;
+  historyBars?: unknown;
+  permissions?: {
+    usOption?: unknown;
+  };
+};
 
 const requiredHeaders = ["Rank", "Symbol", "Company", "Price", "Score", "SuggestedUse"];
 const legacyTradingViewPattern = /tradingview/i;
-const sensitiveKeyPattern = /(token|secret|password|credential|accountNumber|accountId|localPath|path|apiKey|refresh)/i;
+const sensitiveKeyPattern = /(token|secret|password|credential|accountNumber|accountId|account[_-]?id|localPath|path|apiKey|api[_-]?key|refresh)/i;
 const localPathPattern = /(?:\/Users\/|\/home\/|[A-Za-z]:\\)/;
 
 function stripBom(text: string): string {
@@ -139,6 +162,30 @@ function asStringArray(value: unknown): string[] {
   return [];
 }
 
+function compactUnique(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value?.trim()))));
+}
+
+function asRecord(value: unknown): CandidateRow | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as CandidateRow) : undefined;
+}
+
+function asRecordArray(value: unknown): CandidateRow[] {
+  return Array.isArray(value) ? value.map(asRecord).filter((item): item is CandidateRow => Boolean(item)) : [];
+}
+
+function normalizeMoomooOptionPermission(value: unknown): MoomooOptionPermission {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return "unknown";
+  if (normalized === "ok" || normalized === "granted" || normalized === "available") return "ok";
+  if (normalized.includes("permission") || normalized.includes("no permission") || normalized.includes("権限")) return "permission_missing";
+  return "unknown";
+}
+
+function normalizeMoomooSymbol(value: string): string {
+  return value.trim().toUpperCase().replace(/^US\./, "");
+}
+
 function warnIfMissing(warnings: string[], rowNumber: number, field: string, value: unknown): void {
   if (value === undefined || value === null || String(value).trim() === "") {
     warnings.push(`row ${rowNumber}: ${field} is empty`);
@@ -208,9 +255,12 @@ function parseJsonPayload(text: string): { rows: CandidateRow[]; source?: Candid
 }
 
 function normalizeCandidateSource(value: string): CandidateSource {
-  if (/tradingview/i.test(value)) return "legacy_tradingview";
-  if (/moomoo/i.test(value)) return "moomoo_file_import";
-  if (/manual/i.test(value)) return "manual_import";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "moomoo_opend") return "moomoo_opend";
+  if (normalized === "moomoo_file_import") return "moomoo_file_import";
+  if (normalized === "legacy_tradingview" || /tradingview/i.test(value)) return "legacy_tradingview";
+  if (normalized === "manual_import" || /manual/i.test(value)) return "manual_import";
+  if (normalized === "imported_csv") return "imported_csv";
   return "manual_import";
 }
 
@@ -293,6 +343,82 @@ function buildOptionChainQuality(row: CandidateRow): OptionChainQuality {
   };
 }
 
+function getMoomooOptions(input: MoomooQuoteInput): CandidateRow[] {
+  const callOption = asRecord(input.callOption);
+  const putOption = asRecord(input.putOption);
+  return [
+    ...asRecordArray(input.options),
+    ...asRecordArray(input.optionContracts),
+    ...(callOption ? [callOption] : []),
+    ...(putOption ? [putOption] : []),
+  ];
+}
+
+function getOptionType(option: CandidateRow): "call" | "put" | undefined {
+  const value = getAliasedString(option, ["type", "optionType", "callPut", "putCall", "right"]).toLowerCase();
+  if (value.includes("call") || value === "c") return "call";
+  if (value.includes("put") || value === "p") return "put";
+  return undefined;
+}
+
+function getOptionBidAskSpreadRate(option: CandidateRow): number | undefined {
+  const bid = getAliasedNumber(option, ["bid", "bidPrice", "bid_price"]);
+  const ask = getAliasedNumber(option, ["ask", "askPrice", "ask_price"]);
+  const mid = getAliasedNumber(option, ["mid", "midPrice"]);
+  const resolvedMid = mid ?? (bid !== undefined && ask !== undefined ? (bid + ask) / 2 : undefined);
+  return resolvedMid && resolvedMid > 0 && bid !== undefined && ask !== undefined ? (ask - bid) / resolvedMid : undefined;
+}
+
+export function buildOptionChainQualityFromMoomooOption(
+  optionOrOptions: CandidateRow | CandidateRow[] | undefined,
+  params: { usOptionPermission?: MoomooOptionPermission; existingWarnings?: string[] } = {},
+): OptionChainQuality {
+  const options = Array.isArray(optionOrOptions) ? optionOrOptions : optionOrOptions ? [optionOrOptions] : [];
+  const permissionMissing = params.usOptionPermission === "permission_missing";
+  const spreadRates = options.map(getOptionBidAskSpreadRate).filter((value): value is number => value !== undefined && Number.isFinite(value));
+  const volumes = options
+    .map((option) => getAliasedNumber(option, ["volume", "vol", "optionVolume"]))
+    .filter((value): value is number => value !== undefined && Number.isFinite(value));
+  const openInterests = options
+    .map((option) => getAliasedNumber(option, ["openInterest", "open_interest", "oi"]))
+    .filter((value): value is number => value !== undefined && Number.isFinite(value));
+  const ivs = options
+    .map((option) => getAliasedNumber(option, ["iv", "impliedVolatility", "implied_volatility"]))
+    .filter((value): value is number => value !== undefined && Number.isFinite(value));
+  const deltas = options
+    .map((option) => getAliasedNumber(option, ["delta"]))
+    .filter((value): value is number => value !== undefined && Number.isFinite(value));
+  const expiries = compactUnique(options.map((option) => getAliasedString(option, ["expiry", "expiration", "expirationDate", "expiryDate"])));
+  const hasAnyBidAsk = options.some((option) =>
+    getAliasedNumber(option, ["bid", "bidPrice", "bid_price"]) !== undefined ||
+    getAliasedNumber(option, ["ask", "askPrice", "ask_price"]) !== undefined,
+  );
+  const hasAnyOiOrVolume = volumes.length > 0 || openInterests.length > 0;
+  const qualityWarnings = compactUnique([
+    ...(params.existingWarnings ?? []),
+    permissionMissing ? "米国オプション相場権限不足" : undefined,
+    !permissionMissing && options.length > 0 && !hasAnyBidAsk ? "Bid/Ask不足" : undefined,
+    !permissionMissing && options.length > 0 && volumes.length === 0 ? "Volume不足" : undefined,
+    !permissionMissing && options.length > 0 && openInterests.length === 0 ? "Open Interest不足" : undefined,
+    !permissionMissing && options.length > 0 && !hasAnyOiOrVolume ? "流動性データ不足" : undefined,
+  ]);
+
+  return {
+    hasOptionChain: !permissionMissing && options.length > 0,
+    expirationCount: expiries.length || undefined,
+    targetDteAvailable: options.some((option) => getAliasedNumber(option, ["dte", "daysToExpiration"]) !== undefined || Boolean(getAliasedString(option, ["expiry", "expiration", "expirationDate", "expiryDate"]))),
+    bidAskSpreadRate: spreadRates.length > 0 ? Math.max(...spreadRates) : undefined,
+    volume: volumes.length > 0 ? Math.max(...volumes) : undefined,
+    openInterest: openInterests.length > 0 ? Math.max(...openInterests) : undefined,
+    iv: ivs[0],
+    delta: deltas[0],
+    gamma: options.map((option) => getAliasedNumber(option, ["gamma"])).find((value) => value !== undefined),
+    theta: options.map((option) => getAliasedNumber(option, ["theta"])).find((value) => value !== undefined),
+    vega: options.map((option) => getAliasedNumber(option, ["vega"])).find((value) => value !== undefined),
+    qualityWarnings,
+  };
+}
+
 function buildCandidateStrategies(row: CandidateRow, underlyingPrice?: number): StrategyCandidateInput[] {
   if (Array.isArray(row.candidateStrategies)) return row.candidateStrategies as StrategyCandidateInput[];
   const strategies: StrategyCandidateInput[] = [];
@@ -331,6 +457,120 @@ function buildCandidateStrategies(row: CandidateRow, underlyingPrice?: number): 
     });
   }
   return strategies;
+}
+
+function buildMoomooStrategyFromOption(option: CandidateRow, underlyingPrice?: number): StrategyCandidateInput | undefined {
+  const optionType = getOptionType(option);
+  const strikePrice = getAliasedNumber(option, ["strike", "strikePrice", "strike_price"]);
+  if (!optionType || strikePrice === undefined) return undefined;
+  const dte = getAliasedNumber(option, ["dte", "daysToExpiration"]);
+  const bid = getAliasedNumber(option, ["bid", "bidPrice", "bid_price"]);
+  const ask = getAliasedNumber(option, ["ask", "askPrice", "ask_price"]);
+  const mid = getAliasedNumber(option, ["mid", "midPrice"]) ?? (bid !== undefined && ask !== undefined ? (bid + ask) / 2 : undefined);
+  if (optionType === "call") {
+    return {
+      strategy: "long_call",
+      dte,
+      strikePrice,
+      premium: ask ?? mid,
+    };
+  }
+  return {
+    strategy: "cash_secured_put_buy_to_own",
+    dte,
+    strikePrice,
+    premium: bid ?? mid,
+    longTermHoldEligible: parseBoolean(getAliasedString(option, ["longTermHoldEligible", "holdEligible"])),
+    assignmentCapitalRequired: strikePrice * 100,
+    availableCash: getAliasedNumber(option, ["availableCash", "assignmentCapitalAvailable"]),
+  };
+}
+
+function buildMoomooSyntheticLeg(option: CandidateRow): SyntheticForwardLeg | undefined {
+  const optionType = getOptionType(option);
+  const strikePrice = getAliasedNumber(option, ["strike", "strikePrice", "strike_price"]);
+  const expiry = getAliasedString(option, ["expiry", "expiration", "expirationDate", "expiryDate"]);
+  if (!optionType || strikePrice === undefined || !expiry) return undefined;
+  return {
+    type: optionType === "call" ? "long_call" : "short_put",
+    expiry,
+    dte: getAliasedNumber(option, ["dte", "daysToExpiration"]),
+    strikePrice,
+    bid: getAliasedNumber(option, ["bid", "bidPrice", "bid_price"]),
+    ask: getAliasedNumber(option, ["ask", "askPrice", "ask_price"]),
+    mid: getAliasedNumber(option, ["mid", "midPrice"]),
+    volume: getAliasedNumber(option, ["volume", "vol", "optionVolume"]),
+    openInterest: getAliasedNumber(option, ["openInterest", "open_interest", "oi"]),
+    iv: getAliasedNumber(option, ["iv", "impliedVolatility", "implied_volatility"]),
+    delta: getAliasedNumber(option, ["delta"]),
+  };
+}
+
+function getMoomooHistoryBarCount(input: MoomooQuoteInput): number | undefined {
+  if (Array.isArray(input.historyBars)) return input.historyBars.length;
+  return getAliasedNumber(input, ["historyBarCount", "dailyBarCount", "klineCount"]);
+}
+
+export function buildScreeningCandidateFromMoomooQuote(
+  quote: MoomooQuoteInput,
+  params: { asOf?: string; usOptionPermission?: MoomooOptionPermission } = {},
+): ScreeningCandidate {
+  const symbol = normalizeMoomooSymbol(getAliasedString(quote, ["symbol", "ticker", "code"]));
+  const underlyingPrice = getAliasedNumber(quote, ["underlyingPrice", "lastPrice", "last_price", "price", "close"]);
+  const priceAsOf = getAliasedString(quote, ["priceAsOf", "asOf", "fetchedAt", "updateTime"]) || params.asOf;
+  const quotePermission = normalizeMoomooOptionPermission(quote.permissions?.usOption ?? getAliasedString(quote, ["usOptionPermission", "optionPermission", "optionPermissionStatus"]));
+  const usOptionPermission = quotePermission === "unknown" ? params.usOptionPermission ?? "unknown" : quotePermission;
+  const options = getMoomooOptions(quote);
+  const optionChainQuality = buildOptionChainQualityFromMoomooOption(options, {
+    usOptionPermission,
+    existingWarnings: asStringArray(quote.qualityWarnings),
+  });
+  const missingFields = [
+    ...asStringArray(quote.missingFields),
+    !symbol ? "symbol" : undefined,
+    underlyingPrice === undefined ? "underlyingPrice" : undefined,
+    !priceAsOf ? "priceAsOf" : undefined,
+    usOptionPermission === "permission_missing" ? "permissions.usOption" : undefined,
+    !optionChainQuality.hasOptionChain ? "optionChainQuality.hasOptionChain" : undefined,
+    options.length > 0 && optionChainQuality.bidAskSpreadRate === undefined ? "optionContracts.bidAsk" : undefined,
+    options.length > 0 && optionChainQuality.volume === undefined ? "optionContracts.volume" : undefined,
+    options.length > 0 && optionChainQuality.openInterest === undefined ? "optionContracts.openInterest" : undefined,
+  ];
+  const historyBarCount = getMoomooHistoryBarCount(quote);
+  if (
+    getAliasedString(quote, ["historyStatus", "klineStatus"]).toLowerCase().includes("insufficient") ||
+    (historyBarCount !== undefined && historyBarCount < 200)
+  ) {
+    missingFields.push("technicalSnapshot.historyBars");
+  }
+  const optionStrategies = options.map((option) => buildMoomooStrategyFromOption(option, underlyingPrice)).filter((strategy): strategy is StrategyCandidateInput => Boolean(strategy));
+  const technicalSnapshot = buildTechnicalSnapshot({
+    ...quote,
+    underlyingPrice,
+    technicalSnapshot: quote.technicalSnapshot,
+  });
+
+  return {
+    symbol,
+    name: getAliasedString(quote, ["name", "securityName", "company"]) || undefined,
+    market: getAliasedString(quote, ["market"]) || "US",
+    sector: getAliasedString(quote, ["sector", "industry"]) || undefined,
+    underlyingPrice,
+    priceAsOf,
+    dataSource: "moomoo",
+    delayStatus: normalizeDelayStatus(getAliasedString(quote, ["delayStatus"]) || "unknown"),
+    technicalSnapshot,
+    optionChainQuality,
+    candidateStrategies: optionStrategies.length > 0 ? optionStrategies : buildCandidateStrategies(quote, underlyingPrice),
+    riskFlags: compactUnique([
+      ...asStringArray(quote.riskFlags),
+      ...asStringArray(quote.warnings),
+      usOptionPermission === "permission_missing" ? "米国オプション権限不足" : undefined,
+      missingFields.includes("technicalSnapshot.historyBars") ? "履歴足不足" : undefined,
+      optionChainQuality.qualityWarnings.some((warning) => /Bid\/Ask|Volume|Open Interest|流動性/.test(warning)) ? "流動性注意" : undefined,
+    ]),
+    missingFields: compactUnique(missingFields),
+  };
 }
 
 function buildSyntheticLegs(row: CandidateRow): { call?: SyntheticForwardLeg; put?: SyntheticForwardLeg } {
@@ -451,6 +691,31 @@ function candidateSymbolFromScreening(candidate: ScreeningCandidate, params: { s
     technicalTimingPatterns,
     syntheticForwardCandidates,
   };
+}
+
+export function normalizeMoomooScreeningRunToCandidateImport(
+  run: MoomooScreeningRun,
+  importedAt = new Date().toISOString(),
+): CandidateImportResult {
+  const source: CandidateSource = run.source === "moomoo_file_import" ? "moomoo_file_import" : "moomoo_opend";
+  const asOf = typeof run.asOf === "string" ? run.asOf : importedAt;
+  const usOptionPermission = normalizeMoomooOptionPermission(run.permissions?.usOption);
+  const rows = [
+    ...asRecordArray(run.candidates),
+    ...asRecordArray(run.quotes),
+    ...asRecordArray(run.results),
+  ];
+  const candidates = rows.map((row) => buildScreeningCandidateFromMoomooQuote(row as MoomooQuoteInput, { asOf, usOptionPermission }));
+  return parseCandidateImport(
+    JSON.stringify({
+      schemaVersion: "us_options_screening_candidates.v1",
+      source,
+      asOf,
+      candidates,
+    }),
+    "moomoo_opend_screening_candidates.json",
+    importedAt,
+  );
 }
 
 export function parseCandidateImport(text: string, fileName: string, importedAt = new Date().toISOString()): CandidateImportResult {

@@ -125,7 +125,7 @@ async function handleRequest(request, response) {
   }
 
   if (request.method === "GET" && path === "/api/saxo/auth/start") {
-    await handleAuthStart(response);
+    await handleAuthStart(request, requestUrl, response);
     return;
   }
 
@@ -277,6 +277,10 @@ async function handleRequest(request, response) {
       strike: requestUrl.searchParams.get("strike") ?? "",
       optionType: requestUrl.searchParams.get("optionType") ?? "",
       accountKey: requestUrl.searchParams.get("accountKey") ?? "",
+      uic: requestUrl.searchParams.get("uic") ?? "",
+      assetType: requestUrl.searchParams.get("assetType") ?? "",
+      positionId: requestUrl.searchParams.get("positionId") ?? "",
+      instrumentCode: requestUrl.searchParams.get("instrumentCode") ?? "",
     });
     sendJson(response, 200, candidate);
     return;
@@ -285,7 +289,7 @@ async function handleRequest(request, response) {
   sendJson(response, 404, { error: "not_found", message: "このSaxo read-only endpointは実装していません。" });
 }
 
-async function handleAuthStart(response) {
+async function handleAuthStart(request, requestUrl, response) {
   const clientId = getClientId();
   if (!clientId) {
     sendJson(response, 400, {
@@ -299,7 +303,11 @@ async function handleAuthStart(response) {
   const state = randomUrlSafe(32);
   const codeVerifier = randomUrlSafe(64);
   const codeChallenge = base64Url(crypto.createHash("sha256").update(codeVerifier).digest());
-  pendingPkceByState.set(state, { codeVerifier, createdAt: Date.now() });
+  pendingPkceByState.set(state, {
+    codeVerifier,
+    createdAt: Date.now(),
+    returnUrl: resolveAuthReturnUrl(request, requestUrl),
+  });
 
   const authorizeUrl = new URL(`${getAuthBaseUrl()}/authorize`);
   authorizeUrl.searchParams.set("response_type", "code");
@@ -340,7 +348,7 @@ async function handleAuthCallback(requestUrl, response) {
   tokenState = normalizeToken(token, pkce.codeVerifier);
   lastConnectionError = null;
   lastSyncedAt = new Date().toISOString();
-  sendAuthSuccessHtml(response);
+  sendAuthSuccessHtml(response, pkce.returnUrl);
 }
 
 async function exchangeToken(params) {
@@ -601,7 +609,7 @@ async function getHistoryDiscovery({ fromDate, toDate }) {
   };
 }
 
-async function getOptionPremiumCandidate({ symbol, expiry, strike, optionType, accountKey }) {
+async function getOptionPremiumCandidate({ symbol, expiry, strike, optionType, accountKey, uic, assetType, positionId, instrumentCode }) {
   const normalizedSymbol = normalizeTicker(symbol);
   const normalizedExpiry = normalizeSaxoDate(expiry);
   const numericStrike = Number(strike);
@@ -610,12 +618,133 @@ async function getOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
     throw new HttpError(400, "invalid_option_query", "銘柄、満期、権利行使価格、call/putを指定してください。");
   }
 
-  const client = await getClient();
-  const clientKey = getClientKey(client);
-  const accountsResponse = await getAccounts();
-  const selectedAccountKey = accountKey || accountsResponse.accounts[0]?.accountKey || "";
+  const selectedAccountKey = String(accountKey ?? "").trim();
+  const requestedUic = Number(uic);
+  const requestedAssetType = String(assetType ?? "").trim() || "StockOption";
+  const requestedPositionId = String(positionId ?? "").trim();
+  const requestedInstrumentCode = String(instrumentCode ?? "").trim();
   const fetchedAt = new Date().toISOString();
-  const source = "ref/v1/instruments + ref/v1/instruments/contractoptionspaces + trade/v1/infoprices";
+  const directSource = "trade/v1/infoprices (existing position UIC)";
+  const positionSource = "port/v1/positions + trade/v1/infoprices";
+  const rootSource = "ref/v1/instruments + ref/v1/instruments/contractoptionspaces + trade/v1/infoprices";
+
+  if (Number.isFinite(requestedUic) && requestedUic > 0) {
+    if (!selectedAccountKey) {
+      return createUnavailableOptionCandidate({
+        symbol: normalizedSymbol,
+        expiry: normalizedExpiry,
+        strike: numericStrike,
+        optionType: normalizedOptionType,
+        accountKey: selectedAccountKey,
+        fetchedAt,
+        source: directSource,
+        classification: "Saxo accountKey未取得",
+        status: "unavailable",
+        message: "既存建玉のSaxo accountKeyが未取得のため、UIC指定のInfoPriceを取得できません。建玉候補のSaxo識別情報を確認してください。",
+        optionUic: requestedUic,
+        assetType: requestedAssetType,
+        positionId: requestedPositionId,
+        instrumentCode: requestedInstrumentCode,
+      });
+    }
+    try {
+      const price = await getInfoPriceForOption({
+        accountKey: selectedAccountKey,
+        uic: requestedUic,
+        assetType: requestedAssetType,
+      });
+      return normalizeOptionPremiumCandidate({
+        symbol: normalizedSymbol,
+        expiry: normalizedExpiry,
+        strike: numericStrike,
+        optionType: normalizedOptionType,
+        accountKey: selectedAccountKey,
+        fetchedAt,
+        source: directSource,
+        contract: {
+          uic: requestedUic,
+          assetType: requestedAssetType,
+          positionId: requestedPositionId,
+          instrumentCode: requestedInstrumentCode,
+        },
+        price,
+        messageSourceLabel: "既存建玉のUIC",
+      });
+    } catch (error) {
+      return createUnavailableOptionCandidate({
+        symbol: normalizedSymbol,
+        expiry: normalizedExpiry,
+        strike: numericStrike,
+        optionType: normalizedOptionType,
+        accountKey: selectedAccountKey,
+        fetchedAt,
+        source: directSource,
+        classification: classifyOptionPremiumFailure(error),
+        status: "unavailable",
+        message: `既存建玉のUICでInfoPriceを取得できませんでした。${error instanceof Error ? error.message : "取得失敗"}`,
+        optionUic: requestedUic,
+        assetType: requestedAssetType,
+        positionId: requestedPositionId,
+        instrumentCode: requestedInstrumentCode,
+      });
+    }
+  }
+
+  if (selectedAccountKey && (requestedPositionId || requestedInstrumentCode)) {
+    const matchedPosition = await findOptionPremiumPositionCandidate({
+      accountKey: selectedAccountKey,
+      positionId: requestedPositionId,
+      instrumentCode: requestedInstrumentCode,
+      symbol: normalizedSymbol,
+      expiry: normalizedExpiry,
+      strike: numericStrike,
+      optionType: normalizedOptionType,
+    });
+    if (matchedPosition?.uic) {
+      const matchedAssetType = matchedPosition.assetType || requestedAssetType;
+      try {
+        const price = await getInfoPriceForOption({
+          accountKey: selectedAccountKey,
+          uic: matchedPosition.uic,
+          assetType: matchedAssetType,
+        });
+        return normalizeOptionPremiumCandidate({
+          symbol: normalizedSymbol,
+          expiry: normalizedExpiry,
+          strike: numericStrike,
+          optionType: normalizedOptionType,
+          accountKey: selectedAccountKey,
+          fetchedAt,
+          source: positionSource,
+          contract: {
+            uic: matchedPosition.uic,
+            assetType: matchedAssetType,
+            positionId: matchedPosition.positionId,
+            instrumentCode: matchedPosition.instrumentCode,
+          },
+          price,
+          messageSourceLabel: "現在建玉スナップショットのUIC",
+        });
+      } catch (error) {
+        return createUnavailableOptionCandidate({
+          symbol: normalizedSymbol,
+          expiry: normalizedExpiry,
+          strike: numericStrike,
+          optionType: normalizedOptionType,
+          accountKey: selectedAccountKey,
+          fetchedAt,
+          source: positionSource,
+          classification: classifyOptionPremiumFailure(error),
+          status: "unavailable",
+          message: `現在建玉スナップショットのUICでInfoPriceを取得できませんでした。${error instanceof Error ? error.message : "取得失敗"}`,
+          optionUic: matchedPosition.uic,
+          assetType: matchedAssetType,
+          positionId: matchedPosition.positionId,
+          instrumentCode: matchedPosition.instrumentCode,
+        });
+      }
+    }
+  }
 
   if (!selectedAccountKey) {
     return createUnavailableOptionCandidate({
@@ -625,13 +754,15 @@ async function getOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
       optionType: normalizedOptionType,
       accountKey,
       fetchedAt,
-      source,
-      classification: "レスポンス構造不一致",
+      source: rootSource,
+      classification: "Saxo accountKey未取得",
       status: "unavailable",
-      message: "価格取得に使うSaxo口座が未取得です。口座一覧取得後に再試行してください。",
+      message: "価格取得に使うSaxo accountKeyが未取得です。P/N口座を誤らないため、先頭口座への自動フォールバックは行いません。",
     });
   }
 
+  const client = await getClient();
+  const clientKey = getClientKey(client);
   const roots = await findContractOptionRoots({ symbol: normalizedSymbol, accountKey: selectedAccountKey });
   if (roots.length === 0) {
     return createUnavailableOptionCandidate({
@@ -641,10 +772,10 @@ async function getOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
       optionType: normalizedOptionType,
       accountKey: selectedAccountKey,
       fetchedAt,
-      source,
-      classification: "SIM口座にデータなし",
+      source: rootSource,
+      classification: getOptionRootMissingClassification(),
       status: "unavailable",
-      message: `${normalizedSymbol} のContract Option Rootが見つかりません。SIM環境の取扱銘柄または検索条件を確認してください。`,
+      message: `${normalizedSymbol} のContract Option Rootが見つかりません。${getEnvironment() === "live" ? "LIVE接続の契約ルート取得条件またはSaxo権限を確認してください。" : "SIM環境の取扱銘柄または検索条件を確認してください。"}`,
     });
   }
 
@@ -674,10 +805,11 @@ async function getOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
         optionType: normalizedOptionType,
         accountKey: selectedAccountKey,
         fetchedAt,
-        source,
+        source: rootSource,
         root,
         contract,
         price,
+        messageSourceLabel: "OptionSpaceで特定したUIC",
       });
     } catch (error) {
       errors.push(error instanceof Error ? error.message : "取得失敗");
@@ -691,14 +823,47 @@ async function getOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
     optionType: normalizedOptionType,
     accountKey: selectedAccountKey,
     fetchedAt,
-    source,
-    classification: errors.length > 0 ? classifySaxoFailure(new Error(errors.join(" / "))) : "SIM口座にデータなし",
+    source: rootSource,
+    classification: errors.length > 0 ? classifyOptionPremiumFailure(new Error(errors.join(" / "))) : getOptionRootMissingClassification(),
     status: "unavailable",
     message:
       errors.length > 0
         ? `OptionSpaceまたはInfoPriceを取得できませんでした。${errors.slice(0, 2).join(" / ")}`
         : `${normalizedSymbol} ${normalizedExpiry} ${numericStrike} ${normalizedOptionType.toUpperCase()} に一致するオプションUicが見つかりません。`,
   });
+}
+
+async function findOptionPremiumPositionCandidate({ accountKey, positionId, instrumentCode, symbol, expiry, strike, optionType }) {
+  const response = await getPositions(accountKey);
+  const normalizedInstrumentCode = normalizeComparableInstrument(instrumentCode);
+  return response.positions.find((position) => {
+    if (position.kind !== "option") return false;
+    if (position.accountKey && position.accountKey !== accountKey) return false;
+    if (positionId && position.positionId !== positionId && position.id !== positionId) return false;
+    if (normalizedInstrumentCode) {
+      const positionInstrument = normalizeComparableInstrument(position.instrumentCode);
+      if (positionInstrument && positionInstrument !== normalizedInstrumentCode) return false;
+    }
+    if (position.optionType && position.optionType !== "unknown" && position.optionType !== optionType) return false;
+    if (position.strike !== undefined && Math.abs(position.strike - strike) > 0.001) return false;
+    if (position.expiry && normalizeSaxoDate(position.expiry) !== normalizeSaxoDate(expiry)) return false;
+    const positionSymbol = normalizeTicker(position.symbol ?? "");
+    if (positionSymbol && positionSymbol !== symbol) return false;
+    return true;
+  });
+}
+
+function normalizeComparableInstrument(value) {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+function getOptionRootMissingClassification() {
+  return getEnvironment() === "live" ? "LIVEで契約ルート未取得" : "SIMで契約ルート未取得";
+}
+
+function classifyOptionPremiumFailure(error) {
+  const classified = classifySaxoFailure(error);
+  return classified === "取得失敗" ? "Saxo価格候補を取得できません" : classified;
 }
 
 async function findContractOptionRoots({ symbol, accountKey }) {
@@ -787,7 +952,7 @@ function walkOptionSpace(value, inherited, visit) {
   }
 }
 
-function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, accountKey, fetchedAt, source, root, contract, price }) {
+function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, accountKey, fetchedAt, source, root, contract, price, messageSourceLabel }) {
   const quote = price.Quote ?? {};
   const priceInfoDetails = price.PriceInfoDetails ?? {};
   const bid = firstNumber(quote, ["Bid"]);
@@ -799,26 +964,44 @@ function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
     environment: getEnvironment(),
     fetchedAt,
     status: hasPrice ? "available" : "unavailable",
-    classification: hasPrice ? "取得可能" : "SIM口座にデータなし",
+    classification: hasPrice ? "取得可能" : "Saxo価格候補を取得できません",
     source,
     symbol,
     expiry,
     strike,
     optionType,
     accountKey: maskSecret(accountKey),
-    optionRootId: root.optionRootId,
+    optionRootId: root?.optionRootId,
     optionUic: contract.uic,
+    assetType: contract.assetType ?? root?.assetType,
+    positionId: contract.positionId,
+    instrumentCode: contract.instrumentCode,
     bid,
     ask,
     last,
     mid,
     message: hasPrice
-      ? `OptionSpaceでUicを特定し、InfoPriceから候補価格を取得しました。自動入力はしません。`
+      ? `${messageSourceLabel ?? "InfoPrice"}から候補価格を取得しました。自動入力はしません。`
       : `該当オプションUicは見つかりましたが、InfoPriceにbid/ask/last/midがありません。未取得値は0扱いしません。`,
   };
 }
 
-function createUnavailableOptionCandidate({ symbol, expiry, strike, optionType, accountKey, fetchedAt, source, classification, status, message }) {
+function createUnavailableOptionCandidate({
+  symbol,
+  expiry,
+  strike,
+  optionType,
+  accountKey,
+  fetchedAt,
+  source,
+  classification,
+  status,
+  message,
+  optionUic,
+  assetType,
+  positionId,
+  instrumentCode,
+}) {
   return {
     environment: getEnvironment(),
     fetchedAt,
@@ -830,6 +1013,10 @@ function createUnavailableOptionCandidate({ symbol, expiry, strike, optionType, 
     strike,
     optionType,
     accountKey: accountKey ? maskSecret(accountKey) : undefined,
+    optionUic,
+    assetType,
+    positionId,
+    instrumentCode,
     bid: undefined,
     ask: undefined,
     last: undefined,
@@ -1079,18 +1266,22 @@ function normalizeHistoryItem(raw, kind, index) {
   const accountKey = firstString(raw, ["AccountKey", "AccountId", "AccountNumber"]);
   const sourceId = firstString(raw, ["ClosedPositionId", "TradeId", "PositionId", "OrderId", "Id"]);
   const profitLoss = firstNumber(raw, ["ClosedProfitLoss", "ProfitLossOnTrade", "RealizedPnl", "ProfitLoss"]);
-  const profitLossBase = firstNumber(raw, ["ClosedProfitLossInBaseCurrency", "ProfitLossOnTradeInBaseCurrency", "BookedAmount", "Amount"]);
+  const profitLossBase = firstNumber(raw, ["ClosedProfitLossInBaseCurrency", "ProfitLossOnTradeInBaseCurrency", "BookedAmountUSD", "BookedAmountAccountCurrency", "BookedAmount", "Amount"]);
   const optionTypeRaw = firstString(raw, ["PutCall", "CallPut", "OptionType", "OptionRootType"]);
   const instrumentForOption = firstString(raw, ["Symbol", "DisplayAndFormat.Symbol", "InstrumentSymbol", "InstrumentCode", "Description", "InstrumentDescription"]);
   const inferredContract = parseSaxoOptionContract(instrumentForOption);
   const optionType = inferOptionTypeFromValue(optionTypeRaw) ?? inferOptionTypeFromInstrument(instrumentForOption);
-  const bookedAmountAliases = ["BookedAmount", "NetAmount", "SettlementAmount", "Amount"];
+  const bookedAmountAliases = ["BookedAmountAccountCurrency", "BookedAmountUSD", "BookedAmountClientCurrency", "BookedAmount", "NetAmount", "SettlementAmount", "Amount"];
   const premiumAmountAliases = ["Premium", "PremiumAmount", "GrossAmount", "TradeAmount"];
-  const transactionCostAliases = ["TransactionCost", "Costs", "Cost", "Commission", "Commissions"];
+  const transactionCostAliases = ["TransactionCost", "Costs", "Cost", "Commission", "Commissions", "SpreadCostAccountCurrency", "SpreadCostUSD", "SpreadCostClientCurrency"];
   const exchangeRateAliases = ["ExchangeRate", "FxRate", "ConversionRate"];
   const bookedAmountMatch = firstNumberMatch(raw, bookedAmountAliases);
   const premiumAmountMatch = firstNumberMatch(raw, premiumAmountAliases);
-  const transactionCostMatch = firstNumberMatch(raw, transactionCostAliases);
+  const explicitTransactionCostMatch = firstNumberMatch(raw, transactionCostAliases);
+  const transactionCostMatch =
+    explicitTransactionCostMatch && Math.abs(explicitTransactionCostMatch.value) > 0.0001
+      ? explicitTransactionCostMatch
+      : inferTransactionCostFromTradeValue(raw);
   const exchangeRateMatch = firstNumberMatch(raw, exchangeRateAliases);
   return {
     id: `${kind}-${index}`,
@@ -1129,6 +1320,21 @@ function normalizeHistoryItem(raw, kind, index) {
     sourceStatus: "draft_candidate",
     missingFields: [],
   };
+}
+
+function inferTransactionCostFromTradeValue(raw) {
+  const tradedValue = firstNumber(raw, ["TradedValue"]);
+  const accountCurrency = firstString(raw, ["AccountCurrency"]);
+  const clientCurrency = firstString(raw, ["ClientCurrency"]);
+  if (accountCurrency === "JPY" || clientCurrency === "JPY") return undefined;
+  const bookedAmount =
+    firstNumber(raw, ["BookedAmountUSD"]) ??
+    (accountCurrency === "USD" ? firstNumber(raw, ["BookedAmountAccountCurrency"]) : undefined);
+  if (!Number.isFinite(tradedValue) || !Number.isFinite(bookedAmount)) return undefined;
+  if (Math.abs(bookedAmount) <= 0.0001) return undefined;
+  const inferredCost = Math.abs(Math.abs(tradedValue) - Math.abs(bookedAmount));
+  if (!Number.isFinite(inferredCost) || inferredCost <= 0.0001) return undefined;
+  return { value: inferredCost, matchedName: "abs(TradedValue) - abs(BookedAmountUSD)" };
 }
 
 function inferOptionTypeFromValue(value) {
@@ -1798,8 +2004,8 @@ function sendHtml(response, status, message) {
   response.end(`<!doctype html><html lang="ja"><meta charset="utf-8"><title>Saxo API Read-only</title><body><main style="font-family:sans-serif;line-height:1.7;margin:32px"><h1>Saxo API Read-only版</h1><p>${message}</p><p>このローカルAPIには発注機能はありません。</p></main></body></html>`);
 }
 
-function sendAuthSuccessHtml(response) {
-  const appUrl = buildReturnUrlWithConnectedFlag();
+function sendAuthSuccessHtml(response, returnUrl) {
+  const appUrl = buildReturnUrlWithConnectedFlag(returnUrl);
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   response.end(`<!doctype html>
 <html lang="ja">
@@ -1842,8 +2048,35 @@ function sendAuthSuccessHtml(response) {
 </html>`);
 }
 
-function buildReturnUrlWithConnectedFlag() {
-  const url = new URL(LOCAL_UI_RETURN_URL);
+function resolveAuthReturnUrl(request, requestUrl) {
+  const candidates = [requestUrl.searchParams.get("returnUrl"), request.headers.referer, request.headers.origin];
+  for (const candidate of candidates) {
+    const returnUrl = normalizeReturnUrl(candidate);
+    if (returnUrl) return returnUrl;
+  }
+  return LOCAL_UI_RETURN_URL;
+}
+
+function normalizeReturnUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    const url = new URL(value);
+    if (!isAllowedReturnUrl(url)) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function isAllowedReturnUrl(url) {
+  if (url.origin === LOCAL_UI_ALLOWED_ORIGIN) return true;
+  if (url.origin === `http://${HOST}:5173`) return true;
+  if (url.origin === "http://localhost:5173") return true;
+  return url.origin === PUBLIC_GITHUB_PAGES_ORIGIN && url.pathname.startsWith("/us-options-risk-planner");
+}
+
+function buildReturnUrlWithConnectedFlag(returnUrl = LOCAL_UI_RETURN_URL) {
+  const url = new URL(returnUrl);
   url.searchParams.set("saxoConnected", "1");
   return url.toString();
 }

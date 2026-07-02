@@ -10,6 +10,7 @@ import {
   findOrderCandidatesForLeg,
   getSaxoHistoryCandidateKeys,
   getSaxoHistoryCandidateTarget,
+  getSaxoHistoryCandidateTargetForSimulations,
   getSaxoHistoryContractsForLeg,
   getSaxoHistoryOptionLegMatchDiagnostics,
   getSaxoHistoryStableKey,
@@ -348,6 +349,31 @@ describe("Saxo read-only account sync", () => {
     const draft = createSaxoPositionDraftSummary(position, [simulation]);
     expect(draft.ticker).toBe("NVDA");
     expect(draft.name).toContain("NVDA");
+  });
+
+  it("resolves the underlying ticker from a Saxo option instrument code when position symbol is blank", () => {
+    const position: SaxoApiPositionSnapshot = {
+      id: "pos-nvda-p195",
+      accountKey: "n-key",
+      accountAssignment: "N",
+      accountCode: "N",
+      symbol: "",
+      instrumentCode: "NVDA/24N26P195:XCBF",
+      assetType: "StockOption",
+      kind: "option",
+      quantity: -1,
+      side: "short",
+      optionType: "put",
+      strike: 195,
+      expiry: "2026-07-24",
+      premiumOpenPrice: 3.75,
+      currency: "USD",
+      missingFields: [],
+      fetchedAt: "2026-07-01T00:00:00.000Z",
+    };
+
+    expect(resolveSaxoPositionSymbol(position)).toBe("NVDA");
+    expect(createSaxoPositionDraftSummary(position).ticker).toBe("NVDA");
   });
 
   it("reconciles assigned Saxo option positions even when Saxo omits the symbol but the option shape is unique", () => {
@@ -742,6 +768,66 @@ describe("Saxo read-only account sync", () => {
     expect(execution.confirmationStatus).toBe("pending");
   });
 
+  it("uses app context to route a Saxo call buy history to long-call entry instead of close", () => {
+    const longCallSimulation = createOpenCoveredCallSimulation({
+      id: "sim-v-long-call",
+      name: "V long call",
+      ticker: "V",
+      strategyType: "long_call",
+      accountCode: "P",
+      accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+      currentPriceUSD: 0,
+      expiryDate: "2026-11-20",
+      stockPosition: null,
+      optionLegs: [
+        {
+          id: "leg-v-c340",
+          type: "call",
+          side: "buy",
+          strikeUSD: 340,
+          premiumUSD: 24.1,
+          quantity: 1,
+          expiryDate: "2026-11-20",
+        },
+      ],
+    });
+    const history: SaxoHistoryDiscoveryItem = {
+      id: "v-c340-entry",
+      kind: "trade",
+      accountCode: "P",
+      symbol: "V/20X26C340:XCBF",
+      assetType: "StockOption",
+      instrumentCode: "V/20X26C340:XCBF",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 24.1,
+      tradeDate: "2026-06-30",
+    };
+
+    expect(getSaxoHistoryCandidateTargetForSimulations(history, [longCallSimulation])).toBe("entry");
+    expect(isSaxoHistoryMatchingOptionLeg(longCallSimulation, longCallSimulation.optionLegs[0], history, "entry")).toBe(true);
+  });
+
+  it("keeps context-matched short call buybacks routed to close", () => {
+    const simulation = createOpenCoveredCallSimulation();
+    const history: SaxoHistoryDiscoveryItem = {
+      id: "nvda-c225-buyback",
+      kind: "trade",
+      accountCode: "N",
+      symbol: "NVDA/10N26C225:XCBF",
+      assetType: "StockOption",
+      instrumentCode: "NVDA/10N26C225:XCBF",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 0.79,
+      tradeDate: "2026-06-23",
+    };
+
+    expect(getSaxoHistoryCandidateTargetForSimulations(history, [simulation])).toBe("close");
+  });
+
   it("does not match a Saxo covered-call close history from a clearly different P/N account", () => {
     const simulation = createOpenCoveredCallSimulation({ accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT" });
     const closeHistory: SaxoHistoryDiscoveryItem = {
@@ -1033,6 +1119,59 @@ describe("Saxo read-only account sync", () => {
     ]);
 
     expect(matches.map((match) => match.item.id)).toEqual(["entry-2075"]);
+  });
+
+  it("matches a Visa long call current position to one P-account JPY entry history and keeps broker statement values", () => {
+    const position: SaxoApiPositionSnapshot = {
+      id: "visa-c340-position",
+      accountKey: "p-key",
+      accountAssignment: "P",
+      accountCode: "P",
+      symbol: "Visa Inc. Nov2026 340 C",
+      underlyingName: "Visa Inc.",
+      displayName: "Visa Inc. Nov2026 340 C",
+      assetType: "StockOption",
+      kind: "option",
+      quantity: 1,
+      side: "long",
+      optionType: "call",
+      strike: 340,
+      expiry: "2026-11-20",
+      premiumOpenPrice: 24.1,
+      currency: "USD",
+      missingFields: [],
+      fetchedAt: "2026-07-01T00:00:00.000Z",
+    };
+    const history: SaxoHistoryDiscoveryItem = {
+      id: "visa-c340-entry",
+      kind: "trade",
+      accountKey: "p-key",
+      accountCode: "P",
+      symbol: "V/20X26C340:XCBF",
+      instrumentCode: "V/20X26C340:XCBF",
+      assetType: "StockOption",
+      buySell: "buy",
+      openClose: "unknown",
+      quantity: 1,
+      price: 24.1,
+      tradeDate: "2026-06-30",
+      currency: "USD",
+      bookedAmount: -396166,
+      premiumAmount: -395797,
+      transactionCost: -4288,
+      exchangeRate: 164.23105,
+    };
+
+    expect(resolveSaxoPositionSymbol(position)).toBe("V");
+
+    const matches = findEntryHistoryMatches(position, [history]);
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0].item.id).toBe("visa-c340-entry");
+    expect(matches[0].item.bookedAmount).toBe(-396166);
+    expect(matches[0].item.premiumAmount).toBe(-395797);
+    expect(matches[0].item.transactionCost).toBe(-4288);
+    expect(matches[0].item.exchangeRate).toBe(164.23105);
   });
 
   it("only uses strict sell/open history for entry matching", () => {

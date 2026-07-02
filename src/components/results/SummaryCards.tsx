@@ -150,7 +150,7 @@ export function SummaryCards({
         }`
       : `${formatPct(primaryDenominator.annualReturnPct)} / ${formatPct(taxResult.netAnnualReturnPct)}`;
   const annualCardNote = longOptionDisplay
-    ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)} / 権利行使価格 ${formatUSD(longOptionDisplay.strikeUSD)}。満期まで${premiumDisplay.dte}日。約定後は反対売買判断で利確/損切りラインを確認します。`
+    ? `${longOptionDisplay.currentPriceUSD !== undefined ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)}` : "現在株価未取得"} / 権利行使価格 ${formatUSD(longOptionDisplay.strikeUSD)}。満期まで${premiumDisplay.dte}日。約定後は反対売買判断で利確/損切りラインを確認します。`
     : usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
     ? `プレミアム年率。${premiumDisplay.dte}日換算。権利行使時想定は別カードで確認します。`
     : historyMode

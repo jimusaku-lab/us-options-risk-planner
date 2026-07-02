@@ -42,6 +42,40 @@ describe("date defaults", () => {
     expect(simulation.expiryDate).not.toBe(simulation.entryDate);
   });
 
+  it("creates long call candidate drafts with a buy call leg and 160 day expiry guide", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 5, 5, 1, 30));
+
+    const simulation = createSimulationFromCandidate({
+      candidate: {
+        id: "nvda",
+        source: "manual",
+        importedAt: "2026-05-01T00:00:00.000Z",
+        rank: 1,
+        symbol: "NVDA",
+        company: "NVIDIA Corporation",
+        priceUSD: 200,
+        score: 80,
+        suggestedUse: "long_call",
+      },
+      workspace: "live",
+      settings: {
+        beginnerMode: true,
+        defaultMarginBufferMultiplier: 2,
+        defaultNisaExpectedAnnualReturnPct: 9,
+      },
+      strategyType: "long_call",
+      fxRateJPY: 160,
+    });
+
+    expect(simulation.strategyType).toBe("long_call");
+    expect(simulation.dte).toBe(160);
+    expect(simulation.expiryDate).toBe("2026-11-12");
+    expect(simulation.stockPosition).toBeNull();
+    expect(simulation.optionLegs[0]).toMatchObject({ type: "call", side: "buy", isCovered: false });
+    expect(simulation.notes).toContain("コール買い候補");
+  });
+
   it("uses the browser local date for entry and close execution drafts", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 5, 5, 1, 30));

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
-import { getLongOptionExitOrderLineCandidate } from "./CloseDecisionCard";
+import type { OptionLeg, TradeSimulation } from "@/types/domain";
+import { buildSaxoOptionPremiumCandidateInput, getLongOptionExitOrderLineCandidate } from "./CloseDecisionCard";
 
 function createOrder(overrides: Partial<SaxoApiOrderSnapshot>): SaxoApiOrderSnapshot {
   return {
@@ -37,5 +38,47 @@ describe("long option exit order line candidates", () => {
 
     expect(candidate.profitTargetPriceUSD).toBeUndefined();
     expect(candidate.stopLossPriceUSD).toBeUndefined();
+  });
+});
+
+describe("Saxo option premium candidate input", () => {
+  it("passes existing position UIC and account identifiers before fallback search", () => {
+    const simulation = {
+      ticker: "V",
+      fixtureMeta: {
+        source: "live",
+        isRealMoney: true,
+        broker: "SaxoBank",
+        purpose: "development-fixture",
+        createdAt: "2026-07-02",
+        notes: "",
+        saxoAccountKey: "XLu-live-account-key",
+        saxoPositionId: "7655451244",
+        saxoInstrumentCode: "V/20X26C340:XCBF",
+        saxoUic: 54341397,
+      },
+    } as TradeSimulation;
+    const leg = {
+      id: "leg-1",
+      type: "call",
+      side: "buy",
+      strikeUSD: 340,
+      premiumUSD: 24.1,
+      quantity: 1,
+      expiryDate: "2026-11-20",
+      brokerSymbol: "V/20X26C340:XCBF",
+    } satisfies OptionLeg;
+
+    expect(buildSaxoOptionPremiumCandidateInput(simulation, leg)).toEqual({
+      symbol: "V",
+      expiry: "2026-11-20",
+      strike: 340,
+      optionType: "call",
+      accountKey: "XLu-live-account-key",
+      uic: 54341397,
+      assetType: "StockOption",
+      positionId: "7655451244",
+      instrumentCode: "V/20X26C340:XCBF",
+    });
   });
 });
