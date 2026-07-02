@@ -30,7 +30,7 @@ export const denominatorExplanations: Record<DenominatorMode, string> = {
   cash_secured:
     "プットが権利行使された場合に株を買う資金まで用意している前提の分母です。",
   conservative_common:
-    "現物株、使用証拠金、権利行使時の追加資金をすべて含めた保守的な分母です。証券会社が今要求する金額ではありません。",
+    "現物株、使用証拠金、権利行使時に必要な買付資金をすべて含めた保守的な分母です。証券会社が今要求する金額ではありません。",
   custom: "ユーザーが任意に設定した資金管理上の分母です。",
 };
 

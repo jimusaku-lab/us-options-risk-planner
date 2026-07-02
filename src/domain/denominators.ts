@@ -58,7 +58,7 @@ export function calculateDenominators(
       amountJPY: stockJPY + putAssignmentJPY,
       components: [
         { label: "現物株時価", amountJPY: stockJPY },
-        { label: "P権利行使時の追加買付資金", amountJPY: putAssignmentJPY },
+        { label: "権利行使時に必要な買付資金", amountJPY: putAssignmentJPY },
       ],
     },
     {
@@ -153,7 +153,7 @@ function calculateDenominatorsUSD(
       amountJPY: (stockUSD + putAssignmentUSD) * fx,
       components: [
         { label: "現物株時価", amountUSD: stockUSD, amountJPY: stockUSD * fx },
-        { label: "P権利行使時の追加買付資金", amountUSD: putAssignmentUSD, amountJPY: putAssignmentUSD * fx },
+        { label: "権利行使時に必要な買付資金", amountUSD: putAssignmentUSD, amountJPY: putAssignmentUSD * fx },
       ],
     },
     {

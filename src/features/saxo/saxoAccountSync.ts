@@ -304,6 +304,21 @@ export type SaxoOptionPremiumCandidate = {
   ask?: number;
   last?: number;
   mid?: number;
+  referencePriceUSD?: number;
+  referencePriceLabel?: string;
+  manualInputGuidance?: string;
+  quoteDiagnostics?: {
+    reasonLabel?: string;
+    errorCode?: string;
+    priceTypeBid?: string;
+    priceTypeAsk?: string;
+    delayedByMinutes?: number;
+    isMarketOpen?: boolean;
+    calculationReliability?: string;
+    selectedSource?: string;
+    attemptedSources?: string[];
+    details?: string[];
+  };
   message: string;
 };
 

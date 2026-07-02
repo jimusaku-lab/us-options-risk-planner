@@ -1,5 +1,6 @@
 import type { CoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import type { DenominatorResult, RiskWarning, StockTransferEvent, TaxResult, TradeSimulation } from "@/types/domain";
+import type { AccountInputs } from "@/store/useOptionsStore";
 import {
   calculateNetInitialPremiumJPY,
   calculateNetInitialPremiumUSD,
@@ -15,6 +16,69 @@ function formatReferenceJPY(value: number | undefined): string {
   return value !== undefined && Number.isFinite(value) && Math.abs(value) > 0.5
     ? `参考JPY ${formatJPY(value)}`
     : "参考JPY未計算";
+}
+
+function formatSignedUSD(value: number): string {
+  return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
+}
+
+type FundingSource = {
+  amount: number;
+  label: string;
+};
+
+function getFundingSource(accountInputs: AccountInputs | undefined, simulation: TradeSimulation): FundingSource | undefined {
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const account = accountInputs?.[isN ? "N" : "P"];
+  if (account) {
+    if (Number.isFinite(account.cashBalance) && account.cashBalance > 0) {
+      return {
+        amount: account.cashBalance,
+        label: isN ? "N口座USD現金" : "P口座JPY現金",
+      };
+    }
+  }
+
+  if (simulation.availableCashJPY === undefined || simulation.availableCashJPY <= 0) return undefined;
+  if (!isN) {
+    return { amount: simulation.availableCashJPY, label: "P口座JPY現金" };
+  }
+  const fxRate = simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
+  if (!Number.isFinite(fxRate) || fxRate <= 0) return undefined;
+  return { amount: simulation.availableCashJPY / fxRate, label: "N口座USD現金" };
+}
+
+export function buildPutAssignmentFundingNote(
+  simulation: TradeSimulation,
+  putAssignmentJPY: number,
+  putAssignmentUSD: number,
+  accountInputs?: AccountInputs,
+): string {
+  const fxRate = simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const shortPutLeg = simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell");
+  const strikeText = shortPutLeg ? `P${shortPutLeg.strikeUSD} × ${shortPutLeg.quantity * 100}株。` : "";
+  const baseNote = strikeText;
+  const fundingSource = getFundingSource(accountInputs, simulation);
+  if (isN) {
+    if (!fundingSource || putAssignmentUSD <= 0) return `${baseNote}資金確認: 未確認。N口座USD現金を取得してください。`;
+    const differenceUSD = fundingSource.amount - putAssignmentUSD;
+    return differenceUSD >= 0
+      ? `${baseNote}資金確認: 充足。${fundingSource.label} ${formatUSD(fundingSource.amount)} / 余裕 ${formatUSD(differenceUSD)}。`
+      : `${baseNote}資金確認: 不足。${fundingSource.label} ${formatUSD(fundingSource.amount)} / 不足 ${formatUSD(Math.abs(differenceUSD))}。`;
+  }
+  const requiredJPY = putAssignmentJPY > 0
+    ? putAssignmentJPY
+    : putAssignmentUSD > 0 && Number.isFinite(fxRate) && fxRate > 0
+      ? putAssignmentUSD * fxRate
+      : 0;
+  if (!fundingSource || requiredJPY <= 0) {
+    return `${baseNote}資金確認: 未確認。P口座JPY現金を取得してください。`;
+  }
+  const differenceJPY = fundingSource.amount - requiredJPY;
+  return differenceJPY >= 0
+    ? `${baseNote}資金確認: 充足。${fundingSource.label} ${formatJPY(fundingSource.amount)} / 余裕 ${formatJPY(differenceJPY)}。`
+    : `${baseNote}資金確認: 不足。${fundingSource.label} ${formatJPY(fundingSource.amount)} / 不足 ${formatJPY(Math.abs(differenceJPY))}。`;
 }
 
 type SummaryCardsProps = {
@@ -33,6 +97,7 @@ type SummaryCardsProps = {
   statusCardTitle?: string;
   okStatusValue?: string;
   okStatusNote?: string;
+  accountInputs?: AccountInputs;
 };
 
 export function SummaryCards({
@@ -51,6 +116,7 @@ export function SummaryCards({
   statusCardTitle,
   okStatusValue,
   okStatusNote,
+  accountInputs,
 }: SummaryCardsProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
   const usePremiumDisplay = !historyMode && premiumDisplay.basis !== "history";
@@ -121,10 +187,10 @@ export function SummaryCards({
         : "P口座JPY決済。手数料・税金は別カードで控除します。";
   const denominatorCardValue =
     longOptionDisplay
-      ? `-${formatUSD(longOptionDisplay.maximumLossUSD)}`
+      ? `-${formatUSD(longOptionDisplay.totalCostUSD)}`
       : summaryDenominatorCurrency === "USD" ? formatUSD(summaryDenominatorUSD ?? 0) : formatJPY(summaryDenominatorJPY);
   const denominatorCardNote = longOptionDisplay
-    ? `支払プレミアムと手数料の合計です。${formatReferenceJPY(longOptionDisplay.maximumLossJPY)}。`
+    ? `支払プレミアムと建玉時手数料の合計です。${formatReferenceJPY(longOptionDisplay.totalCostJPY)}。`
     : usePremiumDisplay && premiumDisplay.coveredCallAssignmentEstimate
     ? [
         `取得原価ベース。${formatUSD(premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD)}。`,
@@ -150,7 +216,11 @@ export function SummaryCards({
         }`
       : `${formatPct(primaryDenominator.annualReturnPct)} / ${formatPct(taxResult.netAnnualReturnPct)}`;
   const annualCardNote = longOptionDisplay
-    ? `${longOptionDisplay.currentPriceUSD !== undefined ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)}` : "現在株価未取得"} / 権利行使価格 ${formatUSD(longOptionDisplay.strikeUSD)}。満期まで${premiumDisplay.dte}日。約定後は反対売買判断で利確/損切りラインを確認します。`
+    ? [
+        `${longOptionDisplay.currentPriceUSD !== undefined ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)}` : "現在株価未取得"} / 権利行使価格 ${formatUSD(longOptionDisplay.strikeUSD)}。`,
+        `満期まで${premiumDisplay.dte}日。`,
+        `利確/損切りライン ${formatUSD(longOptionDisplay.profitTargetPriceUSD)} / ${formatUSD(longOptionDisplay.stopLossPriceUSD)}。`,
+      ].join(" ")
     : usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
     ? `プレミアム年率。${premiumDisplay.dte}日換算。権利行使時想定は別カードで確認します。`
     : historyMode
@@ -182,18 +252,44 @@ export function SummaryCards({
       : []),
     {
       title: longOptionDisplay
-        ? "最大損失"
+        ? "支払済みリスク上限"
         : historyMode ? "この履歴の年率分母" : "使用分母",
       value: usePremiumDisplay ? denominatorCardValue : historyDenominatorValue,
-      note: denominatorCardNote,
+      note: longOptionDisplay
+        ? `${denominatorCardNote} 満期まで放置して無価値になった場合の理論上限で、通常運用では反対売買判断で管理します。`
+        : denominatorCardNote,
     },
     {
       title: longOptionDisplay
-        ? "損益分岐点"
+        ? "満期損益分岐点（参考）"
         : historyMode ? "この履歴のオプション年率" : "年率",
       value: annualCardValue,
       note: annualCardNote,
     },
+    ...(longOptionDisplay
+      ? [
+          {
+            title: "現在決済ベース",
+            value:
+              longOptionDisplay.estimatedProfitUSD === undefined
+                ? "未計算"
+                : `${formatSignedUSD(longOptionDisplay.estimatedProfitUSD)} / ${
+                    longOptionDisplay.currentCloseAnnualizedReturnPct !== undefined
+                      ? `${longOptionDisplay.currentCloseAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.currentCloseAnnualizedReturnPct)}`
+                      : "年率未計算"
+                  }`,
+            note: [
+              longOptionDisplay.closePriceUSD !== undefined
+                ? `現在オプション価格 ${formatUSD(longOptionDisplay.closePriceUSD)}。`
+                : "現在オプション価格未入力。",
+              longOptionDisplay.profitPct !== undefined
+                ? `評価損益率 ${longOptionDisplay.profitPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.profitPct)}。`
+                : "評価損益率 未計算。",
+              `残存日数 ${longOptionDisplay.remainingDays}日。`,
+            ].join(" "),
+          },
+        ]
+      : []),
     ...(!historyMode && assignmentEstimate
       ? [
           {
@@ -215,9 +311,9 @@ export function SummaryCards({
     ...(!historyMode && !hidePutAssignmentCard && (putAssignmentJPY > 0 || putAssignmentUSD > 0)
       ? [
           {
-            title: "P権利行使時の追加買付資金",
+            title: "権利行使時に必要な買付資金",
             value: isN ? formatUSD(putAssignmentUSD) : formatJPY(putAssignmentJPY),
-            note: isN ? `N口座内のUSD買付資金。${formatReferenceJPY(putAssignmentJPY)}。` : "権利行使された場合に株を買い受けるための概算資金です。",
+            note: buildPutAssignmentFundingNote(simulation, putAssignmentJPY, putAssignmentUSD, accountInputs),
           },
         ]
       : []),

@@ -52,6 +52,17 @@ export type LongOptionOrderDisplay = {
   paidPremiumJPY: number;
   feeUSD: number;
   feeJPY: number;
+  closeCommissionUSD: number;
+  closePriceUSD?: number;
+  currentOptionValueUSD?: number;
+  estimatedProfitUSD?: number;
+  estimatedProfitJPY?: number;
+  profitPct?: number;
+  currentCloseAnnualizedReturnPct?: number;
+  profitTargetPriceUSD: number;
+  stopLossPriceUSD: number;
+  remainingDays: number;
+  elapsedDays: number;
   totalCostUSD: number;
   totalCostJPY: number;
   maximumLossUSD: number;
@@ -147,6 +158,26 @@ function calculateLongOptionOrderDisplay(params: {
     leg.type === "call"
       ? leg.strikeUSD + leg.premiumUSD + feePerShareUSD
       : Math.max(0, leg.strikeUSD - leg.premiumUSD - feePerShareUSD);
+  const closePriceUSD =
+    leg.closeCostUSD !== undefined && leg.closeCostUSD > 0
+      ? leg.closeCostUSD
+      : leg.closePlan?.closePriceUSD !== undefined && leg.closePlan.closePriceUSD > 0
+        ? leg.closePlan.closePriceUSD
+        : undefined;
+  const currentOptionValueUSD = closePriceUSD !== undefined ? closePriceUSD * 100 * leg.quantity : undefined;
+  const closeCommissionUSD = leg.closePlan?.commissionUSD ?? params.feeUSD;
+  const estimatedProfitUSD =
+    currentOptionValueUSD !== undefined ? currentOptionValueUSD - paidPremiumUSD - params.feeUSD - closeCommissionUSD : undefined;
+  const estimatedProfitJPY = estimatedProfitUSD !== undefined ? estimatedProfitUSD * effectiveFxRateJPY : undefined;
+  const profitPct = estimatedProfitUSD !== undefined && paidPremiumUSD > 0 ? (estimatedProfitUSD / paidPremiumUSD) * 100 : undefined;
+  const elapsedDays = calculateElapsedDaysSinceEntry(params.simulation.entryDate);
+  const currentCloseAnnualizedReturnPct =
+    estimatedProfitUSD !== undefined && totalCostUSD > 0
+      ? (estimatedProfitUSD / totalCostUSD) * (365 / Math.max(1, elapsedDays)) * 100
+      : undefined;
+  const profitTargetPriceUSD = leg.closePlan?.profitTargetPriceUSD ?? roundOptionPrice(leg.premiumUSD * 1.3);
+  const stopLossPriceUSD = leg.closePlan?.stopLossPriceUSD ?? roundOptionPrice(leg.premiumUSD * 0.7);
+  const remainingDays = calculateRemainingDaysUntilExpiry(leg.expiryDate);
   const currentPriceUSD =
     Number.isFinite(params.simulation.currentPriceUSD) && params.simulation.currentPriceUSD > 0
       ? params.simulation.currentPriceUSD
@@ -157,6 +188,17 @@ function calculateLongOptionOrderDisplay(params: {
     paidPremiumJPY,
     feeUSD: params.feeUSD,
     feeJPY: params.feeJPY,
+    closeCommissionUSD,
+    closePriceUSD,
+    currentOptionValueUSD,
+    estimatedProfitUSD,
+    estimatedProfitJPY,
+    profitPct,
+    currentCloseAnnualizedReturnPct,
+    profitTargetPriceUSD,
+    stopLossPriceUSD,
+    remainingDays,
+    elapsedDays,
     totalCostUSD,
     totalCostJPY,
     maximumLossUSD: totalCostUSD,
@@ -166,6 +208,27 @@ function calculateLongOptionOrderDisplay(params: {
     currentPriceUSD,
     quantity: leg.quantity,
   };
+}
+
+function roundOptionPrice(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.round(value * 100) / 100;
+}
+
+function calculateElapsedDaysSinceEntry(entryDate: string, now = new Date()): number {
+  const entry = new Date(`${entryDate}T00:00:00`);
+  if (Number.isNaN(entry.getTime())) return 1;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const entryDay = new Date(entry.getFullYear(), entry.getMonth(), entry.getDate());
+  return Math.max(1, Math.ceil((today.getTime() - entryDay.getTime()) / 86_400_000));
+}
+
+function calculateRemainingDaysUntilExpiry(expiryDate: string, now = new Date()): number {
+  const expiry = new Date(`${expiryDate}T00:00:00`);
+  if (Number.isNaN(expiry.getTime())) return 0;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const expiryDay = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+  return Math.max(0, Math.ceil((expiryDay.getTime() - today.getTime()) / 86_400_000));
 }
 
 function calculateCoveredCallAssignmentEstimate(params: {
@@ -263,7 +326,7 @@ function calculatePlannedPremiumDisplay(
         ? "支払予定額"
         : "約定未確認の支払額"
       : "受取プレミアム",
-    denominatorLabel: longOptionOrderDisplay ? "最大損失 / 支払額" : "使用分母",
+    denominatorLabel: longOptionOrderDisplay ? "建玉時支払額" : "使用分母",
     annualReturnLabel: longOptionOrderDisplay ? "出口ライン確認" : undefined,
     hasPremiumInput: hasLegPremiumInput(simulation),
     effectiveFxRateJPY,
@@ -349,7 +412,7 @@ export function calculateDashboardPremiumDisplay(simulation: TradeSimulation): D
     label: longOptionOrderDisplay ? "建玉時支払プレミアム" : "建玉時プレミアム",
     premiumDirection: longOptionOrderDisplay ? "paid" : "received",
     primaryAmountLabel: longOptionOrderDisplay ? "建玉時支払額" : "受取プレミアム",
-    denominatorLabel: longOptionOrderDisplay ? "最大損失 / 支払額" : "使用分母",
+    denominatorLabel: longOptionOrderDisplay ? "建玉時支払額" : "使用分母",
     annualReturnLabel: longOptionOrderDisplay ? "反対売買で決済" : undefined,
     hasPremiumInput: true,
     effectiveFxRateJPY: getEffectiveFxRateJPY(simulation),

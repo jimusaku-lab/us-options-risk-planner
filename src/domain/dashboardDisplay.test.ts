@@ -338,7 +338,7 @@ describe("dashboard premium display", () => {
     expect(display.premiumDirection).toBe("paid");
     expect(display.label).toBe("支払予定プレミアム");
     expect(display.primaryAmountLabel).toBe("支払予定額");
-    expect(display.denominatorLabel).toBe("最大損失 / 支払額");
+    expect(display.denominatorLabel).toBe("建玉時支払額");
     expect(display.annualReturnLabel).toBe("出口ライン確認");
     expect(display.annualReturnPct).toBeUndefined();
     expect(display.netAnnualReturnPct).toBeUndefined();
@@ -352,7 +352,60 @@ describe("dashboard premium display", () => {
     expect(display.longOptionOrderDisplay?.breakevenUSD).toBeCloseTo(357.0225, 8);
     expect(display.longOptionOrderDisplay?.currentPriceUSD).toBe(336);
     expect(display.longOptionOrderDisplay?.strikeUSD).toBe(335);
+    expect(display.longOptionOrderDisplay?.profitTargetPriceUSD).toBeCloseTo(28.6, 8);
+    expect(display.longOptionOrderDisplay?.stopLossPriceUSD).toBeCloseTo(15.4, 8);
     expect(display.dte).toBe(144);
+  });
+
+  it("adds long option current close metrics when current option price is entered", () => {
+    const simulation: TradeSimulation = {
+      ...createPlannedCoveredCall({
+        id: "v-c335-long-call-close",
+        status: "open",
+        name: "V C335 long call",
+        ticker: "V",
+        strategyType: "long_call",
+        currentPriceUSD: 336,
+        fxRateJPY: 161.65,
+        referenceFxRateJPY: 161.65,
+        entryDate: "2026-06-29",
+        expiryDate: "2026-11-20",
+        dte: 144,
+        stockPosition: null,
+        denominatorMode: "custom",
+        optionLegs: [
+          {
+            id: "call-leg",
+            type: "call",
+            side: "buy",
+            strikeUSD: 335,
+            premiumUSD: 22,
+            quantity: 1,
+            expiryDate: "2026-11-20",
+            closeCostUSD: 24,
+            closePlan: {
+              enabled: true,
+              closePriceUSD: 24,
+              profitTargetPriceUSD: 33,
+              stopLossPriceUSD: 11,
+              commissionUSD: 2.25,
+            },
+          },
+        ],
+        brokerCommissionUSD: 2.25,
+      }),
+    };
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(display.denominatorLabel).toBe("建玉時支払額");
+    expect(display.longOptionOrderDisplay?.closePriceUSD).toBe(24);
+    expect(display.longOptionOrderDisplay?.currentOptionValueUSD).toBeCloseTo(2_400, 8);
+    expect(display.longOptionOrderDisplay?.estimatedProfitUSD).toBeCloseTo(195.5, 8);
+    expect(display.longOptionOrderDisplay?.profitPct).toBeCloseTo(8.886, 3);
+    expect(display.longOptionOrderDisplay?.profitTargetPriceUSD).toBe(33);
+    expect(display.longOptionOrderDisplay?.stopLossPriceUSD).toBe(11);
+    expect(display.longOptionOrderDisplay?.currentCloseAnnualizedReturnPct).toBeDefined();
   });
 
   it("keeps missing long-call underlying price undefined instead of treating it as zero", () => {

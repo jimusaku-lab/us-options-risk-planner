@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
 import type { OptionLeg, TradeSimulation } from "@/types/domain";
-import { buildSaxoOptionPremiumCandidateInput, getLongOptionExitOrderLineCandidate } from "./CloseDecisionCard";
+import {
+  buildSaxoOptionPremiumCandidateInput,
+  calculateLongOptionCloseAnnualizedReturnPercent,
+  getLongOptionExitOrderLineCandidate,
+  getPremiumCandidatePrice,
+} from "./CloseDecisionCard";
 
 function createOrder(overrides: Partial<SaxoApiOrderSnapshot>): SaxoApiOrderSnapshot {
   return {
@@ -80,5 +85,65 @@ describe("Saxo option premium candidate input", () => {
       positionId: "7655451244",
       instrumentCode: "V/20X26C340:XCBF",
     });
+  });
+});
+
+describe("Saxo premium candidate price selection", () => {
+  it("does not treat zero or reference-only prices as adoptable current option prices", () => {
+    expect(getPremiumCandidatePrice({
+      environment: "live",
+      fetchedAt: "2026-07-02T00:00:00.000Z",
+      status: "unavailable",
+      classification: "市場外または価格なし / NoMarket",
+      source: "trade/v1/infoprices (existing position UIC)",
+      bid: 0,
+      ask: 0,
+      mid: 0,
+      referencePriceUSD: 21.5,
+      referencePriceLabel: "PriceInfo.LastClose",
+      message: "参考価格のみです。",
+    })).toBeNull();
+  });
+
+  it("uses live bid ask mid or last values when they are positive", () => {
+    expect(getPremiumCandidatePrice({
+      environment: "live",
+      fetchedAt: "2026-07-02T00:00:00.000Z",
+      status: "available",
+      classification: "取得可能",
+      source: "trade/v1/infoprices/list",
+      bid: 21.9,
+      message: "候補価格を取得しました。",
+    })).toBe(21.9);
+  });
+});
+
+describe("long option close annualized return", () => {
+  it("uses fee-included profit divided by entry cost and elapsed holding days", () => {
+    const annualized = calculateLongOptionCloseAnnualizedReturnPercent({
+      profit: 1000,
+      entryCost: 2400 + 2.25,
+      elapsedDays: 10,
+    });
+
+    expect(annualized).toBeCloseTo((1000 / 2402.25) * (365 / 10) * 100, 8);
+  });
+
+  it("uses at least one holding day and returns null when current close profit or entry cost is unavailable", () => {
+    expect(calculateLongOptionCloseAnnualizedReturnPercent({
+      profit: 100,
+      entryCost: 1000,
+      elapsedDays: 0,
+    })).toBeCloseTo(3650, 8);
+    expect(calculateLongOptionCloseAnnualizedReturnPercent({
+      profit: null,
+      entryCost: 1000,
+      elapsedDays: 5,
+    })).toBeNull();
+    expect(calculateLongOptionCloseAnnualizedReturnPercent({
+      profit: 100,
+      entryCost: 0,
+      elapsedDays: 5,
+    })).toBeNull();
   });
 });

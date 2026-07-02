@@ -81,10 +81,10 @@ export function PayoffChart({ simulation, points }: { simulation: TradeSimulatio
         </ResponsiveContainer>
       </div>
       <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
-        <PayoffStat label={summary.maxLossTitle ?? "最大損失"} value={summary.maxLossLabel} tone="red" note={summary.maxLossNote} />
+        <PayoffStat label={summary.maxLossTitle ?? "最大損失"} value={summary.maxLossLabel} tone={summary.hasLongOption ? undefined : "red"} note={summary.maxLossNote} />
         <PayoffStat label="最大利益" value={summary.maxProfitLabel} tone="green" />
         <PayoffStat
-          label="損益分岐点"
+          label={summary.hasLongOption ? "満期損益分岐点（参考）" : "損益分岐点"}
           value={summary.breakevens.length > 0 ? summary.breakevens.map((item) => formatUSD(item.priceUSD)).join(" / ") : "未計算"}
         />
       </div>

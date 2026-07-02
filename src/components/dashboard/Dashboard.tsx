@@ -21,6 +21,10 @@ const statusClassName = {
 
 const endedStatuses = new Set(["closed", "assigned", "expired"]);
 
+function formatSignedUSD(value: number): string {
+  return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
+}
+
 export function getSimulationTickerDisplayLabel(simulation: TradeSimulation): string {
   const direct = simulation.ticker.trim();
   if (direct) return direct.toUpperCase();
@@ -187,7 +191,9 @@ export function Dashboard({
                 !isHistoryRow && !premiumDisplay.hasPremiumInput
                   ? "未入力"
                   : longOptionDisplay
-                    ? premiumDisplay.annualReturnLabel ?? "出口ライン確認"
+                    ? longOptionDisplay.currentCloseAnnualizedReturnPct !== undefined
+                      ? `現在決済 ${longOptionDisplay.currentCloseAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.currentCloseAnnualizedReturnPct)}`
+                      : "現在決済 未計算"
                   : isHistoryRow && primary.netAnnualReturnPct !== undefined
                   ? `${formatPct(primary.annualReturnPct)} / ${formatPct(primary.netAnnualReturnPct)}`
                   : premiumDisplay.annualReturnPct !== undefined
@@ -283,14 +289,17 @@ export function Dashboard({
                     {longOptionDisplay ? (
                       <>
                         <span className="mb-1 block text-[11px] font-bold text-slate-500">{premiumDisplay.denominatorLabel}</span>
-                        <span className="block text-red-700">-{formatUSD(longOptionDisplay.maximumLossUSD)}</span>
+                        <span className="block text-slate-950">-{formatUSD(longOptionDisplay.totalCostUSD)}</span>
                         <span className="block text-xs text-slate-500">
-                          {hasEffectiveFx && Math.abs(longOptionDisplay.maximumLossJPY) > 0.5
-                            ? `参考 -${formatJPY(longOptionDisplay.maximumLossJPY)}`
+                          {hasEffectiveFx && Math.abs(longOptionDisplay.totalCostJPY) > 0.5
+                            ? `参考 -${formatJPY(longOptionDisplay.totalCostJPY)}`
                             : "参考JPY未計算"}
                         </span>
                         <span className="mt-1 block text-[11px] font-semibold text-slate-500">
-                          損益分岐点 {formatUSD(longOptionDisplay.breakevenUSD)}
+                          支払済みリスク上限 {formatUSD(longOptionDisplay.maximumLossUSD)}
+                        </span>
+                        <span className="mt-1 block text-[11px] font-semibold text-slate-500">
+                          満期損益分岐点（参考） {formatUSD(longOptionDisplay.breakevenUSD)}
                         </span>
                       </>
                     ) : primary.currency === "USD" ? (
@@ -316,10 +325,18 @@ export function Dashboard({
                     {longOptionDisplay ? (
                       <span className="mt-1 block rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-indigo-900">
                         <span className="block">
-                          {longOptionDisplay.currentPriceUSD !== undefined ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)}` : "現在株価未取得"} / 権利行使価格 {formatUSD(longOptionDisplay.strikeUSD)}
+                          現在オプション価格 {longOptionDisplay.closePriceUSD !== undefined ? formatUSD(longOptionDisplay.closePriceUSD) : "未入力"}
                         </span>
-                        <span className="block">満期まで {premiumDisplay.dte}日</span>
-                        <span className="block">約定後は反対売買判断で利確/損切りラインを確認</span>
+                        <span className="block">
+                          評価損益 {longOptionDisplay.estimatedProfitUSD !== undefined ? formatSignedUSD(longOptionDisplay.estimatedProfitUSD) : "未計算"}
+                          {longOptionDisplay.profitPct !== undefined ? ` / ${longOptionDisplay.profitPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.profitPct)}` : ""}
+                        </span>
+                        <span className="block">
+                          利確/損切りライン {formatUSD(longOptionDisplay.profitTargetPriceUSD)} / {formatUSD(longOptionDisplay.stopLossPriceUSD)}
+                        </span>
+                        <span className="block">
+                          {longOptionDisplay.currentPriceUSD !== undefined ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)}` : "現在株価未取得"} / 残存 {longOptionDisplay.remainingDays}日
+                        </span>
                       </span>
                     ) : null}
                     {isHistoryRow ? <span className="mt-1 block text-[11px] font-semibold text-slate-500">税前 / 税後</span> : null}

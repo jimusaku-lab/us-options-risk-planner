@@ -915,7 +915,7 @@ async function getContractOptionSpace({ root, clientKey, expiry }) {
 }
 
 async function getInfoPriceForOption({ accountKey, uic, assetType }) {
-  return saxoGet("trade/v1/infoprices", {
+  const single = await saxoGet("trade/v1/infoprices", {
     AccountKey: accountKey,
     Uic: uic,
     AssetType: assetType,
@@ -923,6 +923,68 @@ async function getInfoPriceForOption({ accountKey, uic, assetType }) {
     FieldGroups: "Quote,PriceInfo,PriceInfoDetails,DisplayAndFormat,Greeks",
     ToOpenClose: "ToClose",
   });
+  if (hasCurrentOptionQuotePrice(single)) {
+    return attachInfoPriceMeta(single, {
+      selectedSource: "trade/v1/infoprices",
+      attemptedSources: ["trade/v1/infoprices"],
+    });
+  }
+
+  const attemptedSources = ["trade/v1/infoprices", "trade/v1/infoprices/list"];
+  try {
+    const listPayload = await saxoGet("trade/v1/infoprices/list", {
+      AccountKey: accountKey,
+      Uics: uic,
+      AssetType: assetType,
+      Amount: 1,
+      FieldGroups: "Quote,PriceInfo,PriceInfoDetails,DisplayAndFormat,Greeks",
+      ToOpenClose: "ToClose",
+    });
+    const listPrice = extractInfoPriceListEntry(listPayload, uic) ?? listPayload;
+    if (hasCurrentOptionQuotePrice(listPrice)) {
+      return attachInfoPriceMeta(listPrice, {
+        selectedSource: "trade/v1/infoprices/list",
+        attemptedSources,
+        fallbackPayload: single,
+      });
+    }
+    return attachInfoPriceMeta(single, {
+      selectedSource: "trade/v1/infoprices",
+      attemptedSources,
+      fallbackPayload: listPrice,
+      fallbackHadNoPrice: true,
+    });
+  } catch (error) {
+    return attachInfoPriceMeta(single, {
+      selectedSource: "trade/v1/infoprices",
+      attemptedSources,
+      fallbackError: error instanceof Error ? error.message : "infoprices/list取得失敗",
+    });
+  }
+}
+
+function attachInfoPriceMeta(price, meta) {
+  return {
+    ...price,
+    __infoPriceMeta: meta,
+  };
+}
+
+function extractInfoPriceListEntry(payload, uic) {
+  const candidates = [
+    ...(Array.isArray(payload?.Data) ? payload.Data : []),
+    ...(Array.isArray(payload?.InfoPrices) ? payload.InfoPrices : []),
+    ...(Array.isArray(payload?.Prices) ? payload.Prices : []),
+    ...(Array.isArray(payload) ? payload : []),
+  ];
+  if (candidates.length === 0) return payload?.Quote ? payload : undefined;
+  const numericUic = Number(uic);
+  return candidates.find((item) => firstNumber(item, ["Uic", "UIC"]) === numericUic) ?? candidates[0];
+}
+
+function hasCurrentOptionQuotePrice(price) {
+  const quote = extractOptionPremiumQuote(price);
+  return [quote.bid, quote.ask, quote.mid, quote.last].some((value) => value !== undefined && Number.isFinite(value) && value > 0);
 }
 
 function findOptionContractInSpace(optionSpace, target) {
@@ -961,18 +1023,19 @@ function walkOptionSpace(value, inherited, visit) {
 }
 
 function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, accountKey, fetchedAt, source, root, contract, price, messageSourceLabel }) {
-  const quote = price.Quote ?? {};
-  const priceInfoDetails = price.PriceInfoDetails ?? {};
-  const bid = firstNumber(quote, ["Bid"]);
-  const ask = firstNumber(quote, ["Ask"]);
-  const mid = firstNumber(quote, ["Mid"]);
-  const last = firstNumber(priceInfoDetails, ["LastTraded", "Last", "Close"]) ?? firstNumber(price.PriceInfo ?? {}, ["Last", "Close"]);
+  const quoteSummary = extractOptionPremiumQuote(price);
+  const bid = quoteSummary.bid;
+  const ask = quoteSummary.ask;
+  const mid = quoteSummary.mid;
+  const last = quoteSummary.last;
   const hasPrice = [bid, ask, mid, last].some((value) => value !== undefined && Number.isFinite(value));
+  const diagnostics = buildOptionPremiumQuoteDiagnostics(price);
+  const classification = hasPrice ? "取得可能" : diagnostics.reasonLabel ?? "Saxoから現在売却候補価格が返りません";
   return {
     environment: getEnvironment(),
     fetchedAt,
     status: hasPrice ? "available" : "unavailable",
-    classification: hasPrice ? "取得可能" : "Saxo価格候補を取得できません",
+    classification,
     source,
     symbol,
     expiry,
@@ -988,10 +1051,112 @@ function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
     ask,
     last,
     mid,
+    referencePriceUSD: quoteSummary.referencePrice,
+    referencePriceLabel: quoteSummary.referencePriceLabel,
+    quoteDiagnostics: diagnostics,
+    manualInputGuidance: hasPrice ? undefined : getManualPremiumInputGuidance(),
     message: hasPrice
       ? `${messageSourceLabel ?? "InfoPrice"}から候補価格を取得しました。自動入力はしません。`
-      : `該当オプションUicは見つかりましたが、InfoPriceにbid/ask/last/midがありません。未取得値は0扱いしません。`,
+      : [
+          "Saxoから現在売却候補価格が返りません。",
+          diagnostics.details?.length ? `理由: ${diagnostics.details.join(" / ")}` : undefined,
+          quoteSummary.referencePrice !== undefined ? `参考価格: ${formatServerUsd(quoteSummary.referencePrice)}（${quoteSummary.referencePriceLabel ?? "参考"}）。現在価格として自動入力しません。` : undefined,
+          getManualPremiumInputGuidance(),
+        ].filter(Boolean).join(" "),
   };
+}
+
+function extractOptionPremiumQuote(price) {
+  const quote = price?.Quote ?? {};
+  const priceInfo = price?.PriceInfo ?? {};
+  const priceInfoDetails = price?.PriceInfoDetails ?? {};
+  const bid = firstPositiveNumber(quote, ["Bid"]);
+  const ask = firstPositiveNumber(quote, ["Ask"]);
+  const mid = firstPositiveNumber(quote, ["Mid"]);
+  const last =
+    firstPositiveNumber(priceInfoDetails, ["LastTradedPrice", "LastTraded"]) ??
+    firstPositiveNumber(priceInfo, ["LastTradedPrice", "LastTraded"]) ??
+    firstPositiveNumber(quote, ["LastTradedPrice", "LastTraded"]);
+  const referenceMatch =
+    firstPositiveNumberMatch(priceInfoDetails, ["LastClose", "Close"]) ??
+    firstPositiveNumberMatch(priceInfo, ["LastClose", "Close"]) ??
+    firstPositiveNumberMatch(quote, ["LastClose", "Close"]);
+  return {
+    bid,
+    ask,
+    mid,
+    last,
+    referencePrice: referenceMatch?.value,
+    referencePriceLabel: referenceMatch?.matchedName,
+  };
+}
+
+function buildOptionPremiumQuoteDiagnostics(price) {
+  const quote = price?.Quote ?? {};
+  const meta = price?.__infoPriceMeta ?? {};
+  const primaryDiagnostics = collectInfoPriceDiagnostics(price);
+  const fallbackDiagnostics = meta.fallbackPayload ? collectInfoPriceDiagnostics(meta.fallbackPayload) : {};
+  const errorCode = primaryDiagnostics.errorCode ?? fallbackDiagnostics.errorCode;
+  const priceTypeBid = primaryDiagnostics.priceTypeBid ?? fallbackDiagnostics.priceTypeBid;
+  const priceTypeAsk = primaryDiagnostics.priceTypeAsk ?? fallbackDiagnostics.priceTypeAsk;
+  const delayedByMinutes = primaryDiagnostics.delayedByMinutes ?? fallbackDiagnostics.delayedByMinutes;
+  const isMarketOpen = primaryDiagnostics.isMarketOpen ?? fallbackDiagnostics.isMarketOpen;
+  const calculationReliability = primaryDiagnostics.calculationReliability ?? fallbackDiagnostics.calculationReliability;
+  const reasonLabel = classifyInfoPriceNoQuoteReason({ errorCode, priceTypeBid, priceTypeAsk, isMarketOpen, fallbackError: meta.fallbackError });
+  const details = [
+    reasonLabel,
+    errorCode ? `ErrorCode=${errorCode}` : undefined,
+    priceTypeBid ? `PriceTypeBid=${priceTypeBid}` : undefined,
+    priceTypeAsk ? `PriceTypeAsk=${priceTypeAsk}` : undefined,
+    delayedByMinutes !== undefined ? `DelayedByMinutes=${delayedByMinutes}` : undefined,
+    isMarketOpen !== undefined ? `IsMarketOpen=${isMarketOpen}` : undefined,
+    calculationReliability ? `CalculationReliability=${calculationReliability}` : undefined,
+    meta.fallbackHadNoPrice ? "infoprices/listにも現在価格なし" : undefined,
+    meta.fallbackError ? `infoprices/list取得失敗=${meta.fallbackError}` : undefined,
+  ].filter(Boolean);
+  return {
+    reasonLabel,
+    errorCode,
+    priceTypeBid,
+    priceTypeAsk,
+    delayedByMinutes,
+    isMarketOpen,
+    calculationReliability,
+    selectedSource: meta.selectedSource,
+    attemptedSources: meta.attemptedSources,
+    details,
+    rawQuoteKeys: Object.keys(quote).slice(0, 30),
+  };
+}
+
+function collectInfoPriceDiagnostics(price) {
+  const quote = price?.Quote ?? {};
+  return {
+    errorCode: firstString(price, ["ErrorCode"]) ?? firstString(quote, ["ErrorCode"]),
+    priceTypeBid: firstString(price, ["PriceTypeBid"]) ?? firstString(quote, ["PriceTypeBid"]),
+    priceTypeAsk: firstString(price, ["PriceTypeAsk"]) ?? firstString(quote, ["PriceTypeAsk"]),
+    delayedByMinutes: firstNumber(price, ["DelayedByMinutes"]) ?? firstNumber(quote, ["DelayedByMinutes"]),
+    isMarketOpen: firstBoolean(price, ["IsMarketOpen"]),
+    calculationReliability: firstString(price, ["CalculationReliability"]),
+  };
+}
+
+function classifyInfoPriceNoQuoteReason({ errorCode, priceTypeBid, priceTypeAsk, isMarketOpen, fallbackError }) {
+  const text = [errorCode, priceTypeBid, priceTypeAsk, fallbackError].filter(Boolean).join(" ");
+  if (/NoAccess/i.test(text)) return "価格フィード権限なし / NoAccess";
+  if (/NoMarket/i.test(text) || isMarketOpen === false) return "市場外または価格なし / NoMarket";
+  if (/Pending/i.test(text)) return "価格待ち / Pending";
+  if (/429|RateLimitExceeded|rate.?limit|レート制限/i.test(text)) return "Saxo APIレート制限";
+  if (/OldIndicative/i.test(text)) return "参考価格のみ / OldIndicative";
+  return "Saxoから現在売却候補価格が返りません";
+}
+
+function getManualPremiumInputGuidance() {
+  return "Saxo決済チケットに表示されるBid、または実際に使う売却指値を「現在オプション価格」に手入力してください。";
+}
+
+function formatServerUsd(value) {
+  return `$${Number(value).toFixed(2)}`;
 }
 
 function createUnavailableOptionCandidate({
@@ -1524,6 +1689,11 @@ function firstNumber(source, names) {
   return undefined;
 }
 
+function firstPositiveNumber(source, names) {
+  const value = firstNumber(source, names);
+  return value !== undefined && value > 0 ? value : undefined;
+}
+
 function firstNumberMatch(source, names, prefix = "") {
   if (!source || typeof source !== "object") return undefined;
   for (const name of names) {
@@ -1542,6 +1712,11 @@ function firstNumberMatch(source, names, prefix = "") {
     }
   }
   return undefined;
+}
+
+function firstPositiveNumberMatch(source, names) {
+  const match = firstNumberMatch(source, names);
+  return match && match.value > 0 ? match : undefined;
 }
 
 function collectRawFieldNames(source, prefix = "", output = []) {
@@ -1575,6 +1750,22 @@ function firstString(source, names) {
   for (const value of Object.values(source)) {
     if (value && typeof value === "object") {
       const nested = firstString(value, names);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+}
+
+function firstBoolean(source, names) {
+  if (!source || typeof source !== "object") return undefined;
+  for (const name of names) {
+    const value = source[name];
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string" && /^(true|false)$/i.test(value.trim())) return value.trim().toLowerCase() === "true";
+  }
+  for (const value of Object.values(source)) {
+    if (value && typeof value === "object") {
+      const nested = firstBoolean(value, names);
       if (nested !== undefined) return nested;
     }
   }

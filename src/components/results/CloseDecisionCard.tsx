@@ -530,6 +530,32 @@ function ApiPremiumCandidatePanel({
             <div className="font-bold text-slate-800">{candidate.classification}</div>
             <div className="mt-1 leading-5 text-slate-600">{candidate.message}</div>
             <div className="mt-1 text-slate-500">取得元: {candidate.source}</div>
+            {candidate.quoteDiagnostics ? (
+              <div className="mt-2 grid gap-1 text-slate-600 sm:grid-cols-2">
+                <MiniRow label="価格理由" value={candidate.quoteDiagnostics.reasonLabel ?? "未取得"} />
+                <MiniRow label="InfoPrice経路" value={candidate.quoteDiagnostics.selectedSource ?? "未取得"} />
+                <MiniRow label="Bid種別" value={candidate.quoteDiagnostics.priceTypeBid ?? "未取得"} />
+                <MiniRow label="Ask種別" value={candidate.quoteDiagnostics.priceTypeAsk ?? "未取得"} />
+                <MiniRow label="ErrorCode" value={candidate.quoteDiagnostics.errorCode ?? "なし"} />
+                <MiniRow
+                  label="市場状態"
+                  value={candidate.quoteDiagnostics.isMarketOpen === undefined ? "未取得" : candidate.quoteDiagnostics.isMarketOpen ? "Open" : "Closed"}
+                />
+              </div>
+            ) : null}
+            {candidate.quoteDiagnostics?.attemptedSources?.length ? (
+              <div className="mt-1 text-slate-500">試行: {candidate.quoteDiagnostics.attemptedSources.join(" -> ")}</div>
+            ) : null}
+            {candidate.referencePriceUSD !== undefined ? (
+              <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
+                参考価格: {formatUSD(candidate.referencePriceUSD)}（{candidate.referencePriceLabel ?? "参考"}）。現在オプション価格へは自動入力しません。
+              </div>
+            ) : null}
+            {candidatePriceUSD === null && candidate.manualInputGuidance ? (
+              <div className="mt-2 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 font-semibold text-indigo-900">
+                {candidate.manualInputGuidance}
+              </div>
+            ) : null}
           </div>
           {candidatePriceUSD !== null ? (
             <button
@@ -627,7 +653,7 @@ function SaxoExitOrderStatus({
   );
 }
 
-function getPremiumCandidatePrice(candidate: SaxoOptionPremiumCandidate | null): number | null {
+export function getPremiumCandidatePrice(candidate: SaxoOptionPremiumCandidate | null): number | null {
   if (!candidate) return null;
   const price = candidate.mid ?? candidate.last ?? candidate.ask ?? candidate.bid;
   return price !== undefined && Number.isFinite(price) && price > 0 ? price : null;
@@ -663,6 +689,13 @@ function LongOptionCloseCard({
   const estimatedProfitUSD = currentOptionValueUSD === null ? null : currentOptionValueUSD - paidPremiumUSD - openCommissionUSD - closeCommissionUSD;
   const estimatedProfitJPY = estimatedProfitUSD === null ? null : estimatedProfitUSD * fxRateJPY;
   const profitPct = estimatedProfitUSD === null || paidPremiumUSD <= 0 ? null : (estimatedProfitUSD / paidPremiumUSD) * 100;
+  const elapsedDays = calculateElapsedDaysSinceEntry(simulation.entryDate);
+  const entryCostUSD = paidPremiumUSD + openCommissionUSD;
+  const currentCloseAnnualizedReturnPct = calculateLongOptionCloseAnnualizedReturnPercent({
+    profit: estimatedProfitUSD,
+    entryCost: entryCostUSD,
+    elapsedDays,
+  });
   const profitTargetPriceUSD = leg.closePlan?.profitTargetPriceUSD ?? roundOptionPrice(leg.premiumUSD * 1.3);
   const stopLossPriceUSD = leg.closePlan?.stopLossPriceUSD ?? roundOptionPrice(leg.premiumUSD * 0.7);
   const hasUnderlyingPrice = Number.isFinite(simulation.currentPriceUSD) && simulation.currentPriceUSD > 0;
@@ -787,6 +820,15 @@ function LongOptionCloseCard({
           tone={profitPct === null ? undefined : profitPct >= 0 ? "green" : "red"}
         />
         <Row
+          label="現在決済ベース年率"
+          value={
+            currentCloseAnnualizedReturnPct === null
+              ? "未計算"
+              : `${currentCloseAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(currentCloseAnnualizedReturnPct)}（保有${elapsedDays}日 / 建玉時支払額 ${formatUSD(entryCostUSD)} / 手数料込み）`
+          }
+          tone={currentCloseAnnualizedReturnPct === null ? undefined : currentCloseAnnualizedReturnPct >= 0 ? "green" : "red"}
+        />
+        <Row
           label="利確/損切りライン"
           value={`${formatUSD(profitTargetPriceUSD)} / ${formatUSD(stopLossPriceUSD)}${
             exitOrderLineCandidate.profitTargetPriceUSD || exitOrderLineCandidate.stopLossPriceUSD
@@ -840,6 +882,21 @@ function calculateElapsedDaysSinceEntry(entryDate: string, now = new Date()): nu
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const entryDay = new Date(entry.getFullYear(), entry.getMonth(), entry.getDate());
   return Math.max(1, Math.ceil((today.getTime() - entryDay.getTime()) / 86_400_000));
+}
+
+export function calculateLongOptionCloseAnnualizedReturnPercent({
+  profit,
+  entryCost,
+  elapsedDays,
+}: {
+  profit: number | null;
+  entryCost: number;
+  elapsedDays: number;
+}): number | null {
+  if (profit === null || !Number.isFinite(profit)) return null;
+  if (!Number.isFinite(entryCost) || entryCost <= 0) return null;
+  const safeElapsedDays = Math.max(1, elapsedDays);
+  return (profit / entryCost) * (365 / safeElapsedDays) * 100;
 }
 
 function calculateCloseAnnualReturnPercent({

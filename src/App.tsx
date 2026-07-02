@@ -1804,6 +1804,7 @@ export default function App() {
                       ? `N口座${selectedCoveredCallCoverage.coveredShares}株を参照しています。必要株数 ${selectedCoveredCallCoverage.requiredShares}株。`
                       : undefined
                   }
+                  accountInputs={accountInputs}
                 />
               </CollapsibleSection>
             ) : null}

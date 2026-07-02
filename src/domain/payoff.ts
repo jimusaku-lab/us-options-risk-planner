@@ -128,6 +128,8 @@ export function calculatePayoffSummary(simulation: TradeSimulation, displayMode:
         ? putSellIsTheoretical
           ? "理論最大損失（株価0ドル想定）"
           : "実用レンジ下限の評価損"
+        : hasLongOption
+          ? "支払済みリスク上限"
         : undefined,
     maxLossNote: coveredCallSummary || isPracticalPutSell
       ? coveredCallIsTheoretical
@@ -137,7 +139,9 @@ export function calculatePayoffSummary(simulation: TradeSimulation, displayMode:
           : isPracticalPutSell
             ? "初期表示は現在株価・権利行使価格・損益分岐点を中心にした実用レンジです。株価0ドルまで含めた理論値は理論最大レンジで確認できます。"
             : "初期表示は短期カバードコール判断に使う実用レンジです。株価0ドルまで含めた理論上の最大評価損は、理論最大レンジで確認できます。"
-      : undefined,
+      : hasLongOption
+        ? "支払プレミアムと建玉時手数料の合計です。満期まで放置して無価値になった場合の理論上限で、通常運用では反対売買判断で管理します。"
+        : undefined,
     maxProfitLabel: hasLongCall ? "無制限（株価上昇側）" : formatPayoffJPY(maxPnl),
     displayModeLabel: coveredCallSummary || isPracticalPutSell ? coveredCallDisplayLabel : undefined,
     displayModeOptions: coveredCallSummary || isPracticalPutSell ? ["実用レンジ", "理論最大レンジ", "オプション単体", "機会損益"] : undefined,
