@@ -505,6 +505,8 @@ function ApiPremiumCandidatePanel({
   onLoad: () => void;
   onAdopt: (price: number) => void;
 }) {
+  const noAccess = isSaxoPriceFeedNoAccess(candidate);
+  const manualInputGuidance = getPremiumCandidateManualInputGuidance(candidate);
   return (
     <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -521,14 +523,25 @@ function ApiPremiumCandidatePanel({
       {candidate ? (
         <>
           <dl className="mt-2 grid gap-1 sm:grid-cols-4">
-            <MiniRow label="Bid" value={formatOptionalUSD(candidate.bid)} />
-            <MiniRow label="Ask" value={formatOptionalUSD(candidate.ask)} />
-            <MiniRow label="Last" value={formatOptionalUSD(candidate.last)} />
-            <MiniRow label="Mid" value={formatOptionalUSD(candidate.mid)} />
+            <MiniRow label="Bid" value={noAccess ? "未取得" : formatOptionalUSD(candidate.bid)} />
+            <MiniRow label="Ask" value={noAccess ? "未取得" : formatOptionalUSD(candidate.ask)} />
+            <MiniRow label="Last" value={noAccess ? "未取得" : formatOptionalUSD(candidate.last)} />
+            <MiniRow label="Mid" value={noAccess ? "未取得" : formatOptionalUSD(candidate.mid)} />
           </dl>
-          <div className="mt-2 rounded border border-slate-200 bg-white px-2 py-1">
-            <div className="font-bold text-slate-800">{candidate.classification}</div>
-            <div className="mt-1 leading-5 text-slate-600">{candidate.message}</div>
+          <div className={`mt-2 rounded border bg-white px-2 py-1 ${noAccess ? "border-indigo-300" : "border-slate-200"}`}>
+            <div className={`font-bold ${noAccess ? "text-indigo-900" : "text-slate-800"}`}>
+              {noAccess ? "Saxo API価格フィード権限なし" : candidate.classification}
+            </div>
+            <div className="mt-1 leading-5 text-slate-600">
+              {noAccess
+                ? "Saxo APIではこのオプションのBid/Ask/Last/Midを取得できません。市場外や取得失敗ではなく、価格フィード権限の問題として扱います。"
+                : candidate.message}
+            </div>
+            {noAccess ? (
+              <div className="mt-2 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 font-semibold text-indigo-900">
+                {manualInputGuidance}
+              </div>
+            ) : null}
             <div className="mt-1 text-slate-500">取得元: {candidate.source}</div>
             {candidate.quoteDiagnostics ? (
               <div className="mt-2 grid gap-1 text-slate-600 sm:grid-cols-2">
@@ -546,14 +559,14 @@ function ApiPremiumCandidatePanel({
             {candidate.quoteDiagnostics?.attemptedSources?.length ? (
               <div className="mt-1 text-slate-500">試行: {candidate.quoteDiagnostics.attemptedSources.join(" -> ")}</div>
             ) : null}
-            {candidate.referencePriceUSD !== undefined ? (
+            {!noAccess && candidate.referencePriceUSD !== undefined ? (
               <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
                 参考価格: {formatUSD(candidate.referencePriceUSD)}（{candidate.referencePriceLabel ?? "参考"}）。現在オプション価格へは自動入力しません。
               </div>
             ) : null}
-            {candidatePriceUSD === null && candidate.manualInputGuidance ? (
+            {!noAccess && candidatePriceUSD === null && manualInputGuidance ? (
               <div className="mt-2 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 font-semibold text-indigo-900">
-                {candidate.manualInputGuidance}
+                {manualInputGuidance}
               </div>
             ) : null}
           </div>
@@ -655,8 +668,31 @@ function SaxoExitOrderStatus({
 
 export function getPremiumCandidatePrice(candidate: SaxoOptionPremiumCandidate | null): number | null {
   if (!candidate) return null;
+  if (isSaxoPriceFeedNoAccess(candidate)) return null;
   const price = candidate.mid ?? candidate.last ?? candidate.ask ?? candidate.bid;
   return price !== undefined && Number.isFinite(price) && price > 0 ? price : null;
+}
+
+export function isSaxoPriceFeedNoAccess(candidate: SaxoOptionPremiumCandidate | null): boolean {
+  if (!candidate) return false;
+  const diagnostics = candidate.quoteDiagnostics;
+  const text = [
+    candidate.classification,
+    candidate.message,
+    diagnostics?.reasonLabel,
+    diagnostics?.errorCode,
+    diagnostics?.priceTypeBid,
+    diagnostics?.priceTypeAsk,
+    ...(diagnostics?.details ?? []),
+  ].filter(Boolean).join(" ");
+  return /NoAccess|価格フィード権限なし/i.test(text);
+}
+
+export function getPremiumCandidateManualInputGuidance(candidate: SaxoOptionPremiumCandidate | null): string | undefined {
+  if (isSaxoPriceFeedNoAccess(candidate)) {
+    return "SaxoTraderGOのBid、または実際に使う売却指値を「現在オプション価格」に手入力してください。既存の手入力値は自動で上書きしません。";
+  }
+  return candidate?.manualInputGuidance;
 }
 
 function LongOptionCloseCard({

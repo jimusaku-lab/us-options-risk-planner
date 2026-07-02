@@ -4,8 +4,10 @@ import type { OptionLeg, TradeSimulation } from "@/types/domain";
 import {
   buildSaxoOptionPremiumCandidateInput,
   calculateLongOptionCloseAnnualizedReturnPercent,
+  getPremiumCandidateManualInputGuidance,
   getLongOptionExitOrderLineCandidate,
   getPremiumCandidatePrice,
+  isSaxoPriceFeedNoAccess,
 } from "./CloseDecisionCard";
 
 function createOrder(overrides: Partial<SaxoApiOrderSnapshot>): SaxoApiOrderSnapshot {
@@ -115,6 +117,32 @@ describe("Saxo premium candidate price selection", () => {
       bid: 21.9,
       message: "候補価格を取得しました。",
     })).toBe(21.9);
+  });
+
+  it("treats NoAccess as price feed permission missing and never adopts quote fields", () => {
+    const candidate = {
+      environment: "live" as const,
+      fetchedAt: "2026-07-02T00:00:00.000Z",
+      status: "unavailable" as const,
+      classification: "Saxo API価格フィード権限なし",
+      source: "trade/v1/infoprices/list",
+      bid: 22,
+      ask: 22.5,
+      last: 21.75,
+      mid: 22.25,
+      message: "Saxo API価格フィード権限なし。",
+      quoteDiagnostics: {
+        reasonLabel: "Saxo API価格フィード権限なし",
+        priceTypeBid: "NoAccess",
+        priceTypeAsk: "NoAccess",
+      },
+    };
+
+    expect(isSaxoPriceFeedNoAccess(candidate)).toBe(true);
+    expect(getPremiumCandidatePrice(candidate)).toBeNull();
+    expect(getPremiumCandidateManualInputGuidance(candidate)).toBe(
+      "SaxoTraderGOのBid、または実際に使う売却指値を「現在オプション価格」に手入力してください。既存の手入力値は自動で上書きしません。",
+    );
   });
 });
 

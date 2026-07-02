@@ -1030,7 +1030,9 @@ function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
   const last = quoteSummary.last;
   const hasPrice = [bid, ask, mid, last].some((value) => value !== undefined && Number.isFinite(value));
   const diagnostics = buildOptionPremiumQuoteDiagnostics(price);
-  const classification = hasPrice ? "取得可能" : diagnostics.reasonLabel ?? "Saxoから現在売却候補価格が返りません";
+  const noAccess = isInfoPriceNoAccess(diagnostics);
+  const classification = hasPrice ? "取得可能" : noAccess ? "Saxo API価格フィード権限なし" : diagnostics.reasonLabel ?? "Saxoから現在売却候補価格が返りません";
+  const manualInputGuidance = getManualPremiumInputGuidance();
   return {
     environment: getEnvironment(),
     fetchedAt,
@@ -1054,14 +1056,16 @@ function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
     referencePriceUSD: quoteSummary.referencePrice,
     referencePriceLabel: quoteSummary.referencePriceLabel,
     quoteDiagnostics: diagnostics,
-    manualInputGuidance: hasPrice ? undefined : getManualPremiumInputGuidance(),
+    manualInputGuidance: hasPrice ? undefined : manualInputGuidance,
     message: hasPrice
       ? `${messageSourceLabel ?? "InfoPrice"}から候補価格を取得しました。自動入力はしません。`
+      : noAccess
+        ? `Saxo API価格フィード権限なし。${manualInputGuidance}`
       : [
           "Saxoから現在売却候補価格が返りません。",
           diagnostics.details?.length ? `理由: ${diagnostics.details.join(" / ")}` : undefined,
           quoteSummary.referencePrice !== undefined ? `参考価格: ${formatServerUsd(quoteSummary.referencePrice)}（${quoteSummary.referencePriceLabel ?? "参考"}）。現在価格として自動入力しません。` : undefined,
-          getManualPremiumInputGuidance(),
+          manualInputGuidance,
         ].filter(Boolean).join(" "),
   };
 }
@@ -1143,7 +1147,7 @@ function collectInfoPriceDiagnostics(price) {
 
 function classifyInfoPriceNoQuoteReason({ errorCode, priceTypeBid, priceTypeAsk, isMarketOpen, fallbackError }) {
   const text = [errorCode, priceTypeBid, priceTypeAsk, fallbackError].filter(Boolean).join(" ");
-  if (/NoAccess/i.test(text)) return "価格フィード権限なし / NoAccess";
+  if (/NoAccess/i.test(text)) return "Saxo API価格フィード権限なし";
   if (/NoMarket/i.test(text) || isMarketOpen === false) return "市場外または価格なし / NoMarket";
   if (/Pending/i.test(text)) return "価格待ち / Pending";
   if (/429|RateLimitExceeded|rate.?limit|レート制限/i.test(text)) return "Saxo APIレート制限";
@@ -1151,8 +1155,19 @@ function classifyInfoPriceNoQuoteReason({ errorCode, priceTypeBid, priceTypeAsk,
   return "Saxoから現在売却候補価格が返りません";
 }
 
+function isInfoPriceNoAccess(diagnostics) {
+  const text = [
+    diagnostics?.reasonLabel,
+    diagnostics?.errorCode,
+    diagnostics?.priceTypeBid,
+    diagnostics?.priceTypeAsk,
+    ...(diagnostics?.details ?? []),
+  ].filter(Boolean).join(" ");
+  return /NoAccess|価格フィード権限なし/i.test(text);
+}
+
 function getManualPremiumInputGuidance() {
-  return "Saxo決済チケットに表示されるBid、または実際に使う売却指値を「現在オプション価格」に手入力してください。";
+  return "SaxoTraderGOのBid、または実際に使う売却指値を「現在オプション価格」に手入力してください。既存の手入力値は自動で上書きしません。";
 }
 
 function formatServerUsd(value) {
