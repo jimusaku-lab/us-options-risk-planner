@@ -1686,52 +1686,39 @@ export default function App() {
               </div>
             ) : null}
             {isEditorOpen ? (
-              <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div className="flex justify-end px-3 py-2">
-                  <button
-                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                    onClick={() => setIsEditorOpen(false)}
-                  >
-                    <ChevronUp size={16} />
-                    閉じる
-                  </button>
-                </div>
-                <div className="border-t border-slate-200 p-3">
-                  <SimulationEditor
-                    simulation={selected}
-                    workspace={activeWorkspace}
-                    canUseExternalQuotes={canUseExternalQuotes}
-                    externalQuoteModeLabel={externalQuoteModeLabel}
-                    onChange={upsertSimulation}
-                    saxoHistoryCandidates={saxoHistoryCandidates}
-                    onDiscardDraft={(id) => {
-                      deleteSimulation(id);
-                      setIsEditorOpen(false);
-                      setQuoteStatus("API取込下書きを破棄しました。正式建玉や口座残高は変更していません。");
-                    }}
-                    focusRequest={editorFocusRequest}
-                    onCloseEditor={() => setIsEditorOpen(false)}
-                    stockTransfer={selectedStockTransfer}
-                    onStockAcquisitionCompleteClose={() => {
-                      setIsEditorOpen(false);
-                      if (selectedStockTransfer) {
-                        openWheelManagement(selected.ticker);
-                        setQuoteStatus("P→N株式移管は記録済みです。現在はN口座で株式保有中です。N口座ホイールを確認し、JSONバックアップを保存してください。");
-                      }
-                    }}
-                    onOpenPerformance={() => {
-                      setIsEditorOpen(false);
-                      setActiveView("performance");
-                    }}
-                    onReturnToSaxoHistory={returnToSaxoHistoryCandidates}
-                    onRecreateSaxoHistoryCandidate={recreateSaxoHistoryCandidate}
-                    onCloseDecisionAction={(anchorId) => {
-                      setIsEditorOpen(false);
-                      setCloseDecisionFocusRequest({ anchorId, requestId: Date.now() });
-                    }}
-                  />
-                </div>
-              </section>
+              <SimulationEditor
+                simulation={selected}
+                workspace={activeWorkspace}
+                canUseExternalQuotes={canUseExternalQuotes}
+                externalQuoteModeLabel={externalQuoteModeLabel}
+                onChange={upsertSimulation}
+                saxoHistoryCandidates={saxoHistoryCandidates}
+                onDiscardDraft={(id) => {
+                  deleteSimulation(id);
+                  setIsEditorOpen(false);
+                  setQuoteStatus("API取込下書きを破棄しました。正式建玉や口座残高は変更していません。");
+                }}
+                focusRequest={editorFocusRequest}
+                onCloseEditor={() => setIsEditorOpen(false)}
+                stockTransfer={selectedStockTransfer}
+                onStockAcquisitionCompleteClose={() => {
+                  setIsEditorOpen(false);
+                  if (selectedStockTransfer) {
+                    openWheelManagement(selected.ticker);
+                    setQuoteStatus("P→N株式移管は記録済みです。現在はN口座で株式保有中です。N口座ホイールを確認し、JSONバックアップを保存してください。");
+                  }
+                }}
+                onOpenPerformance={() => {
+                  setIsEditorOpen(false);
+                  setActiveView("performance");
+                }}
+                onReturnToSaxoHistory={returnToSaxoHistoryCandidates}
+                onRecreateSaxoHistoryCandidate={recreateSaxoHistoryCandidate}
+                onCloseDecisionAction={(anchorId) => {
+                  setIsEditorOpen(false);
+                  setCloseDecisionFocusRequest({ anchorId, requestId: Date.now() });
+                }}
+              />
             ) : null}
             <CollapsibleSection
               title={collapseSaxoPanel ? "Saxo API詳細" : undefined}

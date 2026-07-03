@@ -220,7 +220,7 @@ export function EntryRationaleJournalPanel({
 
   return (
     <section
-      className="rounded-lg border border-teal-200 bg-white p-3 shadow-sm"
+      className={title ? "rounded-lg border border-teal-200 bg-white p-3 shadow-sm" : ""}
       onDrop={handleDrop}
       onDragOver={(event) => event.preventDefault()}
       onPaste={handlePaste}
@@ -239,7 +239,7 @@ export function EntryRationaleJournalPanel({
         </div>
       ) : null}
 
-      <div className="mt-4">
+      <div className={title || candidateReason ? "mt-3" : ""}>
         <TextField
           label="エントリー理由"
           value={journal.entryReason}
@@ -250,21 +250,21 @@ export function EntryRationaleJournalPanel({
         />
       </div>
 
-      <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
-        <div className="text-sm font-bold text-slate-900">チャート画像</div>
+      <div className="mt-3 border-t border-slate-200 pt-2">
+        <div className="text-xs font-bold text-slate-700">チャート画像</div>
         {journal.chartEvidence.length > 0 ? (
-          <div className="mt-2 grid gap-3 lg:grid-cols-2">
+          <div className="mt-1 grid gap-2 lg:grid-cols-2">
             {journal.chartEvidence.map((evidence) => (
               <EvidencePreview key={evidence.id} evidence={evidence} onOpen={(ref) => void openImage(ref)} />
             ))}
           </div>
         ) : (
-          <p className="mt-2 rounded-md border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
+          <p className="mt-1 rounded-md border border-dashed border-slate-300 bg-white px-2 py-2 text-xs text-slate-500">
             チャート画像は未添付です。
           </p>
         )}
-        <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-wrap items-end gap-3">
+        <div className="mt-2 flex flex-wrap items-end justify-between gap-2">
+          <div className="flex flex-wrap items-end gap-2">
           <label className="grid gap-1 text-xs font-semibold text-slate-600">
             取得元
             <select className="rounded-md border border-slate-300 bg-white px-2 py-1" value={newEvidenceSource} onChange={(event) => setNewEvidenceSource(event.target.value as ChartEvidenceSource)}>

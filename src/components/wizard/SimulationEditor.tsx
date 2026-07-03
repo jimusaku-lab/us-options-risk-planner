@@ -1,6 +1,6 @@
 import type { ChangeEvent } from "react";
 import { useEffect, useState } from "react";
-import { JapaneseYen, RotateCw } from "lucide-react";
+import { ChevronUp, JapaneseYen, RotateCw } from "lucide-react";
 import type { DenominatorMode, ExitBrokerOrderType, ExitOrderPlan, ExitOrderPlanMode, ExitStopLossType, OptionCloseExecution, OptionEntryExecution, OptionLeg, PutIntent, SimulationStatus, StockTransferEvent, StrategyType, TradeSimulation } from "@/types/domain";
 import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, type WorkspaceMode } from "@/store/useOptionsStore";
 import { calculateDte, getShortOptionLegs } from "@/domain/calculations";
@@ -722,15 +722,15 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           </div>
         </div>
       ) : null}
-      <div id="simulation-editor" className="mb-3 rounded-lg border border-slate-200 bg-white p-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div id="simulation-editor" className="mb-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-base font-bold text-slate-950">建玉入力</h2>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
           {(["planned", "open", "closed", "assigned", "expired"] as SimulationStatus[]).map((status) => (
             <button
               key={status}
               type="button"
-              className={`rounded-full border px-2.5 py-1 text-xs font-bold ${
+              className={`rounded-full border px-2 py-0.5 text-xs font-bold ${
                 simulation.status === status
                   ? "border-teal-500 bg-teal-600 text-white"
                   : isLikelyNextStatus(simulation.status, status)
@@ -742,7 +742,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               {getStatusLabel(status)}
             </button>
           ))}
-            <label className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-700">
+            <label className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-700">
               <input
                 type="checkbox"
                 checked={simulation.beginnerMode ?? true}
@@ -750,6 +750,14 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               />
               初心者
             </label>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+              onClick={onCloseEditor}
+            >
+              <ChevronUp size={13} />
+              閉じる
+            </button>
           </div>
         </div>
         {workflowNotice ? (
@@ -768,12 +776,12 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
 
       <details
         id="entry-rationale-journal"
-        className="mt-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+        className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm"
         open={isJournalOpen}
         onToggle={(event) => setIsJournalOpen(event.currentTarget.open)}
       >
         <summary className="cursor-pointer text-sm font-bold text-slate-950">エントリー根拠</summary>
-        <div className="mt-3">
+        <div className="mt-2">
           <EntryRationaleJournalPanel
             title=""
             journal={entryRationaleJournal}
