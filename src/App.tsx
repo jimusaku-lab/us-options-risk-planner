@@ -109,6 +109,7 @@ export default function App() {
   const [performanceYear, setPerformanceYear] = useState(() => Number(formatLocalDate().slice(0, 4)));
   const [activeView, setActiveView] = useState<"positions" | "performance">("positions");
   const [dashboardHistoryOpen, setDashboardHistoryOpen] = useState(false);
+  const [journalFocusSimulationId, setJournalFocusSimulationId] = useState<string | null>(null);
   const [coveredCallReferenceOpen, setCoveredCallReferenceOpen] = useState(false);
   const [closeDecisionSectionOpen, setCloseDecisionSectionOpen] = useState(false);
   const [saxoOrderCandidates, setSaxoOrderCandidates] = useState<SaxoApiOrderSnapshot[]>([]);
@@ -152,6 +153,11 @@ export default function App() {
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
+  useEffect(() => {
+    if (journalFocusSimulationId && !simulations.some((simulation) => simulation.id === journalFocusSimulationId)) {
+      setJournalFocusSimulationId(null);
+    }
+  }, [journalFocusSimulationId, simulations]);
   useEffect(() => {
     simulations.forEach((simulation) => {
       if (normalizeTicker(simulation.ticker)) return;
@@ -298,12 +304,14 @@ export default function App() {
     }
   };
   const createAndOpenEditor = () => {
+    setJournalFocusSimulationId(null);
     createSimulationFromTemplate();
     setIsEditorOpen(true);
   };
   const openWheelManagement = (ticker?: string) => {
     setActiveView("positions");
     setIsEditorOpen(false);
+    setJournalFocusSimulationId(null);
     setWheelFocusRequest({ ticker: ticker ? normalizeTicker(ticker) : undefined, requestId: Date.now() + Math.random() });
   };
   const createCoveredCallFromWheelCycle = (cycleId: string) => {
@@ -314,6 +322,7 @@ export default function App() {
     }
     selectSimulation(simulationId);
     setIsEditorOpen(true);
+    setJournalFocusSimulationId(null);
     setEditorFocusRequest({ anchorId: "simulation-editor", requestId: Date.now() + Math.random() });
     setQuoteStatus("Nカバードコール下書きを開きました。SaxoのC売り注文チケットを見ながら、満期日、権利行使価格、プレミアム、手数料を入力してください。");
   };
@@ -793,10 +802,11 @@ export default function App() {
     return true;
   };
   const selectAndOpenEditor = (id: string) => {
+    setJournalFocusSimulationId(null);
     selectSimulation(id);
     setIsEditorOpen(true);
   };
-  const openSimulationEditorAt = (id: string, anchorId = "simulation-editor") => {
+  const openSimulationEditorAt = (id: string, anchorId = "simulation-editor", options?: { journalFocus?: boolean }) => {
     const targetSimulation = simulations.find((simulation) => simulation.id === id);
     if (targetSimulation && anchorId === "option-entry-executions" && (targetSimulation.optionEntryExecutions ?? []).length === 0) {
       const entryDrafts = targetSimulation.optionLegs
@@ -810,11 +820,12 @@ export default function App() {
     }
     selectSimulation(id);
     setIsEditorOpen(true);
+    setJournalFocusSimulationId(options?.journalFocus ? id : null);
     setEditorFocusRequest({ anchorId, requestId: Date.now() + Math.random() });
   };
   const openEntryRationaleJournal = (id: string) => {
     setActiveView("positions");
-    openSimulationEditorAt(id, "entry-rationale-journal");
+    openSimulationEditorAt(id, "entry-rationale-journal", { journalFocus: true });
   };
   type SaxoHistoryDraftResult = {
     simulationId?: string;
@@ -1216,10 +1227,12 @@ export default function App() {
     });
   };
   const selectOnly = (id: string) => {
+    setJournalFocusSimulationId(null);
     selectSimulation(id);
     setIsEditorOpen(false);
   };
   const goToCloseDecision = (simulationId: string, warning: RiskWarning) => {
+    setJournalFocusSimulationId(null);
     if (!warning.actionAnchorId) {
       setQuoteStatus("反対売買判断を開けませんでした。対象建玉を確認してください。");
       return;
@@ -1244,6 +1257,7 @@ export default function App() {
     setCloseDecisionFocusRequest({ anchorId: warning.actionAnchorId || "close-decision", requestId: Date.now() + Math.random() });
   };
   const goToWorkflowTask = (simulationId: string, task: WorkflowTask) => {
+    setJournalFocusSimulationId(null);
     selectSimulation(simulationId);
     const anchorId = getWorkflowTargetAnchorId(task);
     if (task.targetAnchor === "close-decision") {
@@ -1258,12 +1272,14 @@ export default function App() {
     setEditorFocusRequest({ anchorId, requestId: Date.now() + Math.random() });
   };
   const goToPendingCashEffectSource = (effect: PendingAccountCashEffect) => {
+    setJournalFocusSimulationId(null);
     selectSimulation(effect.sourceSimulationId);
     setIsEditorOpen(true);
     setEditorFocusRequest({ anchorId: `option-close-execution-${effect.sourceExecutionId}`, requestId: Date.now() });
   };
   const goToYearlyPerformanceIssue = (issue: YearlyPerformanceIssue) => {
     setActiveView("positions");
+    setJournalFocusSimulationId(null);
     selectSimulation(issue.simulationId);
     setIsEditorOpen(true);
     setEditorFocusRequest({ anchorId: issue.targetAnchor, requestId: Date.now() });
@@ -1396,6 +1412,8 @@ export default function App() {
                 onWarningAction={goToCloseDecision}
                 onWorkflowTaskAction={goToWorkflowTask}
                 onJournalAction={openEntryRationaleJournal}
+                journalFocusSimulationId={journalFocusSimulationId}
+                onClearJournalFocus={() => setJournalFocusSimulationId(null)}
               />
               {isCandidatesOpen ? (
                 <div ref={candidatePanelRef}>
@@ -1573,6 +1591,9 @@ export default function App() {
   const isLongOptionDetailMode =
     (selectedWithAccount.strategyType === "long_call" || selectedWithAccount.strategyType === "long_put") &&
     selectedWithAccount.optionLegs.some((leg) => leg.side === "buy" && (leg.type === "call" || leg.type === "put"));
+  const isShortPutDetailMode =
+    selectedWithAccount.strategyType === "short_put" &&
+    selectedWithAccount.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
   const compactCoveredCallMode = orderPrepCoveredCallMode || openCoveredCallManagementMode;
   const shouldCollapseSaxoPanel = compactCoveredCallMode || (selected.status === "open" && !saxoHasPendingReflection);
   const collapseSaxoPanel = shouldCollapseSaxoPanel || hasSaxoDetailUserState;
@@ -1636,6 +1657,8 @@ export default function App() {
               onWarningAction={goToCloseDecision}
               onWorkflowTaskAction={goToWorkflowTask}
               onJournalAction={openEntryRationaleJournal}
+              journalFocusSimulationId={journalFocusSimulationId}
+              onClearJournalFocus={() => setJournalFocusSimulationId(null)}
             />
             {orderPrepCoveredCallMode ? (
               <CoveredCallOrderPrepPanel
@@ -1696,13 +1719,18 @@ export default function App() {
                 onDiscardDraft={(id) => {
                   deleteSimulation(id);
                   setIsEditorOpen(false);
+                  setJournalFocusSimulationId(null);
                   setQuoteStatus("API取込下書きを破棄しました。正式建玉や口座残高は変更していません。");
                 }}
                 focusRequest={editorFocusRequest}
-                onCloseEditor={() => setIsEditorOpen(false)}
+                onCloseEditor={() => {
+                  setIsEditorOpen(false);
+                  setJournalFocusSimulationId(null);
+                }}
                 stockTransfer={selectedStockTransfer}
                 onStockAcquisitionCompleteClose={() => {
                   setIsEditorOpen(false);
+                  setJournalFocusSimulationId(null);
                   if (selectedStockTransfer) {
                     openWheelManagement(selected.ticker);
                     setQuoteStatus("P→N株式移管は記録済みです。現在はN口座で株式保有中です。N口座ホイールを確認し、JSONバックアップを保存してください。");
@@ -1710,12 +1738,14 @@ export default function App() {
                 }}
                 onOpenPerformance={() => {
                   setIsEditorOpen(false);
+                  setJournalFocusSimulationId(null);
                   setActiveView("performance");
                 }}
                 onReturnToSaxoHistory={returnToSaxoHistoryCandidates}
                 onRecreateSaxoHistoryCandidate={recreateSaxoHistoryCandidate}
                 onCloseDecisionAction={(anchorId) => {
                   setIsEditorOpen(false);
+                  setJournalFocusSimulationId(null);
                   setCloseDecisionFocusRequest({ anchorId, requestId: Date.now() });
                 }}
               />
@@ -1984,26 +2014,35 @@ export default function App() {
               ) : (
               <>
                 <section className="grid gap-4">
-                  <div className="px-1">
-                    <h2 className="text-lg font-bold text-slate-950">
-                      取引判断: {tradeJudgmentQuiet ? "問題なし" : "要確認"}
-                    </h2>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      {tradeJudgmentQuiet
-                        ? "次に確認: 必要時だけ反対売買判断を開きます。"
-                        : "反対売買判断、リスク警告、注文前チェックリストを確認します。"}
-                    </p>
-                    {hasOnlyInfoWarnings ? (
-                      <p className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm leading-6 text-sky-950">
-                        情報メモ {warnings.length}件。警告や注文前NGはありません。
+                  {isShortPutDetailMode && tradeJudgmentQuiet ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-950">
+                      <span className="font-bold">取引判断: 問題なし</span>
+                      <span className="text-xs font-semibold">
+                        {hasOnlyInfoWarnings ? `情報メモ ${warnings.length}件 / ` : ""}注文前NGなし / チェックリスト確認済み。詳細は必要時だけ開きます。
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="px-1">
+                      <h2 className="text-lg font-bold text-slate-950">
+                        取引判断: {tradeJudgmentQuiet ? "問題なし" : "要確認"}
+                      </h2>
+                      <p className="mt-1 text-sm leading-6 text-slate-600">
+                        {tradeJudgmentQuiet
+                          ? "次に確認: 必要時だけ反対売買判断を開きます。"
+                          : "反対売買判断、リスク警告、注文前チェックリストを確認します。"}
                       </p>
-                    ) : null}
-                    {tradeJudgmentQuiet ? (
-                      <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-950">
-                        注文前チェックリストは全項目確認済みです。
-                      </p>
-                    ) : null}
-                  </div>
+                      {hasOnlyInfoWarnings ? (
+                        <p className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm leading-6 text-sky-950">
+                          情報メモ {warnings.length}件。警告や注文前NGはありません。
+                        </p>
+                      ) : null}
+                      {tradeJudgmentQuiet ? (
+                        <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-950">
+                          注文前チェックリストは全項目確認済みです。
+                        </p>
+                      ) : null}
+                    </div>
+                  )}
                   <CollapsibleSection
                     title="反対売買判断"
                     subtitle="途中決済を検討する時だけ開きます。"
@@ -2034,40 +2073,83 @@ export default function App() {
                     </CollapsibleSection>
                   )}
                 </section>
-                <section className="grid gap-4">
-                  <div className="px-1">
-                    <h2 className="text-lg font-bold text-slate-950">損益・分母</h2>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      満期時の損益図、分母の大きさ、分母比較、年率換算の根拠をまとめて確認します。
-                    </p>
-                  </div>
-                  <section className="grid gap-4 xl:grid-cols-2">
-                    <PayoffChart simulation={selectedWithAccount} points={payoff} />
-                    <DenominatorChart denominators={denominatorsForDisplay} />
-                  </section>
-                  <DenominatorTable denominators={denominatorsForDisplay} />
-                  <AnnualReturnFormula
-                    simulation={selectedWithAccount}
-                    primaryDenominator={primaryWithNet}
-                    taxResult={taxResult}
-                  />
-                </section>
-                <section className="grid gap-4">
-                  <div className="px-1">
-                    <h2 className="text-lg font-bold text-slate-950">税務・ケース別参考</h2>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">
-                      税務区分、NISA等との比較、株価ケース別の参考値をまとめて確認します。
-                    </p>
-                  </div>
-                  <TaxComparisonCard
-                    taxResult={taxResult}
-                    nisaComparison={nisaComparison}
-                    stockSettlementTax={stockSettlementTax}
-                    taxBucketSummary={taxBucketSummary}
-                    isUnsettled={isUnsettledForTax}
-                  />
-                  <ScenarioCards scenarios={scenarios} compactUnsettled={isUnsettledForTax} />
-                </section>
+                {isShortPutDetailMode ? (
+                  <>
+                    <CollapsibleSection
+                      title="損益図・分母比較・年率根拠"
+                      subtitle="プット売りでは主カードを優先し、詳細は必要時だけ確認します。"
+                      collapsed
+                    >
+                      <section className="grid gap-4 xl:grid-cols-2">
+                        <PayoffChart simulation={selectedWithAccount} points={payoff} />
+                        <DenominatorChart denominators={denominatorsForDisplay} />
+                      </section>
+                      <div className="mt-4">
+                        <DenominatorTable denominators={denominatorsForDisplay} />
+                      </div>
+                      <div className="mt-4">
+                        <AnnualReturnFormula
+                          simulation={selectedWithAccount}
+                          primaryDenominator={primaryWithNet}
+                          taxResult={taxResult}
+                        />
+                      </div>
+                    </CollapsibleSection>
+                    <CollapsibleSection
+                      title="税務・ケース別参考"
+                      subtitle="税務区分、NISA等との比較、株価ケース別の参考値は必要時だけ確認します。"
+                      collapsed
+                    >
+                      <TaxComparisonCard
+                        taxResult={taxResult}
+                        nisaComparison={nisaComparison}
+                        stockSettlementTax={stockSettlementTax}
+                        taxBucketSummary={taxBucketSummary}
+                        isUnsettled={isUnsettledForTax}
+                      />
+                      <div className="mt-4">
+                        <ScenarioCards scenarios={scenarios} compactUnsettled={isUnsettledForTax} />
+                      </div>
+                    </CollapsibleSection>
+                  </>
+                ) : (
+                  <>
+                    <section className="grid gap-4">
+                      <div className="px-1">
+                        <h2 className="text-lg font-bold text-slate-950">損益・分母</h2>
+                        <p className="mt-1 text-sm leading-6 text-slate-600">
+                          満期時の損益図、分母の大きさ、分母比較、年率換算の根拠をまとめて確認します。
+                        </p>
+                      </div>
+                      <section className="grid gap-4 xl:grid-cols-2">
+                        <PayoffChart simulation={selectedWithAccount} points={payoff} />
+                        <DenominatorChart denominators={denominatorsForDisplay} />
+                      </section>
+                      <DenominatorTable denominators={denominatorsForDisplay} />
+                      <AnnualReturnFormula
+                        simulation={selectedWithAccount}
+                        primaryDenominator={primaryWithNet}
+                        taxResult={taxResult}
+                      />
+                    </section>
+                    <section className="grid gap-4">
+                      <div className="px-1">
+                        <h2 className="text-lg font-bold text-slate-950">税務・ケース別参考</h2>
+                        <p className="mt-1 text-sm leading-6 text-slate-600">
+                          税務区分、NISA等との比較、株価ケース別の参考値をまとめて確認します。
+                        </p>
+                      </div>
+                      <TaxComparisonCard
+                        taxResult={taxResult}
+                        nisaComparison={nisaComparison}
+                        stockSettlementTax={stockSettlementTax}
+                        taxBucketSummary={taxBucketSummary}
+                        isUnsettled={isUnsettledForTax}
+                      />
+                      <ScenarioCards scenarios={scenarios} compactUnsettled={isUnsettledForTax} />
+                    </section>
+                  </>
+                )}
               </>
               )
             ) : null}

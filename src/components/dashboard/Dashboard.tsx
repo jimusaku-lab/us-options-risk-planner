@@ -51,6 +51,8 @@ export function Dashboard({
   onWarningAction,
   onWorkflowTaskAction,
   onJournalAction,
+  journalFocusSimulationId,
+  onClearJournalFocus,
 }: {
   simulations: TradeSimulation[];
   stockTransfers?: StockTransferEvent[];
@@ -66,11 +68,18 @@ export function Dashboard({
   onWarningAction?: (simulationId: string, warning: RiskWarning) => void;
   onWorkflowTaskAction?: (simulationId: string, task: WorkflowTask) => void;
   onJournalAction?: (simulationId: string) => void;
+  journalFocusSimulationId?: string | null;
+  onClearJournalFocus?: () => void;
 }) {
   const showHistory = historyOpen;
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "open");
   const historySimulations = simulations.filter((simulation) => endedStatuses.has(simulation.status));
-  const visibleSimulations = [...currentSimulations, ...(showHistory ? historySimulations : [])];
+  const focusedSimulation = journalFocusSimulationId
+    ? simulations.find((simulation) => simulation.id === journalFocusSimulationId)
+    : undefined;
+  const isJournalFocusMode = Boolean(focusedSimulation);
+  const visibleSimulations = focusedSimulation ? [focusedSimulation] : [...currentSimulations, ...(showHistory ? historySimulations : [])];
+  const hiddenByJournalFocusCount = focusedSimulation ? Math.max(0, simulations.length - 1) : 0;
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -89,16 +98,35 @@ export function Dashboard({
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-semibold text-slate-900">現在管理中 {currentSimulations.length}件</span>
-          <span className="text-slate-500">注文前・建玉中を優先表示</span>
+          {isJournalFocusMode && focusedSimulation ? (
+            <>
+              <span className="font-semibold text-slate-900">根拠入力中: {getJournalFocusLabel(focusedSimulation)}</span>
+              {hiddenByJournalFocusCount > 0 ? <span className="text-slate-500">他{hiddenByJournalFocusCount}件は折りたたみ中</span> : null}
+            </>
+          ) : (
+            <>
+              <span className="font-semibold text-slate-900">現在管理中 {currentSimulations.length}件</span>
+              <span className="text-slate-500">注文前・建玉中を優先表示</span>
+            </>
+          )}
         </div>
-        <button
-          className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-          onClick={() => onHistoryOpenChange(!showHistory)}
-        >
-          {showHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          履歴 {historySimulations.length}件を{showHistory ? "畳む" : "表示"}
-        </button>
+        {isJournalFocusMode ? (
+          <button
+            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            onClick={onClearJournalFocus}
+          >
+            <ChevronDown size={14} />
+            他の建玉を表示
+          </button>
+        ) : (
+          <button
+            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            onClick={() => onHistoryOpenChange(!showHistory)}
+          >
+            {showHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            履歴 {historySimulations.length}件を{showHistory ? "畳む" : "表示"}
+          </button>
+        )}
       </div>
       {simulations.length === 0 ? (
         <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-5 text-sm leading-6 text-slate-600">
@@ -191,7 +219,7 @@ export function Dashboard({
               const stockAcquisitionSummary = getStockAcquisitionSummary(simulation);
               const journalStatusLabel = getJournalStatusLabel(simulation.entryRationaleJournal, simulation.status);
               const journalStatusTone = getJournalStatusTone(journalStatusLabel);
-              const isFirstHistory = showHistory && index === currentSimulations.length && historySimulations.length > 0;
+              const isFirstHistory = !isJournalFocusMode && showHistory && index === currentSimulations.length && historySimulations.length > 0;
               const annualReturnLabel =
                 !isHistoryRow && !premiumDisplay.hasPremiumInput
                   ? "未入力"
@@ -490,6 +518,14 @@ function getAccountEnvironmentLabel(environment: TradeSimulation["accountEnviron
   if (environment === "DEMO_JPY_BASE") return "DEMO / JPYベース";
   if (environment === "PROD_N_USD_SETTLEMENT") return "N / USD";
   return "P / JPY";
+}
+
+function getJournalFocusLabel(simulation: TradeSimulation): string {
+  const leg = simulation.optionLegs[0];
+  const legLabel = leg
+    ? `${leg.type === "call" ? "C" : "P"}${formatUSD(leg.strikeUSD)} ${leg.expiryDate || simulation.expiryDate}`
+    : simulation.expiryDate;
+  return [getSimulationTickerDisplayLabel(simulation), legLabel].filter(Boolean).join(" ");
 }
 
 function getStockAcquisitionSummary(simulation: TradeSimulation): { shares: number; price: string; date: string; account: string } | null {

@@ -6,6 +6,10 @@ import { readJournalImage, saveJournalImage } from "@/lib/entryRationaleImageSto
 const technicalTagOptions = [
   "SlowKDゴールデンクロス",
   "MACDゴールデンクロス",
+  "5日/20日線ゴールデンクロス",
+  "10日/50日線ゴールデンクロス",
+  "25日/50日線ゴールデンクロス",
+  "移動平均線ゴールデンクロス",
   "25日/50日線接近",
   "移動平均線上向き",
   "上昇トレンド継続",

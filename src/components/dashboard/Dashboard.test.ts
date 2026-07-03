@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TradeSimulation } from "@/types/domain";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import { getSimulationTickerDisplayLabel } from "./Dashboard";
@@ -67,6 +67,10 @@ const accountInputs: AccountInputs = {
   },
 };
 
+afterEach(() => {
+  cleanup();
+});
+
 describe("getSimulationTickerDisplayLabel", () => {
   it("restores an underlying ticker from a Saxo option instrument code", () => {
     const simulation = createSimulation({
@@ -131,6 +135,55 @@ describe("Dashboard close decision actions", () => {
 
     expect(onJournalAction).toHaveBeenCalledWith(simulation.id);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("keeps other positions visible during normal selection", () => {
+    const selected = createSimulation({ id: "sim-nvda", ticker: "NVDA" });
+    const other = createSimulation({ id: "sim-v", ticker: "V" });
+
+    render(createElement(Dashboard, {
+      simulations: [selected, other],
+      selectedId: selected.id,
+      onSelect: vi.fn(),
+      onEdit: vi.fn(),
+      onDelete: vi.fn(),
+      workspace: "live",
+      accountInputs,
+      historyOpen: false,
+      onHistoryOpenChange: vi.fn(),
+    }));
+
+    expect(screen.getByText("NVDA")).toBeTruthy();
+    expect(screen.getByText("V")).toBeTruthy();
+    expect(screen.queryByText("他の建玉を表示")).toBeNull();
+  });
+
+  it("folds other positions only while editing entry rationale from the dashboard badge", () => {
+    const onClearJournalFocus = vi.fn();
+    const selected = createSimulation({ id: "sim-nvda", ticker: "NVDA" });
+    const other = createSimulation({ id: "sim-v", ticker: "V" });
+
+    render(createElement(Dashboard, {
+      simulations: [selected, other],
+      selectedId: selected.id,
+      onSelect: vi.fn(),
+      onEdit: vi.fn(),
+      onDelete: vi.fn(),
+      workspace: "live",
+      accountInputs,
+      historyOpen: false,
+      onHistoryOpenChange: vi.fn(),
+      journalFocusSimulationId: selected.id,
+      onClearJournalFocus,
+    }));
+
+    expect(screen.getByText("NVDA")).toBeTruthy();
+    expect(screen.queryByText("V")).toBeNull();
+    expect(screen.getByText(/根拠入力中:/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "他の建玉を表示" }));
+
+    expect(onClearJournalFocus).toHaveBeenCalledOnce();
   });
 
   it("calls the workflow action from the next-action close decision button without selecting only the row", () => {
