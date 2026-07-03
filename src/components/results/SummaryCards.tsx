@@ -231,13 +231,46 @@ export function SummaryCards({
   const cards = [
     {
       title: longOptionDisplay
-        ? premiumDisplay.primaryAmountLabel
+        ? "反対売買損益分岐価格"
         : historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
       value: longOptionDisplay
-        ? `-${isN ? formatUSD(longOptionDisplay.totalCostUSD) : formatJPY(longOptionDisplay.totalCostJPY)}`
+        ? `${formatUSD(longOptionDisplay.exitBreakevenPriceUSD)} / 株`
         : isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
-      note: premiumCardNote,
+      note: longOptionDisplay
+        ? `この価格以上で売却できれば、建玉時支払額と想定決済手数料を回収できます。建玉時支払額 ${formatUSD(longOptionDisplay.totalCostUSD)} / 想定決済手数料 ${formatUSD(longOptionDisplay.closeCommissionUSD)}。`
+        : premiumCardNote,
     },
+    ...(longOptionDisplay
+      ? [
+          {
+            title: "現在オプション価格",
+            value: longOptionDisplay.closePriceUSD !== undefined ? `${formatUSD(longOptionDisplay.closePriceUSD)} / 株` : "未入力",
+            note: [
+              longOptionDisplay.exitBreakevenBufferUSD !== undefined
+                ? `損益分岐までの余裕 ${formatSignedUSD(longOptionDisplay.exitBreakevenBufferUSD)} / 株。`
+                : "SaxoTraderGOのBid、または実際に使う売却指値を手入力してください。",
+              `利確/損切りライン ${formatUSD(longOptionDisplay.profitTargetPriceUSD)} / ${formatUSD(longOptionDisplay.stopLossPriceUSD)}。`,
+            ].join(" "),
+          },
+          {
+            title: "現在決済ベース",
+            value:
+              longOptionDisplay.estimatedProfitUSD === undefined
+                ? "未計算"
+                : `${formatSignedUSD(longOptionDisplay.estimatedProfitUSD)} / ${
+                    longOptionDisplay.currentCloseAnnualizedReturnPct !== undefined
+                      ? `${longOptionDisplay.currentCloseAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.currentCloseAnnualizedReturnPct)}`
+                      : "年率未計算"
+                  }`,
+            note: [
+              longOptionDisplay.profitPct !== undefined
+                ? `評価損益率 ${longOptionDisplay.profitPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.profitPct)}。`
+                : "評価損益率 未計算。",
+              `残存日数 ${longOptionDisplay.remainingDays}日。`,
+            ].join(" "),
+          },
+        ]
+      : []),
     ...(!historyMode && coveredCallAssignmentPreview && !assignmentEstimate
       ? [
           {
@@ -266,30 +299,6 @@ export function SummaryCards({
       value: annualCardValue,
       note: annualCardNote,
     },
-    ...(longOptionDisplay
-      ? [
-          {
-            title: "現在決済ベース",
-            value:
-              longOptionDisplay.estimatedProfitUSD === undefined
-                ? "未計算"
-                : `${formatSignedUSD(longOptionDisplay.estimatedProfitUSD)} / ${
-                    longOptionDisplay.currentCloseAnnualizedReturnPct !== undefined
-                      ? `${longOptionDisplay.currentCloseAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.currentCloseAnnualizedReturnPct)}`
-                      : "年率未計算"
-                  }`,
-            note: [
-              longOptionDisplay.closePriceUSD !== undefined
-                ? `現在オプション価格 ${formatUSD(longOptionDisplay.closePriceUSD)}。`
-                : "現在オプション価格未入力。",
-              longOptionDisplay.profitPct !== undefined
-                ? `評価損益率 ${longOptionDisplay.profitPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.profitPct)}。`
-                : "評価損益率 未計算。",
-              `残存日数 ${longOptionDisplay.remainingDays}日。`,
-            ].join(" "),
-          },
-        ]
-      : []),
     ...(!historyMode && assignmentEstimate
       ? [
           {

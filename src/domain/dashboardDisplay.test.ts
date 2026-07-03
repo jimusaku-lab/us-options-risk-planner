@@ -349,6 +349,7 @@ describe("dashboard premium display", () => {
     expect(display.longOptionOrderDisplay?.paidPremiumJPY).toBeCloseTo(355_630, 8);
     expect(display.longOptionOrderDisplay?.totalCostJPY).toBeCloseTo(355_993.7125, 8);
     expect(display.longOptionOrderDisplay?.maximumLossJPY).toBeCloseTo(355_993.7125, 8);
+    expect(display.longOptionOrderDisplay?.exitBreakevenPriceUSD).toBeCloseTo(22.045, 8);
     expect(display.longOptionOrderDisplay?.breakevenUSD).toBeCloseTo(357.0225, 8);
     expect(display.longOptionOrderDisplay?.currentPriceUSD).toBe(336);
     expect(display.longOptionOrderDisplay?.strikeUSD).toBe(335);
@@ -401,6 +402,8 @@ describe("dashboard premium display", () => {
     expect(display.denominatorLabel).toBe("建玉時支払額");
     expect(display.longOptionOrderDisplay?.closePriceUSD).toBe(24);
     expect(display.longOptionOrderDisplay?.currentOptionValueUSD).toBeCloseTo(2_400, 8);
+    expect(display.longOptionOrderDisplay?.exitBreakevenPriceUSD).toBeCloseTo(22.045, 8);
+    expect(display.longOptionOrderDisplay?.exitBreakevenBufferUSD).toBeCloseTo(1.955, 8);
     expect(display.longOptionOrderDisplay?.estimatedProfitUSD).toBeCloseTo(195.5, 8);
     expect(display.longOptionOrderDisplay?.profitPct).toBeCloseTo(8.886, 3);
     expect(display.longOptionOrderDisplay?.profitTargetPriceUSD).toBe(33);
@@ -443,6 +446,7 @@ describe("dashboard premium display", () => {
 
     expect(display.longOptionOrderDisplay?.currentPriceUSD).toBeUndefined();
     expect(display.longOptionOrderDisplay?.maximumLossUSD).toBeCloseTo(2_412.25, 8);
+    expect(display.longOptionOrderDisplay?.exitBreakevenPriceUSD).toBeCloseTo(24.145, 8);
     expect(display.longOptionOrderDisplay?.breakevenUSD).toBeCloseTo(364.1225, 8);
   });
 });

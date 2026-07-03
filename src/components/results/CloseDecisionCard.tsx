@@ -727,6 +727,14 @@ function LongOptionCloseCard({
   const profitPct = estimatedProfitUSD === null || paidPremiumUSD <= 0 ? null : (estimatedProfitUSD / paidPremiumUSD) * 100;
   const elapsedDays = calculateElapsedDaysSinceEntry(simulation.entryDate);
   const entryCostUSD = paidPremiumUSD + openCommissionUSD;
+  const exitBreakevenPriceUSD = calculateLongOptionExitBreakevenPriceUSD({
+    paidPremiumUSD,
+    openCommissionUSD,
+    closeCommissionUSD,
+    quantity: leg.quantity,
+  });
+  const exitBreakevenBufferUSD =
+    closePriceUSD !== undefined && closePriceUSD > 0 ? closePriceUSD - exitBreakevenPriceUSD : null;
   const currentCloseAnnualizedReturnPct = calculateLongOptionCloseAnnualizedReturnPercent({
     profit: estimatedProfitUSD,
     entryCost: entryCostUSD,
@@ -842,12 +850,26 @@ function LongOptionCloseCard({
       <dl className="mt-3 grid gap-2 text-sm">
         <Row label="支払プレミアム" value={`${formatUSD(paidPremiumUSD)} / 参考 ${formatJPY(paidPremiumJPY)}`} />
         <Row
+          label="反対売買損益分岐価格"
+          value={`${formatUSD(exitBreakevenPriceUSD)} / 株`}
+          tone="green"
+        />
+        <Row
           label="現在オプション価格"
-          value={currentOptionValueUSD === null ? "未入力" : `${formatUSD(currentOptionValueUSD)} / 参考 ${formatJPY(currentOptionValueUSD * fxRateJPY)}`}
+          value={closePriceUSD === undefined || closePriceUSD <= 0 ? "未入力" : `${formatUSD(closePriceUSD)} / 株`}
+        />
+        <Row
+          label="損益分岐までの余裕"
+          value={exitBreakevenBufferUSD === null ? "未計算" : `${formatSignedUSD(exitBreakevenBufferUSD)} / 株`}
+          tone={exitBreakevenBufferUSD === null ? undefined : exitBreakevenBufferUSD >= 0 ? "green" : "red"}
+        />
+        <Row
+          label="現在評価額"
+          value={currentOptionValueUSD === null ? "未計算" : `${formatUSD(currentOptionValueUSD)} / 参考 ${formatJPY(currentOptionValueUSD * fxRateJPY)}`}
         />
         <Row
           label="評価損益"
-          value={estimatedProfitUSD === null ? "未計算" : `${formatUSD(estimatedProfitUSD)} / 参考 ${formatJPY(estimatedProfitJPY ?? 0, { signed: true })}`}
+          value={estimatedProfitUSD === null ? "未計算" : `${formatSignedUSD(estimatedProfitUSD)} / 参考 ${formatJPY(estimatedProfitJPY ?? 0, { signed: true })}`}
           tone={estimatedProfitUSD === null ? undefined : estimatedProfitUSD >= 0 ? "green" : "red"}
         />
         <Row
@@ -903,6 +925,10 @@ function formatOptionalUSD(value?: number): string {
   return value !== undefined && Number.isFinite(value) ? formatUSD(value) : "未取得";
 }
 
+function formatSignedUSD(value: number): string {
+  return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
+}
+
 function MiniRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-2 rounded bg-white px-2 py-1">
@@ -933,6 +959,21 @@ export function calculateLongOptionCloseAnnualizedReturnPercent({
   if (!Number.isFinite(entryCost) || entryCost <= 0) return null;
   const safeElapsedDays = Math.max(1, elapsedDays);
   return (profit / entryCost) * (365 / safeElapsedDays) * 100;
+}
+
+export function calculateLongOptionExitBreakevenPriceUSD({
+  paidPremiumUSD,
+  openCommissionUSD,
+  closeCommissionUSD,
+  quantity,
+}: {
+  paidPremiumUSD: number;
+  openCommissionUSD: number;
+  closeCommissionUSD: number;
+  quantity: number;
+}): number {
+  const contractShares = Math.max(1, quantity * 100);
+  return (paidPremiumUSD + openCommissionUSD + closeCommissionUSD) / contractShares;
 }
 
 function calculateCloseAnnualReturnPercent({

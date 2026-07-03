@@ -4,6 +4,7 @@ import type { OptionLeg, TradeSimulation } from "@/types/domain";
 import {
   buildSaxoOptionPremiumCandidateInput,
   calculateLongOptionCloseAnnualizedReturnPercent,
+  calculateLongOptionExitBreakevenPriceUSD,
   getPremiumCandidateManualInputGuidance,
   getLongOptionExitOrderLineCandidate,
   getPremiumCandidatePrice,
@@ -147,6 +148,15 @@ describe("Saxo premium candidate price selection", () => {
 });
 
 describe("long option close annualized return", () => {
+  it("calculates the offset-sale option price breakeven including entry and close fees", () => {
+    expect(calculateLongOptionExitBreakevenPriceUSD({
+      paidPremiumUSD: 2410,
+      openCommissionUSD: 2.25,
+      closeCommissionUSD: 2.25,
+      quantity: 1,
+    })).toBeCloseTo(24.145, 8);
+  });
+
   it("uses fee-included profit divided by entry cost and elapsed holding days", () => {
     const annualized = calculateLongOptionCloseAnnualizedReturnPercent({
       profit: 1000,

@@ -59,6 +59,8 @@ export type LongOptionOrderDisplay = {
   estimatedProfitJPY?: number;
   profitPct?: number;
   currentCloseAnnualizedReturnPct?: number;
+  exitBreakevenPriceUSD: number;
+  exitBreakevenBufferUSD?: number;
   profitTargetPriceUSD: number;
   stopLossPriceUSD: number;
   remainingDays: number;
@@ -170,6 +172,9 @@ function calculateLongOptionOrderDisplay(params: {
     currentOptionValueUSD !== undefined ? currentOptionValueUSD - paidPremiumUSD - params.feeUSD - closeCommissionUSD : undefined;
   const estimatedProfitJPY = estimatedProfitUSD !== undefined ? estimatedProfitUSD * effectiveFxRateJPY : undefined;
   const profitPct = estimatedProfitUSD !== undefined && paidPremiumUSD > 0 ? (estimatedProfitUSD / paidPremiumUSD) * 100 : undefined;
+  const contractShares = Math.max(1, leg.quantity * 100);
+  const exitBreakevenPriceUSD = (totalCostUSD + closeCommissionUSD) / contractShares;
+  const exitBreakevenBufferUSD = closePriceUSD !== undefined ? closePriceUSD - exitBreakevenPriceUSD : undefined;
   const elapsedDays = calculateElapsedDaysSinceEntry(params.simulation.entryDate);
   const currentCloseAnnualizedReturnPct =
     estimatedProfitUSD !== undefined && totalCostUSD > 0
@@ -195,6 +200,8 @@ function calculateLongOptionOrderDisplay(params: {
     estimatedProfitJPY,
     profitPct,
     currentCloseAnnualizedReturnPct,
+    exitBreakevenPriceUSD,
+    exitBreakevenBufferUSD,
     profitTargetPriceUSD,
     stopLossPriceUSD,
     remainingDays,

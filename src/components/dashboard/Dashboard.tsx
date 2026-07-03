@@ -288,11 +288,11 @@ export function Dashboard({
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {longOptionDisplay ? (
                       <>
-                        <span className="mb-1 block text-[11px] font-bold text-slate-500">{premiumDisplay.denominatorLabel}</span>
-                        <span className="block text-slate-950">-{formatUSD(longOptionDisplay.totalCostUSD)}</span>
+                        <span className="mb-1 block text-[11px] font-bold text-slate-500">反対売買損益分岐価格</span>
+                        <span className="block text-slate-950">{formatUSD(longOptionDisplay.exitBreakevenPriceUSD)} / 株</span>
                         <span className="block text-xs text-slate-500">
                           {hasEffectiveFx && Math.abs(longOptionDisplay.totalCostJPY) > 0.5
-                            ? `参考 -${formatJPY(longOptionDisplay.totalCostJPY)}`
+                            ? `建玉時支払額 参考 -${formatJPY(longOptionDisplay.totalCostJPY)}`
                             : "参考JPY未計算"}
                         </span>
                         <span className="mt-1 block text-[11px] font-semibold text-slate-500">
@@ -326,6 +326,9 @@ export function Dashboard({
                       <span className="mt-1 block rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-indigo-900">
                         <span className="block">
                           現在オプション価格 {longOptionDisplay.closePriceUSD !== undefined ? formatUSD(longOptionDisplay.closePriceUSD) : "未入力"}
+                        </span>
+                        <span className="block">
+                          損益分岐までの余裕 {longOptionDisplay.exitBreakevenBufferUSD !== undefined ? formatSignedUSD(longOptionDisplay.exitBreakevenBufferUSD) : "未計算"} / 株
                         </span>
                         <span className="block">
                           評価損益 {longOptionDisplay.estimatedProfitUSD !== undefined ? formatSignedUSD(longOptionDisplay.estimatedProfitUSD) : "未計算"}
