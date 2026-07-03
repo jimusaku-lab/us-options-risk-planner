@@ -50,6 +50,7 @@ export function Dashboard({
   onHistoryOpenChange,
   onWarningAction,
   onWorkflowTaskAction,
+  onJournalAction,
 }: {
   simulations: TradeSimulation[];
   stockTransfers?: StockTransferEvent[];
@@ -64,6 +65,7 @@ export function Dashboard({
   onHistoryOpenChange: (open: boolean) => void;
   onWarningAction?: (simulationId: string, warning: RiskWarning) => void;
   onWorkflowTaskAction?: (simulationId: string, task: WorkflowTask) => void;
+  onJournalAction?: (simulationId: string) => void;
 }) {
   const showHistory = historyOpen;
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "open");
@@ -226,15 +228,22 @@ export function Dashboard({
                 >
                   <td className="py-3 pr-3 font-bold text-slate-950">
                     <span className="block">{tickerLabel}</span>
-                    <span className={`mt-1 inline-flex rounded px-1.5 py-0.5 text-[11px] font-bold ${
+                    <button
+                      type="button"
+                      className={`mt-1 inline-flex rounded px-1.5 py-0.5 text-[11px] font-bold hover:ring-2 hover:ring-offset-1 ${
                       journalStatusTone === "teal"
                         ? "bg-teal-50 text-teal-800 ring-1 ring-teal-200"
                         : journalStatusTone === "amber"
                           ? "bg-amber-50 text-amber-800 ring-1 ring-amber-200"
                           : "bg-slate-100 text-slate-600 ring-1 ring-slate-200"
-                    }`}>
+                    }`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onJournalAction?.(simulation.id);
+                      }}
+                    >
                       {journalStatusLabel}
-                    </span>
+                    </button>
                     {stockAcquisitionSummary ? (
                       <div className="mt-2 max-w-[260px] rounded-md border border-violet-200 bg-violet-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-violet-950">
                         <div>現物株取得: {stockAcquisitionSummary.shares}株 @ {stockAcquisitionSummary.price}</div>

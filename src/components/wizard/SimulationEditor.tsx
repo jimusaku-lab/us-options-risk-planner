@@ -47,6 +47,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const [workflowNotice, setWorkflowNotice] = useState<{ message: string; actionLabel: string; anchorId: string } | null>(null);
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
   const [entryCandidatePickerId, setEntryCandidatePickerId] = useState<string | null>(null);
+  const [isJournalOpen, setIsJournalOpen] = useState(false);
   const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
   const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
   const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call"].includes(
@@ -565,6 +566,9 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
 
   useEffect(() => {
     if (!focusRequest?.anchorId) return;
+    if (focusRequest.anchorId === "entry-rationale-journal") {
+      setIsJournalOpen(true);
+    }
     const runFocus = () => {
       const target = document.getElementById(focusRequest.anchorId);
       if (!target) return false;
@@ -780,7 +784,12 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
         </label>
       </div>
 
-      <details className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <details
+        id="entry-rationale-journal"
+        className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+        open={isJournalOpen}
+        onToggle={(event) => setIsJournalOpen(event.currentTarget.open)}
+      >
         <summary className="cursor-pointer text-sm font-bold text-slate-950">エントリー根拠ジャーナル</summary>
         <div className="mt-3">
           <EntryRationaleJournalPanel

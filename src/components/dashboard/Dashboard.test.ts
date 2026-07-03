@@ -109,6 +109,30 @@ describe("getSimulationTickerDisplayLabel", () => {
 });
 
 describe("Dashboard close decision actions", () => {
+  it("opens the entry rationale journal from the dashboard status badge", () => {
+    const onJournalAction = vi.fn();
+    const onSelect = vi.fn();
+    const simulation = createSimulation({ ticker: "NVDA" });
+
+    render(createElement(Dashboard, {
+      simulations: [simulation],
+      selectedId: simulation.id,
+      onSelect,
+      onEdit: vi.fn(),
+      onDelete: vi.fn(),
+      workspace: "live",
+      accountInputs,
+      historyOpen: false,
+      onHistoryOpenChange: vi.fn(),
+      onJournalAction,
+    }));
+
+    fireEvent.click(screen.getByRole("button", { name: "根拠未記録" }));
+
+    expect(onJournalAction).toHaveBeenCalledWith(simulation.id);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("calls the workflow action from the next-action close decision button without selecting only the row", () => {
     const onWorkflowTaskAction = vi.fn();
     const onSelect = vi.fn();

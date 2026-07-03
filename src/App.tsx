@@ -812,6 +812,10 @@ export default function App() {
     setIsEditorOpen(true);
     setEditorFocusRequest({ anchorId, requestId: Date.now() + Math.random() });
   };
+  const openEntryRationaleJournal = (id: string) => {
+    setActiveView("positions");
+    openSimulationEditorAt(id, "entry-rationale-journal");
+  };
   type SaxoHistoryDraftResult = {
     simulationId?: string;
     closeExecutionId?: string;
@@ -1391,6 +1395,7 @@ export default function App() {
                 onHistoryOpenChange={setDashboardHistoryOpen}
                 onWarningAction={goToCloseDecision}
                 onWorkflowTaskAction={goToWorkflowTask}
+                onJournalAction={openEntryRationaleJournal}
               />
               <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
               {isCandidatesOpen ? (
@@ -1626,6 +1631,7 @@ export default function App() {
               onHistoryOpenChange={setDashboardHistoryOpen}
               onWarningAction={goToCloseDecision}
               onWorkflowTaskAction={goToWorkflowTask}
+              onJournalAction={openEntryRationaleJournal}
             />
             {orderPrepCoveredCallMode ? (
               <CoveredCallOrderPrepPanel
