@@ -42,6 +42,13 @@ function outcomeLabel(outcome: EntryRationaleReviewOutcome): string {
   return "未レビュー";
 }
 
+function entryReasonRows(value: string): number {
+  if (!value.trim()) return 4;
+  const lineCount = value.split(/\r?\n/).length;
+  const estimatedWrappedLines = Math.ceil(value.length / 72);
+  return Math.min(8, Math.max(4, lineCount, estimatedWrappedLines));
+}
+
 function createEvidenceId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `chart-${crypto.randomUUID()}`;
   return `chart-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -122,9 +129,9 @@ function EvidencePreview({
       onClick={() => onOpen(evidence.imageRef)}
     >
       {preview ? (
-        <img src={preview} alt="チャート画像" className="h-auto max-h-[420px] min-h-[240px] w-full bg-slate-100 object-contain" />
+        <img src={preview} alt="チャート画像" className="h-auto max-h-[320px] min-h-[180px] w-full bg-slate-100 object-contain" />
       ) : (
-        <div className="flex min-h-[240px] items-center justify-center bg-slate-100 text-xs font-semibold text-slate-500">画像保存済み</div>
+        <div className="flex min-h-[180px] items-center justify-center bg-slate-100 text-xs font-semibold text-slate-500">画像保存済み</div>
       )}
       <div className="px-2 py-1.5 text-xs leading-5 text-slate-600">
         <div className="font-bold text-slate-900">{sourceLabel(evidence.source)} / {timeframeLabel(evidence.timeframe)}</div>
@@ -137,8 +144,7 @@ function EvidencePreview({
 export function EntryRationaleJournalPanel({
   journal,
   onChange,
-  title = "エントリー根拠ジャーナル",
-  subtitle,
+  title = "エントリー根拠",
   candidateReason,
   reviewMode = false,
 }: {
@@ -214,21 +220,17 @@ export function EntryRationaleJournalPanel({
 
   return (
     <section
-      className="rounded-lg border border-teal-200 bg-white p-4 shadow-sm"
+      className="rounded-lg border border-teal-200 bg-white p-3 shadow-sm"
       onDrop={handleDrop}
       onDragOver={(event) => event.preventDefault()}
       onPaste={handlePaste}
       tabIndex={0}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+      {title ? (
+        <div className="mb-3">
           <h2 className="text-lg font-bold text-slate-950">{title}</h2>
-          {subtitle ? <p className="mt-1 text-sm leading-6 text-slate-600">{subtitle}</p> : null}
         </div>
-        <span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-bold text-teal-800 ring-1 ring-teal-200">
-          画像はブラウザ内保存
-        </span>
-      </div>
+      ) : null}
 
       {candidateReason ? (
         <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
@@ -243,28 +245,26 @@ export function EntryRationaleJournalPanel({
           value={journal.entryReason}
           placeholder="なぜこの銘柄・戦略・タイミングで入ると判断したか"
           onChange={(entryReason) => updateJournal({ entryReason })}
-          rows={8}
-          className="min-h-48 text-base leading-7"
+          rows={entryReasonRows(journal.entryReason)}
+          className="text-base leading-7"
         />
       </div>
 
       <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-bold text-slate-900">チャート画像</div>
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              画像はエントリー理由の近くに大きめ表示します。クリックすると拡大できます。
-            </p>
+        <div className="text-sm font-bold text-slate-900">チャート画像</div>
+        {journal.chartEvidence.length > 0 ? (
+          <div className="mt-2 grid gap-3 lg:grid-cols-2">
+            {journal.chartEvidence.map((evidence) => (
+              <EvidencePreview key={evidence.id} evidence={evidence} onOpen={(ref) => void openImage(ref)} />
+            ))}
           </div>
-          <button
-            type="button"
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            チャート画像を添付
-          </button>
-        </div>
-        <div className="mt-3 flex flex-wrap items-end gap-3">
+        ) : (
+          <p className="mt-2 rounded-md border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
+            チャート画像は未添付です。
+          </p>
+        )}
+        <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
+          <div className="flex flex-wrap items-end gap-3">
           <label className="grid gap-1 text-xs font-semibold text-slate-600">
             取得元
             <select className="rounded-md border border-slate-300 bg-white px-2 py-1" value={newEvidenceSource} onChange={(event) => setNewEvidenceSource(event.target.value as ChartEvidenceSource)}>
@@ -285,22 +285,16 @@ export function EntryRationaleJournalPanel({
             multiple
             onChange={(event) => void addFiles(event.target.files ?? [])}
           />
-        </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">
-          この枠に画像を貼り付け、またはドラッグ&ドロップできます。画像本体はIndexedDBに保存し、JSONには参照だけを残します。
-        </p>
-        {imageStatus ? <p className="mt-2 text-xs font-semibold text-teal-800">{imageStatus}</p> : null}
-        {journal.chartEvidence.length > 0 ? (
-          <div className="mt-3 grid gap-3 lg:grid-cols-2">
-            {journal.chartEvidence.map((evidence) => (
-              <EvidencePreview key={evidence.id} evidence={evidence} onOpen={(ref) => void openImage(ref)} />
-            ))}
           </div>
-        ) : (
-          <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
-            チャート画像は未添付です。
-          </p>
-        )}
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            画像添付
+          </button>
+        </div>
+        {imageStatus ? <p className="mt-2 text-xs font-semibold text-teal-800">{imageStatus}</p> : null}
       </div>
 
       <div className="mt-4">

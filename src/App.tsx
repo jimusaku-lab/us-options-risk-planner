@@ -1397,7 +1397,6 @@ export default function App() {
                 onWorkflowTaskAction={goToWorkflowTask}
                 onJournalAction={openEntryRationaleJournal}
               />
-              <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
               {isCandidatesOpen ? (
                 <div ref={candidatePanelRef}>
                   <CandidatePanel
@@ -1414,14 +1413,6 @@ export default function App() {
                   />
                 </div>
               ) : null}
-              <AccountOverview
-                workspace={activeWorkspace}
-                accountInputs={accountInputs}
-                pendingCashEffects={pendingCashEffects}
-                onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
-                onResolveCashEffect={goToPendingCashEffectSource}
-                onChange={updateAccountState}
-              />
               <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-950">
                   {activeWorkspace === "demo" ? "デモ口座の建玉がありません" : "リアル口座の建玉がありません"}
@@ -1437,6 +1428,19 @@ export default function App() {
                   新規建玉
                 </button>
               </section>
+              <CollapsibleSection title="Saxo API詳細" collapsed>
+                <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
+              </CollapsibleSection>
+              <CollapsibleSection title="口座全体の余力・証拠金詳細" collapsed>
+                <AccountOverview
+                  workspace={activeWorkspace}
+                  accountInputs={accountInputs}
+                  pendingCashEffects={pendingCashEffects}
+                  onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
+                  onResolveCashEffect={goToPendingCashEffectSource}
+                  onChange={updateAccountState}
+                />
+              </CollapsibleSection>
               {activeWorkspace === "live" ? (
                 <WheelPanel
                   cycles={wheelCycles}
@@ -1665,18 +1669,6 @@ export default function App() {
                 onDownloadJson={downloadJson}
               />
             ) : null}
-            <CollapsibleSection
-              title={collapseSaxoPanel ? "Saxo API詳細" : undefined}
-              subtitle={collapseSaxoPanel ? saxoPanelSubtitle : undefined}
-              collapsed={collapseSaxoPanel}
-              open={collapseSaxoPanel ? isSaxoDetailOpen : undefined}
-              onOpenChange={(open) => {
-                setHasSaxoDetailUserState(true);
-                setIsSaxoDetailOpen(open);
-              }}
-            >
-              <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
-            </CollapsibleSection>
             {isCandidatesOpen ? (
               <div ref={candidatePanelRef}>
                 <CandidatePanel
@@ -1693,45 +1685,18 @@ export default function App() {
                 />
               </div>
             ) : null}
-            <CollapsibleSection
-              title={collapseAccountOverview ? "口座全体の余力・証拠金詳細" : undefined}
-              subtitle={
-                collapseAccountOverview
-                  ? pendingCashEffects.length > 0
-                    ? "未反映現金増減を含め、必要時だけ口座全体を確認します。"
-                    : "未反映現金増減がないため、必要時だけ口座全体を確認します。"
-                  : undefined
-              }
-              collapsed={collapseAccountOverview}
-            >
-              <AccountOverview
-                workspace={activeWorkspace}
-                accountInputs={accountInputs}
-                referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
-                pendingCashEffects={pendingCashEffects}
-                onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
-                onResolveCashEffect={goToPendingCashEffectSource}
-                onChange={updateAccountState}
-              />
-            </CollapsibleSection>
             {isEditorOpen ? (
               <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-                <button
-                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-                  onClick={() => setIsEditorOpen(false)}
-                >
-                  <span>
-                    <span className="block text-lg font-bold text-slate-950">建玉入力</span>
-                    <span className="mt-1 block text-sm text-slate-600">
-                      Saxo画面の数値を入力・修正します。閉じると俯瞰画面に戻ります。
-                    </span>
-                  </span>
-                  <span className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">
+                <div className="flex justify-end px-3 py-2">
+                  <button
+                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    onClick={() => setIsEditorOpen(false)}
+                  >
                     <ChevronUp size={16} />
                     閉じる
-                  </span>
-                </button>
-                <div className="border-t border-slate-200 p-4">
+                  </button>
+                </div>
+                <div className="border-t border-slate-200 p-3">
                   <SimulationEditor
                     simulation={selected}
                     workspace={activeWorkspace}
@@ -1768,6 +1733,39 @@ export default function App() {
                 </div>
               </section>
             ) : null}
+            <CollapsibleSection
+              title={collapseSaxoPanel ? "Saxo API詳細" : undefined}
+              subtitle={collapseSaxoPanel ? saxoPanelSubtitle : undefined}
+              collapsed={collapseSaxoPanel}
+              open={collapseSaxoPanel ? isSaxoDetailOpen : undefined}
+              onOpenChange={(open) => {
+                setHasSaxoDetailUserState(true);
+                setIsSaxoDetailOpen(open);
+              }}
+            >
+              <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
+            </CollapsibleSection>
+            <CollapsibleSection
+              title={collapseAccountOverview ? "口座全体の余力・証拠金詳細" : undefined}
+              subtitle={
+                collapseAccountOverview
+                  ? pendingCashEffects.length > 0
+                    ? "未反映現金増減を含め、必要時だけ口座全体を確認します。"
+                    : "未反映現金増減がないため、必要時だけ口座全体を確認します。"
+                  : undefined
+              }
+              collapsed={collapseAccountOverview}
+            >
+              <AccountOverview
+                workspace={activeWorkspace}
+                accountInputs={accountInputs}
+                referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
+                pendingCashEffects={pendingCashEffects}
+                onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
+                onResolveCashEffect={goToPendingCashEffectSource}
+                onChange={updateAccountState}
+              />
+            </CollapsibleSection>
             {historyResultMode ? (
               <HistoryStatusCard
                 simulation={selectedWithAccount}

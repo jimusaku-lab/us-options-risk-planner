@@ -722,22 +722,15 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           </div>
         </div>
       ) : null}
-      <div id="simulation-editor" className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div id="simulation-editor" className="mb-3 rounded-lg border border-slate-200 bg-white p-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-bold text-slate-950">建玉状態ワークフロー</h3>
-            <p className="mt-1 text-xs leading-5 text-slate-500">状態を変更すると、次に必要な実績入力カードへ移動します。</p>
-          </div>
-          <span className="rounded-md bg-white px-2 py-1 text-xs font-bold text-slate-700 ring-1 ring-slate-200">
-            現在: {getStatusLabel(simulation.status)}
-          </span>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
+          <h2 className="text-base font-bold text-slate-950">建玉入力</h2>
+          <div className="flex flex-wrap items-center justify-end gap-2">
           {(["planned", "open", "closed", "assigned", "expired"] as SimulationStatus[]).map((status) => (
             <button
               key={status}
               type="button"
-              className={`rounded-md border px-3 py-2 text-xs font-bold ${
+              className={`rounded-full border px-2.5 py-1 text-xs font-bold ${
                 simulation.status === status
                   ? "border-teal-500 bg-teal-600 text-white"
                   : isLikelyNextStatus(simulation.status, status)
@@ -749,6 +742,15 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               {getStatusLabel(status)}
             </button>
           ))}
+            <label className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-700">
+              <input
+                type="checkbox"
+                checked={simulation.beginnerMode ?? true}
+                onChange={(event) => update({ beginnerMode: event.target.checked })}
+              />
+              初心者
+            </label>
+          </div>
         </div>
         {workflowNotice ? (
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
@@ -763,38 +765,17 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           </div>
         ) : null}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="sr-only">建玉入力欄</h2>
-          <p className="text-sm text-slate-600">Saxo TraderGOのチケット表示を見ながら入力します。API接続は使いません。</p>
-        </div>
-        <label className="flex max-w-xl items-start gap-2 text-sm font-semibold text-slate-700">
-          <input
-            className="mt-1"
-            type="checkbox"
-            checked={simulation.beginnerMode ?? true}
-            onChange={(event) => update({ beginnerMode: event.target.checked })}
-          />
-          <span>
-            <span className="block">初心者モード</span>
-            <span className="block text-xs font-normal leading-5 text-slate-500">
-              ONの場合、裸コールなど初心者には避けたい構成を注文前NGとして扱います。
-            </span>
-          </span>
-        </label>
-      </div>
 
       <details
         id="entry-rationale-journal"
-        className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+        className="mt-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
         open={isJournalOpen}
         onToggle={(event) => setIsJournalOpen(event.currentTarget.open)}
       >
-        <summary className="cursor-pointer text-sm font-bold text-slate-950">エントリー根拠ジャーナル</summary>
+        <summary className="cursor-pointer text-sm font-bold text-slate-950">エントリー根拠</summary>
         <div className="mt-3">
           <EntryRationaleJournalPanel
-            title="なぜエントリーしたか"
-            subtitle="注文前の根拠、テクニカルタグ、チャート画像、利確/損切り方針、決済後の振り返りをこの建玉に紐づけます。"
+            title=""
             journal={entryRationaleJournal}
             onChange={(entryRationaleJournal) => update({ entryRationaleJournal })}
             reviewMode={["closed", "assigned", "expired"].includes(simulation.status)}
