@@ -15,7 +15,15 @@ import type { DenominatorResult, PayoffDisplayMode, PayoffPoint, TradeSimulation
 import { calculatePayoffSeries, calculatePayoffSummary, getPayoffDisplayModeFromLabel } from "@/domain/payoff";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
-export function PayoffChart({ simulation, points }: { simulation: TradeSimulation; points: PayoffPoint[] }) {
+export function PayoffChart({
+  simulation,
+  points,
+  title = "満期時の損益図",
+}: {
+  simulation: TradeSimulation;
+  points: PayoffPoint[];
+  title?: string;
+}) {
   const isCoveredCall = simulation.strategyType === "covered_call";
   const isShortPut = simulation.strategyType === "short_put" && simulation.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
   const supportsDisplayModes = isCoveredCall || isShortPut;
@@ -26,7 +34,7 @@ export function PayoffChart({ simulation, points }: { simulation: TradeSimulatio
   const puts = simulation.optionLegs.filter((leg) => leg.type === "put");
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <h2 className="text-lg font-bold text-slate-950">満期時の損益図</h2>
+      <h2 className="text-lg font-bold text-slate-950">{title}</h2>
       <p className="mt-2 text-sm leading-6 text-slate-600">
         横軸は満期時の株価、縦軸はその株価で満期を迎えた場合の概算損益です。
         0円ラインより上が利益、下が損失です。現在株価、権利行使価格、損益分岐点を線で表示します。

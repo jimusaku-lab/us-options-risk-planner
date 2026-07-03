@@ -16,14 +16,16 @@ export function CloseDecisionCard({
   onChange,
   focusRequest,
   onExecutionDraft,
+  defaultOpen = false,
 }: {
   simulation: TradeSimulation;
   saxoOrderCandidates?: SaxoApiOrderSnapshot[];
   onChange: (simulation: TradeSimulation) => void;
   focusRequest?: { anchorId: string; requestId: number } | null;
   onExecutionDraft?: () => void;
+  defaultOpen?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const shortLegs = simulation.optionLegs.filter((leg) => leg.side === "sell");
   const longLegs = simulation.optionLegs.filter((leg) => leg.side === "buy");
   const closeDecisionLegs = [...shortLegs, ...longLegs];

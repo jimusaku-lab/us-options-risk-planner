@@ -1559,6 +1559,9 @@ export default function App() {
     selectedWithAccount.status !== "expired" &&
     selectedWithAccount.accountCurrency === "USD" &&
     selectedWithAccount.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
+  const isLongOptionDetailMode =
+    (selectedWithAccount.strategyType === "long_call" || selectedWithAccount.strategyType === "long_put") &&
+    selectedWithAccount.optionLegs.some((leg) => leg.side === "buy" && (leg.type === "call" || leg.type === "put"));
   const compactCoveredCallMode = orderPrepCoveredCallMode || openCoveredCallManagementMode;
   const shouldCollapseSaxoPanel = compactCoveredCallMode || (selected.status === "open" && !saxoHasPendingReflection);
   const collapseSaxoPanel = shouldCollapseSaxoPanel || hasSaxoDetailUserState;
@@ -1919,6 +1922,72 @@ export default function App() {
                 </CollapsibleSection>
               </>
             ) : !historyResultMode ? (
+              isLongOptionDetailMode ? (
+              <>
+                <section className="grid gap-4">
+                  <div className="px-1">
+                    <h2 className="text-lg font-bold text-slate-950">時間価値・反対売買判断</h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      買いオプションは満期保有ではなく、現在オプション価格、時間価値減衰、本質価値進捗、利確/損切りラインを主に確認します。
+                    </p>
+                  </div>
+                  <CloseDecisionCard
+                    simulation={selected}
+                    saxoOrderCandidates={saxoOrderCandidates}
+                    onChange={upsertSimulation}
+                    focusRequest={closeDecisionFocusRequest}
+                    defaultOpen
+                    onExecutionDraft={() => {
+                      setIsEditorOpen(true);
+                      setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
+                    }}
+                  />
+                  {hasActionableWarnings || !checklistComplete ? (
+                    <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                  ) : (
+                    <CollapsibleSection
+                      title="リスク警告・注文前チェックリスト詳細"
+                      subtitle="警告なし、全チェック済みのため折り畳んでいます。"
+                      collapsed
+                    >
+                      <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                    </CollapsibleSection>
+                  )}
+                </section>
+                <CollapsibleSection
+                  title="満期保有した場合の参考図"
+                  subtitle="買いオプションの主判断ではありません。満期まで保有・権利行使した場合だけ参考として確認します。"
+                  collapsed
+                >
+                  <PayoffChart simulation={selectedWithAccount} points={payoff} title="満期保有した場合の参考図" />
+                </CollapsibleSection>
+                <CollapsibleSection title="分母比較・年率換算の参考" subtitle="建玉時支払額や分母の根拠を必要時だけ確認します。" collapsed>
+                  <section className="grid gap-4 xl:grid-cols-2">
+                    <DenominatorChart denominators={denominatorsForDisplay} />
+                    <DenominatorTable denominators={denominatorsForDisplay} />
+                  </section>
+                  <div className="mt-4">
+                    <AnnualReturnFormula
+                      simulation={selectedWithAccount}
+                      primaryDenominator={primaryWithNet}
+                      taxResult={taxResult}
+                    />
+                  </div>
+                </CollapsibleSection>
+                <CollapsibleSection title="税務・ケース別参考" subtitle="税務区分、NISA等との比較、満期ケース別の参考値を必要時だけ確認します。" collapsed>
+                  <TaxComparisonCard
+                    taxResult={taxResult}
+                    nisaComparison={nisaComparison}
+                    stockSettlementTax={stockSettlementTax}
+                    taxBucketSummary={taxBucketSummary}
+                    isUnsettled={isUnsettledForTax}
+                  />
+                  <div className="mt-4">
+                    <ScenarioCards scenarios={scenarios} compactUnsettled={isUnsettledForTax} />
+                  </div>
+                </CollapsibleSection>
+              </>
+              ) : (
               <>
                 <section className="grid gap-4">
                   <div className="px-1">
@@ -2006,6 +2075,7 @@ export default function App() {
                   <ScenarioCards scenarios={scenarios} compactUnsettled={isUnsettledForTax} />
                 </section>
               </>
+              )
             ) : null}
             {activeWorkspace === "live" ? (
               <CollapsibleSection
