@@ -12,6 +12,7 @@ const baseProps = {
   onClose: vi.fn(),
   onWatchOnly: vi.fn(),
   onCreateSimulation: vi.fn(),
+  onJournalChange: vi.fn(),
 };
 
 afterEach(() => {

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { CandidateImportSummary, CandidateSymbol } from "@/types/candidates";
+import type { EntryRationaleJournal } from "@/types/domain";
 
 const CANDIDATES_KEY = "us-options-candidate-symbols-v1";
 
@@ -27,6 +28,7 @@ type CandidatesStore = {
   importCandidateSymbols: (candidates: CandidateSymbol[], warnings?: string[], summary?: CandidateImportSummary) => void;
   clearCandidates: () => void;
   markCandidateWatchOnly: (id: string, watchOnly: boolean) => void;
+  updateCandidateJournal: (id: string, journal: EntryRationaleJournal) => void;
 };
 
 const initialCandidates = loadJson<CandidateSymbol[]>(CANDIDATES_KEY, []);
@@ -54,6 +56,14 @@ export const useCandidatesStore = create<CandidatesStore>((set) => ({
     set((state) => {
       const candidates = state.candidates.map((candidate) =>
         candidate.id === id ? { ...candidate, watchOnly } : candidate,
+      );
+      saveJson(CANDIDATES_KEY, candidates);
+      return { candidates };
+    }),
+  updateCandidateJournal: (id, journal) =>
+    set((state) => {
+      const candidates = state.candidates.map((candidate) =>
+        candidate.id === id ? { ...candidate, entryRationaleJournal: journal } : candidate,
       );
       saveJson(CANDIDATES_KEY, candidates);
       return { candidates };

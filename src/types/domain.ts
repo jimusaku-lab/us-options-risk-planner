@@ -35,6 +35,50 @@ export type AccountEnvironment =
   | "PROD_P_JPY_SETTLEMENT"
   | "PROD_N_USD_SETTLEMENT";
 
+export type JournalAccountCode = SaxoAccountCode | "DEMO" | "UNKNOWN";
+export type EntryRationaleJournalStatus = "candidate" | "planned" | "entered" | "watching" | "closed";
+export type ChartEvidenceSource = "moomoo" | "Saxo" | "TradingView" | "manual" | "other";
+export type ChartEvidenceTimeframe = "daily" | "weekly" | "monthly" | "other";
+export type EntryRationaleReviewOutcome = "not_reviewed" | "as_expected" | "partly_expected" | "unexpected";
+
+export type ChartEvidence = {
+  id: string;
+  source: ChartEvidenceSource;
+  timeframe: ChartEvidenceTimeframe;
+  capturedAt: string;
+  memo: string;
+  imageRef: string;
+  thumbnailRef?: string;
+};
+
+export type EntryRationaleJournal = {
+  id: string;
+  candidateId?: string;
+  positionId?: string;
+  symbol: string;
+  underlyingName?: string;
+  strategy: StrategyType;
+  accountCode?: JournalAccountCode;
+  status: EntryRationaleJournalStatus;
+  entryDate?: string;
+  createdAt: string;
+  updatedAt: string;
+  entryReason: string;
+  technicalTags: string[];
+  technicalMemo?: string;
+  expectedScenario?: string;
+  profitTakingPlan?: string;
+  stopLossPlan?: string;
+  invalidationCondition?: string;
+  chartEvidence: ChartEvidence[];
+  review?: {
+    closedAt?: string;
+    outcome: EntryRationaleReviewOutcome;
+    resultMemo?: string;
+    lesson?: string;
+  };
+};
+
 export type WorkflowTaskType =
   | "confirm_entry_execution"
   | "enter_close_execution"
@@ -372,6 +416,7 @@ export type TradeSimulation = {
   carryingCostJPY?: number;
   stockAcquisition?: StockAcquisition;
   stockSettlement?: StockSettlement;
+  entryRationaleJournal?: EntryRationaleJournal;
   beginnerMode?: boolean;
   preOrderChecklist?: Record<string, boolean>;
   fixtureMeta?: BrokerFixtureMeta;

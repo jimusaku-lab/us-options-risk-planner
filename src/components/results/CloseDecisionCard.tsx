@@ -3,10 +3,12 @@ import { ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import type { ExitBrokerOrderType, ExitOrderPlanMode, OptionLeg, OptionType, OptionValueSnapshot, OptionValueSnapshotSource, TradeSimulation } from "@/types/domain";
 import { calculateCloseCostJPY, calculatePremiumJPY, calculatePremiumUSD } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
+import { createJournalForSimulation } from "@/domain/entryRationaleJournal";
 import { calculateProfitTakeBuybackPriceUSD, getExitDeadlineInfo, getExitOrderPlanForLeg } from "@/domain/exitOrderPlan";
 import { createOptionCloseExecutionDraft } from "@/domain/optionCloseExecutions";
 import { fetchSaxoOptionPremiumCandidate } from "@/features/saxo/saxoApiClient";
 import { findOrderCandidatesForLeg, type SaxoApiOrderSnapshot, type SaxoOptionPremiumCandidate } from "@/features/saxo/saxoAccountSync";
+import { EntryRationaleJournalPanel } from "@/components/journal/EntryRationaleJournalPanel";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
@@ -29,6 +31,7 @@ export function CloseDecisionCard({
   const shortLegs = simulation.optionLegs.filter((leg) => leg.side === "sell");
   const longLegs = simulation.optionLegs.filter((leg) => leg.side === "buy");
   const closeDecisionLegs = [...shortLegs, ...longLegs];
+  const entryRationaleJournal = simulation.entryRationaleJournal ?? createJournalForSimulation(simulation);
   const updateLeg = (id: string, patch: Partial<OptionLeg>) => {
     onChange({
       ...simulation,
@@ -122,6 +125,18 @@ export function CloseDecisionCard({
               />
             ))}
           </div>
+          <details className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+            <summary className="cursor-pointer text-sm font-bold text-slate-900">エントリー根拠・決済後レビュー</summary>
+            <div className="mt-3">
+              <EntryRationaleJournalPanel
+                title="エントリー根拠と出口判断の記録"
+                subtitle="決済判断時点の見立てと、決済後の振り返りを同じジャーナルに追記します。"
+                journal={entryRationaleJournal}
+                onChange={(entryRationaleJournal) => onChange({ ...simulation, entryRationaleJournal })}
+                reviewMode={["closed", "assigned", "expired"].includes(simulation.status)}
+              />
+            </div>
+          </details>
         </>
       ) : (
         <p className="mt-2 text-sm leading-6 text-slate-600">

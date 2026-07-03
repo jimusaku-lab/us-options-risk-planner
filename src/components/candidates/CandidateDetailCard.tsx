@@ -1,10 +1,14 @@
 import type { CandidateSymbol } from "@/types/candidates";
+import type { EntryRationaleJournal } from "@/types/domain";
 import type { StrategyFitLevel } from "@/types/screening";
 import type { ReactNode } from "react";
+import { EntryRationaleJournalPanel } from "@/components/journal/EntryRationaleJournalPanel";
 import { formatUSD } from "@/lib/format";
 
 type CandidateDetailCardProps = {
   candidate: CandidateSymbol;
+  onJournalChange?: (journal: EntryRationaleJournal) => void;
+  getDefaultJournal?: () => EntryRationaleJournal;
 };
 
 function formatValue(value: unknown, fallback = "-"): string {
@@ -85,7 +89,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-export function CandidateDetailCard({ candidate }: CandidateDetailCardProps) {
+export function CandidateDetailCard({ candidate, onJournalChange, getDefaultJournal }: CandidateDetailCardProps) {
   const screening = candidate.screeningCandidate;
   const technical = screening?.technicalSnapshot;
   const optionQuality = screening?.optionChainQuality;
@@ -338,6 +342,36 @@ export function CandidateDetailCard({ candidate }: CandidateDetailCardProps) {
           <p className="text-xs text-slate-500">シンセティックフォワード候補はありません。</p>
         )}
       </Section>
+      {onJournalChange ? (
+        <EntryRationaleJournalPanel
+          title="候補のエントリー根拠メモ"
+          subtitle="候補理由と、実際にエントリーすると判断した理由を分けて保存します。"
+          journal={candidate.entryRationaleJournal ?? getDefaultJournal?.() ?? {
+            id: `journal-${candidate.id}`,
+            candidateId: candidate.id,
+            symbol: candidate.symbol,
+            underlyingName: candidate.company,
+            strategy: "custom",
+            status: "candidate",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            entryReason: "",
+            technicalTags: [],
+            chartEvidence: [],
+            review: { outcome: "not_reviewed" },
+          }}
+          onChange={onJournalChange}
+          candidateReason={
+            <div className="grid gap-1">
+              <div>候補スコア: {candidate.score}</div>
+              <div>候補用途: {candidate.suggestedUse || "-"}</div>
+              <div>
+                {candidate.strategyFitResults?.slice(0, 3).map((result) => `${strategyLabel(result.strategy)} ${fitLabel(result.fitLevel)}`).join(" / ") || "戦略判定なし"}
+              </div>
+            </div>
+          }
+        />
+      ) : null}
     </div>
   );
 }

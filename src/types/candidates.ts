@@ -1,4 +1,5 @@
 import type { ScreeningCandidate, StrategyFitResult, SyntheticForwardEvaluation, TechnicalTimingPattern } from "@/types/screening";
+import type { EntryRationaleJournal } from "@/types/domain";
 
 export type CandidateSource =
   | "moomoo_opend"
@@ -38,6 +39,7 @@ export type CandidateSymbol = {
   strategyFitResults?: StrategyFitResult[];
   technicalTimingPatterns?: TechnicalTimingPattern[];
   syntheticForwardCandidates?: SyntheticForwardEvaluation[];
+  entryRationaleJournal?: EntryRationaleJournal;
 };
 
 export type CandidateImportFormat = "json" | "csv";

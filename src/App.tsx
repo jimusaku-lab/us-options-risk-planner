@@ -148,6 +148,7 @@ export default function App() {
     importCandidateSymbols,
     clearCandidates,
     markCandidateWatchOnly,
+    updateCandidateJournal,
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
@@ -1404,6 +1405,7 @@ export default function App() {
                     onClose={() => setIsCandidatesOpen(false)}
                     onWatchOnly={markCandidateWatchOnly}
                     onCreateSimulation={createCandidateSimulation}
+                    onJournalChange={updateCandidateJournal}
                   />
                 </div>
               ) : null}
@@ -1681,6 +1683,7 @@ export default function App() {
                   onClose={() => setIsCandidatesOpen(false)}
                   onWatchOnly={markCandidateWatchOnly}
                   onCreateSimulation={createCandidateSimulation}
+                  onJournalChange={updateCandidateJournal}
                 />
               </div>
             ) : null}

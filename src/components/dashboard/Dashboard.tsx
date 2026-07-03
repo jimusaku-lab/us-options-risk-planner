@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
 import { resolveEffectiveCoveredCallSimulation } from "@/domain/coveredCallCoverage";
+import { getJournalStatusLabel, getJournalStatusTone } from "@/domain/entryRationaleJournal";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
@@ -186,6 +187,8 @@ export function Dashboard({
               const actionableWarning = countableWarnings.find((warning) => warning.actionAnchorId);
               const firstVisibleWarning = countableWarnings[0];
               const stockAcquisitionSummary = getStockAcquisitionSummary(simulation);
+              const journalStatusLabel = getJournalStatusLabel(simulation.entryRationaleJournal, simulation.status);
+              const journalStatusTone = getJournalStatusTone(journalStatusLabel);
               const isFirstHistory = showHistory && index === currentSimulations.length && historySimulations.length > 0;
               const annualReturnLabel =
                 !isHistoryRow && !premiumDisplay.hasPremiumInput
@@ -223,6 +226,15 @@ export function Dashboard({
                 >
                   <td className="py-3 pr-3 font-bold text-slate-950">
                     <span className="block">{tickerLabel}</span>
+                    <span className={`mt-1 inline-flex rounded px-1.5 py-0.5 text-[11px] font-bold ${
+                      journalStatusTone === "teal"
+                        ? "bg-teal-50 text-teal-800 ring-1 ring-teal-200"
+                        : journalStatusTone === "amber"
+                          ? "bg-amber-50 text-amber-800 ring-1 ring-amber-200"
+                          : "bg-slate-100 text-slate-600 ring-1 ring-slate-200"
+                    }`}>
+                      {journalStatusLabel}
+                    </span>
                     {stockAcquisitionSummary ? (
                       <div className="mt-2 max-w-[260px] rounded-md border border-violet-200 bg-violet-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-violet-950">
                         <div>現物株取得: {stockAcquisitionSummary.shares}株 @ {stockAcquisitionSummary.price}</div>

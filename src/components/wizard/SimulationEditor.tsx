@@ -15,7 +15,9 @@ import {
   validateSaxoHistoryCloseExecution,
 } from "@/domain/optionCloseExecutions";
 import { calculateStockSettlementTaxResult } from "@/domain/tax";
+import { createJournalForSimulation } from "@/domain/entryRationaleJournal";
 import { getStatusLabel } from "@/domain/strategyLabels";
+import { EntryRationaleJournalPanel } from "@/components/journal/EntryRationaleJournalPanel";
 import { NumberInput } from "@/components/ui/NumberInput";
 import { isSaxoHistoryMatchingOptionLeg, parseSaxoOptionContract, type SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 import { formatLocalDate } from "@/lib/date";
@@ -622,6 +624,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     focusRequest?.anchorId === "option-close-executions" && focusRequest.saxoHistoryIssue === "missing-close-candidate";
   const isSaxoApiDraft = isSaxoApiPositionDraft(simulation);
   const saxoDraftMissingItems = getSaxoDraftMissingItems(simulation);
+  const entryRationaleJournal = simulation.entryRationaleJournal ?? createJournalForSimulation(simulation);
   const confirmSaxoApiDraft = () => {
     onChange({
       ...simulation,
@@ -776,6 +779,19 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           </span>
         </label>
       </div>
+
+      <details className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <summary className="cursor-pointer text-sm font-bold text-slate-950">エントリー根拠ジャーナル</summary>
+        <div className="mt-3">
+          <EntryRationaleJournalPanel
+            title="なぜエントリーしたか"
+            subtitle="注文前の根拠、テクニカルタグ、チャート画像、利確/損切り方針、決済後の振り返りをこの建玉に紐づけます。"
+            journal={entryRationaleJournal}
+            onChange={(entryRationaleJournal) => update({ entryRationaleJournal })}
+            reviewMode={["closed", "assigned", "expired"].includes(simulation.status)}
+          />
+        </div>
+      </details>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-3">
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">

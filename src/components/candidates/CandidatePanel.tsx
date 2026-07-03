@@ -1,7 +1,8 @@
 import { Fragment, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Eye, FileUp, ListFilter, Plus, Trash2, X } from "lucide-react";
 import type { CandidateImportSummary, CandidateSymbol } from "@/types/candidates";
-import type { TradeSimulation } from "@/types/domain";
+import type { EntryRationaleJournal, TradeSimulation } from "@/types/domain";
+import { createJournalForCandidate, getJournalStatusLabel } from "@/domain/entryRationaleJournal";
 import { parseCandidateImport } from "@/lib/candidates";
 import { formatUSD } from "@/lib/format";
 import { CandidateDetailCard } from "./CandidateDetailCard";
@@ -29,6 +30,7 @@ export function CandidatePanel({
   onClose,
   onWatchOnly,
   onCreateSimulation,
+  onJournalChange,
 }: {
   candidates: CandidateSymbol[];
   importWarnings: string[];
@@ -39,6 +41,7 @@ export function CandidatePanel({
   onClose: () => void;
   onWatchOnly: (id: string, watchOnly: boolean) => void;
   onCreateSimulation: (candidate: CandidateSymbol, strategy: "covered_call" | "short_put" | "long_call") => void;
+  onJournalChange: (candidateId: string, journal: EntryRationaleJournal) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState("");
@@ -222,6 +225,7 @@ export function CandidatePanel({
                 const hasPosition = existingSymbols.has(candidate.symbol);
                 const hasWarnings = (candidate.parseWarnings?.length ?? 0) > 0 || Boolean(candidate.earningsWarning);
                 const isExpanded = expandedCandidateId === candidate.id;
+                const journalStatus = getJournalStatusLabel(candidate.entryRationaleJournal);
                 return (
                   <Fragment key={candidate.id}>
                     <tr className="border-b border-slate-100 hover:bg-slate-50">
@@ -242,6 +246,7 @@ export function CandidatePanel({
                           <span className="font-bold text-slate-950">{candidate.symbol}</span>
                           {hasPosition ? <span className="rounded bg-teal-100 px-1.5 py-0.5 text-[11px] font-bold text-teal-800">建玉あり</span> : null}
                           {candidate.watchOnly ? <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[11px] font-bold text-slate-700">Watch</span> : null}
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold text-slate-600">{journalStatus}</span>
                         </div>
                       </td>
                       <td className="py-3 pr-3 text-slate-700">{candidate.company}</td>
@@ -287,6 +292,13 @@ export function CandidatePanel({
                             <Eye size={15} />
                           </button>
                           <button
+                            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-2 text-xs font-bold text-slate-600 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800"
+                            title="エントリー根拠を記録"
+                            onClick={() => setExpandedCandidateId(isExpanded ? null : candidate.id)}
+                          >
+                            根拠
+                          </button>
+                          <button
                             className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
                             title="カバードコール候補として建玉案を作成"
                             onClick={() => onCreateSimulation(candidate, "covered_call")}
@@ -314,7 +326,11 @@ export function CandidatePanel({
                     {isExpanded ? (
                       <tr className="border-b border-slate-200 bg-slate-50/70">
                         <td colSpan={14} className="px-3 py-4">
-                          <CandidateDetailCard candidate={candidate} />
+                          <CandidateDetailCard
+                            candidate={candidate}
+                            onJournalChange={(journal) => onJournalChange(candidate.id, journal)}
+                            getDefaultJournal={() => createJournalForCandidate(candidate)}
+                          />
                         </td>
                       </tr>
                     ) : null}

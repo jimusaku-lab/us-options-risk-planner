@@ -1,6 +1,7 @@
 import type { CandidateSymbol } from "@/types/candidates";
 import { DEFAULT_BROKER_COMMISSION_USD, type AppSettings, type WorkspaceMode } from "@/store/useOptionsStore";
 import type { StrategyType, TradeSimulation } from "@/types/domain";
+import { prepareJournalForSimulation } from "@/domain/entryRationaleJournal";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
 
 function addDays(date: Date, days: number): string {
@@ -22,7 +23,7 @@ export function createSimulationFromCandidate(params: {
   const id = `${params.workspace}-candidate-${params.candidate.symbol}-${Date.now()}`;
   const isCoveredCall = params.strategyType === "covered_call";
   const isShortPut = params.strategyType === "short_put";
-  return {
+  const simulation: TradeSimulation = {
     id,
     status: "planned",
     name: `${params.candidate.symbol} 候補建玉案`,
@@ -91,5 +92,9 @@ export function createSimulationFromCandidate(params: {
     ]
       .filter(Boolean)
       .join("\n"),
+  };
+  return {
+    ...simulation,
+    entryRationaleJournal: prepareJournalForSimulation(params.candidate, simulation),
   };
 }
