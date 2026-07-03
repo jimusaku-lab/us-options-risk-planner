@@ -129,6 +129,21 @@ export type ClosePlan = {
   commissionUSD?: number;
 };
 
+export type OptionValueSnapshotSource = "manual" | "saxo" | "moomoo";
+
+export type OptionValueSnapshot = {
+  snapshotDate: string;
+  underlyingPrice: number;
+  optionExitPrice: number;
+  strike: number;
+  expiry: string;
+  dte: number;
+  intrinsicValue: number;
+  timeValue: number;
+  timeValueRatio: number;
+  source: OptionValueSnapshotSource;
+};
+
 export type OptionLeg = {
   id: string;
   type: OptionType;
@@ -149,6 +164,7 @@ export type OptionLeg = {
   unrealizedPnlJPY?: number;
   theta?: number;
   brokerSymbol?: string;
+  valueSnapshots?: OptionValueSnapshot[];
 };
 
 export type ProfitTakeRule = {

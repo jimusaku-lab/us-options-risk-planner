@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
 import type { OptionLeg, TradeSimulation } from "@/types/domain";
 import {
+  buildLongOptionValueSnapshot,
+  buildOptionValueTimeline,
   buildSaxoOptionPremiumCandidateInput,
   calculateLongOptionCloseAnnualizedReturnPercent,
   calculateLongOptionExitBreakevenPriceUSD,
+  calculateOptionValueProgress,
   getPremiumCandidateManualInputGuidance,
   getLongOptionExitOrderLineCandidate,
   getPremiumCandidatePrice,
   isSaxoPriceFeedNoAccess,
+  upsertOptionValueSnapshot,
 } from "./CloseDecisionCard";
 
 function createOrder(overrides: Partial<SaxoApiOrderSnapshot>): SaxoApiOrderSnapshot {
@@ -183,5 +187,96 @@ describe("long option close annualized return", () => {
       entryCost: 0,
       elapsedDays: 5,
     })).toBeNull();
+  });
+});
+
+describe("long call time value decay snapshots", () => {
+  it("breaks current option price into intrinsic and time value", () => {
+    const snapshot = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-03",
+      underlyingPrice: 360,
+      optionExitPrice: 36.4,
+      strike: 340,
+      expiry: "2026-11-20",
+      dte: 140,
+      optionType: "call",
+      source: "manual",
+    });
+
+    expect(snapshot?.intrinsicValue).toBeCloseTo(20, 8);
+    expect(snapshot?.timeValue).toBeCloseTo(16.4, 8);
+    expect(snapshot?.timeValueRatio).toBeCloseTo(16.4 / 36.4, 8);
+  });
+
+  it("compares intrinsic progress against time value decay", () => {
+    const previous = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-01",
+      underlyingPrice: 352,
+      optionExitPrice: 31,
+      strike: 340,
+      expiry: "2026-11-20",
+      dte: 142,
+      optionType: "call",
+      source: "manual",
+    });
+    const current = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-03",
+      underlyingPrice: 360,
+      optionExitPrice: 36.4,
+      strike: 340,
+      expiry: "2026-11-20",
+      dte: 140,
+      optionType: "call",
+      source: "manual",
+    });
+    const progress = calculateOptionValueProgress([previous, current].filter(Boolean) as NonNullable<typeof previous>[]);
+
+    expect(progress?.elapsedDays).toBe(2);
+    expect(progress?.intrinsicGain).toBeCloseTo(8, 8);
+    expect(progress?.timeValueChange).toBeCloseTo(-2.6, 8);
+    expect(progress?.timeValueDecay).toBeCloseTo(2.6, 8);
+    expect(progress?.netOptionMove).toBeCloseTo(5.4, 8);
+    expect(progress?.decayPerDay).toBeCloseTo(1.3, 8);
+    expect(progress?.intrinsicGainPerDay).toBeCloseTo(4, 8);
+  });
+
+  it("updates the same-day snapshot and keeps the timeline sorted", () => {
+    const first = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-03",
+      underlyingPrice: 358,
+      optionExitPrice: 34,
+      strike: 340,
+      expiry: "2026-11-20",
+      dte: 140,
+      optionType: "call",
+      source: "manual",
+    });
+    const replacement = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-03",
+      underlyingPrice: 360,
+      optionExitPrice: 36.4,
+      strike: 340,
+      expiry: "2026-11-20",
+      dte: 140,
+      optionType: "call",
+      source: "saxo",
+    });
+    const earlier = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-01",
+      underlyingPrice: 352,
+      optionExitPrice: 31,
+      strike: 340,
+      expiry: "2026-11-20",
+      dte: 142,
+      optionType: "call",
+      source: "manual",
+    });
+
+    const snapshots = upsertOptionValueSnapshot([earlier, first].filter(Boolean) as OptionLeg["valueSnapshots"], replacement!);
+    const timeline = buildOptionValueTimeline(snapshots, null);
+
+    expect(timeline.map((snapshot) => snapshot.snapshotDate)).toEqual(["2026-07-01", "2026-07-03"]);
+    expect(timeline[1].optionExitPrice).toBe(36.4);
+    expect(timeline[1].source).toBe("saxo");
   });
 });

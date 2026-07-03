@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
-import type { ExitBrokerOrderType, ExitOrderPlanMode, OptionLeg, TradeSimulation } from "@/types/domain";
+import type { ExitBrokerOrderType, ExitOrderPlanMode, OptionLeg, OptionType, OptionValueSnapshot, OptionValueSnapshotSource, TradeSimulation } from "@/types/domain";
 import { calculateCloseCostJPY, calculatePremiumJPY, calculatePremiumUSD } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateProfitTakeBuybackPriceUSD, getExitDeadlineInfo, getExitOrderPlanForLeg } from "@/domain/exitOrderPlan";
@@ -31,6 +31,23 @@ export function CloseDecisionCard({
     onChange({
       ...simulation,
       optionLegs: simulation.optionLegs.map((leg) => (leg.id === id ? { ...leg, ...patch } : leg)),
+    });
+  };
+  const updateLongOptionClosePrice = (leg: OptionLeg, closePriceUSD: number, source: OptionValueSnapshotSource) => {
+    const snapshot = buildLongOptionValueSnapshot({
+      snapshotDate: todayIsoDate(),
+      underlyingPrice: simulation.currentPriceUSD,
+      optionExitPrice: closePriceUSD,
+      strike: leg.strikeUSD,
+      expiry: leg.expiryDate,
+      dte: calculateRemainingDaysUntilExpiry(leg.expiryDate),
+      optionType: leg.type,
+      source,
+    });
+    updateLeg(leg.id, {
+      closeCostUSD: closePriceUSD,
+      closePlan: { enabled: true, ...(leg.closePlan ?? {}), closePriceUSD },
+      valueSnapshots: snapshot ? upsertOptionValueSnapshot(leg.valueSnapshots, snapshot) : leg.valueSnapshots,
     });
   };
   const addExecutionDraft = (leg: OptionLeg) => {
@@ -97,7 +114,7 @@ export function CloseDecisionCard({
                 fxRateJPY={simulation.fxRateJPY}
                 openCommissionUSD={(simulation.brokerCommissionUSD ?? 0) / Math.max(1, closeDecisionLegs.length)}
                 saxoOrderCandidates={saxoOrderCandidates}
-                onClosePriceChange={(closeCostUSD) => updateLeg(leg.id, { closeCostUSD })}
+                onClosePriceChange={(closeCostUSD, source) => updateLongOptionClosePrice(leg, closeCostUSD, source)}
                 onClosePlanChange={(closePlanPatch) => updateLeg(leg.id, { closePlan: { enabled: true, ...(leg.closePlan ?? {}), ...closePlanPatch } })}
                 onExecutionDraft={() => addExecutionDraft(leg)}
               />
@@ -710,7 +727,7 @@ function LongOptionCloseCard({
   fxRateJPY: number;
   openCommissionUSD: number;
   saxoOrderCandidates: SaxoApiOrderSnapshot[];
-  onClosePriceChange: (closePriceUSD: number) => void;
+  onClosePriceChange: (closePriceUSD: number, source: OptionValueSnapshotSource) => void;
   onClosePlanChange: (closePlanPatch: Partial<NonNullable<OptionLeg["closePlan"]>>) => void;
   onExecutionDraft: () => void;
 }) {
@@ -753,6 +770,25 @@ function LongOptionCloseCard({
     ? null
     : Math.max(0, closePriceUSD - intrinsicValueUSD);
   const dte = calculateRemainingDaysUntilExpiry(leg.expiryDate);
+  const currentSnapshotDate = todayIsoDate();
+  const storedCurrentSnapshot = leg.valueSnapshots?.find(
+    (snapshot) =>
+      snapshot.snapshotDate === currentSnapshotDate &&
+      closePriceUSD !== undefined &&
+      Math.abs(snapshot.optionExitPrice - closePriceUSD) < 0.0001,
+  );
+  const currentValueSnapshot = buildLongOptionValueSnapshot({
+    snapshotDate: currentSnapshotDate,
+    underlyingPrice: simulation.currentPriceUSD,
+    optionExitPrice: closePriceUSD ?? 0,
+    strike: leg.strikeUSD,
+    expiry: leg.expiryDate,
+    dte,
+    optionType: leg.type,
+    source: storedCurrentSnapshot?.source ?? "manual",
+  });
+  const valueTimeline = buildOptionValueTimeline(leg.valueSnapshots, currentValueSnapshot);
+  const valueProgress = calculateOptionValueProgress(valueTimeline);
   const orderCandidates = findOrderCandidatesForLeg(simulation, leg, saxoOrderCandidates).filter((order) => order.isExitCandidate);
   const exitOrderLineCandidate = getLongOptionExitOrderLineCandidate(orderCandidates);
   const candidatePriceUSD = getPremiumCandidatePrice(apiCandidate);
@@ -799,8 +835,7 @@ function LongOptionCloseCard({
           placeholder="Saxo決済チケットの売却価格"
           min={0}
           onChange={(value) => {
-            onClosePriceChange(value);
-            onClosePlanChange({ closePriceUSD: value });
+            onClosePriceChange(value, "manual");
           }}
         />
         <NumberInput
@@ -825,8 +860,7 @@ function LongOptionCloseCard({
         isLoading={isLoadingApiCandidate}
         onLoad={loadApiCandidate}
         onAdopt={(price) => {
-          onClosePriceChange(price);
-          onClosePlanChange({ closePriceUSD: price });
+          onClosePriceChange(price, "saxo");
         }}
       />
       <SaxoExitOrderStatus
@@ -847,6 +881,16 @@ function LongOptionCloseCard({
           反対売買の決済実績を作成
         </button>
       ) : null}
+      <LongOptionTimeValueDecayView
+        currentSnapshot={currentValueSnapshot}
+        timeline={valueTimeline}
+        progress={valueProgress}
+        exitBreakevenPriceUSD={exitBreakevenPriceUSD}
+        exitBreakevenBufferUSD={exitBreakevenBufferUSD}
+        profitTargetPriceUSD={profitTargetPriceUSD}
+        stopLossPriceUSD={stopLossPriceUSD}
+        dte={dte}
+      />
       <dl className="mt-3 grid gap-2 text-sm">
         <Row label="支払プレミアム" value={`${formatUSD(paidPremiumUSD)} / 参考 ${formatJPY(paidPremiumJPY)}`} />
         <Row
@@ -908,6 +952,240 @@ function LongOptionCloseCard({
   );
 }
 
+type OptionValueProgress = {
+  elapsedDays: number;
+  intrinsicGain: number;
+  timeValueChange: number;
+  timeValueDecay: number;
+  netOptionMove: number;
+  decayPerDay: number;
+  intrinsicGainPerDay: number;
+};
+
+export function buildLongOptionValueSnapshot({
+  snapshotDate,
+  underlyingPrice,
+  optionExitPrice,
+  strike,
+  expiry,
+  dte,
+  optionType,
+  source,
+}: {
+  snapshotDate: string;
+  underlyingPrice: number;
+  optionExitPrice: number;
+  strike: number;
+  expiry: string;
+  dte: number;
+  optionType: OptionType;
+  source: OptionValueSnapshotSource;
+}): OptionValueSnapshot | null {
+  if (!Number.isFinite(underlyingPrice) || underlyingPrice <= 0) return null;
+  if (!Number.isFinite(optionExitPrice) || optionExitPrice <= 0) return null;
+  if (!Number.isFinite(strike) || strike <= 0) return null;
+  const intrinsicValue =
+    optionType === "call" ? Math.max(0, underlyingPrice - strike) : Math.max(0, strike - underlyingPrice);
+  const timeValue = Math.max(0, optionExitPrice - intrinsicValue);
+  return {
+    snapshotDate,
+    underlyingPrice,
+    optionExitPrice,
+    strike,
+    expiry,
+    dte,
+    intrinsicValue,
+    timeValue,
+    timeValueRatio: optionExitPrice > 0 ? timeValue / optionExitPrice : 0,
+    source,
+  };
+}
+
+export function upsertOptionValueSnapshot(
+  snapshots: OptionValueSnapshot[] | undefined,
+  nextSnapshot: OptionValueSnapshot,
+): OptionValueSnapshot[] {
+  const byDate = new Map<string, OptionValueSnapshot>();
+  for (const snapshot of snapshots ?? []) {
+    if (snapshot.snapshotDate) byDate.set(snapshot.snapshotDate, snapshot);
+  }
+  byDate.set(nextSnapshot.snapshotDate, nextSnapshot);
+  return [...byDate.values()]
+    .sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate))
+    .slice(-20);
+}
+
+export function buildOptionValueTimeline(
+  snapshots: OptionValueSnapshot[] | undefined,
+  currentSnapshot: OptionValueSnapshot | null,
+): OptionValueSnapshot[] {
+  const timeline = currentSnapshot ? upsertOptionValueSnapshot(snapshots, currentSnapshot) : [...(snapshots ?? [])];
+  return timeline
+    .filter((snapshot) => Number.isFinite(snapshot.optionExitPrice) && snapshot.optionExitPrice > 0)
+    .sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+}
+
+export function calculateOptionValueProgress(timeline: OptionValueSnapshot[]): OptionValueProgress | null {
+  if (timeline.length < 2) return null;
+  const previous = timeline[timeline.length - 2];
+  const current = timeline[timeline.length - 1];
+  const elapsedDays = Math.max(1, daysBetweenIsoDates(previous.snapshotDate, current.snapshotDate));
+  const intrinsicGain = current.intrinsicValue - previous.intrinsicValue;
+  const timeValueChange = current.timeValue - previous.timeValue;
+  const timeValueDecay = Math.max(0, previous.timeValue - current.timeValue);
+  const netOptionMove = current.optionExitPrice - previous.optionExitPrice;
+  return {
+    elapsedDays,
+    intrinsicGain,
+    timeValueChange,
+    timeValueDecay,
+    netOptionMove,
+    decayPerDay: timeValueDecay / elapsedDays,
+    intrinsicGainPerDay: intrinsicGain / elapsedDays,
+  };
+}
+
+function LongOptionTimeValueDecayView({
+  currentSnapshot,
+  timeline,
+  progress,
+  exitBreakevenPriceUSD,
+  exitBreakevenBufferUSD,
+  profitTargetPriceUSD,
+  stopLossPriceUSD,
+  dte,
+}: {
+  currentSnapshot: OptionValueSnapshot | null;
+  timeline: OptionValueSnapshot[];
+  progress: OptionValueProgress | null;
+  exitBreakevenPriceUSD: number;
+  exitBreakevenBufferUSD: number | null;
+  profitTargetPriceUSD: number;
+  stopLossPriceUSD: number;
+  dte: number;
+}) {
+  if (!currentSnapshot) {
+    return (
+      <section className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
+        <div className="font-bold text-slate-950">時間価値減衰ビュー</div>
+        <p className="mt-2 leading-6 text-slate-600">
+          現在株価と現在オプション価格を入れると、本質的価値・時間的価値・時間的価値比率を表示します。
+        </p>
+      </section>
+    );
+  }
+
+  const intrinsicPct = Math.min(100, Math.max(0, (currentSnapshot.intrinsicValue / currentSnapshot.optionExitPrice) * 100));
+  const timePct = Math.max(0, 100 - intrinsicPct);
+  const latestTimeline = timeline.slice(-6);
+  const maxTimelineValue = Math.max(...latestTimeline.map((snapshot) => snapshot.optionExitPrice), currentSnapshot.optionExitPrice, 1);
+  const progressMessage = !progress
+    ? null
+    : progress.intrinsicGain >= progress.timeValueDecay
+      ? "株価上昇が時間価値減少を上回っています。"
+      : "時間価値の減少が大きくなっています。利確ライン、損切りライン、残存日数を確認してください。";
+
+  return (
+    <section className="mt-3 rounded-md border border-indigo-200 bg-white p-3 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="font-bold text-slate-950">時間価値減衰ビュー</div>
+          <p className="mt-1 text-xs font-semibold text-indigo-800">
+            現在オプション価格を本質的価値と時間的価値に分解します。
+          </p>
+        </div>
+        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700">
+          {sourceLabel(currentSnapshot.source)}
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-4">
+        <MiniMetric label="現在オプション価格" value={`${formatUSD(currentSnapshot.optionExitPrice)} / 株`} />
+        <MiniMetric label="本質的価値" value={`${formatUSD(currentSnapshot.intrinsicValue)} / 株`} />
+        <MiniMetric label="時間的価値" value={`${formatUSD(currentSnapshot.timeValue)} / 株`} tone={currentSnapshot.timeValue <= 0.05 ? "amber" : undefined} />
+        <MiniMetric label="時間的価値比率" value={formatPct(currentSnapshot.timeValueRatio * 100)} />
+      </div>
+
+      <div className="mt-3 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+        <div className="flex h-5 w-full">
+          <div className="bg-emerald-500" style={{ width: `${intrinsicPct}%` }} title="本質的価値" />
+          <div className="bg-rose-400" style={{ width: `${timePct}%` }} title="時間的価値" />
+        </div>
+        <div className="flex justify-between px-2 py-1 text-[11px] font-semibold text-slate-600">
+          <span>本質 {formatUSD(currentSnapshot.intrinsicValue)}</span>
+          <span>時間 {formatUSD(currentSnapshot.timeValue)}</span>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-4">
+        <MiniMetric label="反対売買損益分岐価格" value={`${formatUSD(exitBreakevenPriceUSD)} / 株`} />
+        <MiniMetric
+          label="損益分岐までの余裕"
+          value={exitBreakevenBufferUSD === null ? "未計算" : `${formatSignedUSD(exitBreakevenBufferUSD)} / 株`}
+          tone={exitBreakevenBufferUSD === null ? undefined : exitBreakevenBufferUSD >= 0 ? "green" : "red"}
+        />
+        <MiniMetric label="利確/損切りライン" value={`${formatUSD(profitTargetPriceUSD)} / ${formatUSD(stopLossPriceUSD)}`} />
+        <MiniMetric label="残存日数" value={`${dte}日`} tone={dte <= 7 ? "amber" : undefined} />
+      </div>
+
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+        <div className="font-bold text-slate-800">価値分解タイムライン</div>
+        <div className="mt-2 grid gap-2">
+          {latestTimeline.map((snapshot) => {
+            const widthPct = Math.max(4, (snapshot.optionExitPrice / maxTimelineValue) * 100);
+            const snapshotIntrinsicPct = snapshot.optionExitPrice > 0
+              ? Math.min(100, Math.max(0, (snapshot.intrinsicValue / snapshot.optionExitPrice) * 100))
+              : 0;
+            return (
+              <div key={`${snapshot.snapshotDate}-${snapshot.optionExitPrice}`} className="grid grid-cols-[88px_1fr_72px] items-center gap-2 text-xs">
+                <div className="font-semibold text-slate-600">{snapshot.snapshotDate}</div>
+                <div className="h-4 rounded bg-white">
+                  <div className="flex h-4 overflow-hidden rounded" style={{ width: `${widthPct}%` }}>
+                    <div className="bg-emerald-500" style={{ width: `${snapshotIntrinsicPct}%` }} />
+                    <div className="flex-1 bg-rose-400" />
+                  </div>
+                </div>
+                <div className="numeric-input text-right font-bold text-slate-800">{formatUSD(snapshot.optionExitPrice)}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {progress ? (
+        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <div className="font-bold text-slate-800">価値変化バランス</div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            <MiniMetric label="本質的価値増減" value={`${formatSignedUSD(progress.intrinsicGain)} / 株`} tone={progress.intrinsicGain >= 0 ? "green" : "red"} />
+            <MiniMetric label="時間的価値増減" value={`${formatSignedUSD(progress.timeValueChange)} / 株`} tone={progress.timeValueChange >= 0 ? "green" : "red"} />
+            <MiniMetric label="差し引き変化" value={`${formatSignedUSD(progress.netOptionMove)} / 株`} tone={progress.netOptionMove >= 0 ? "green" : "red"} />
+          </div>
+          <p className="mt-2 text-xs leading-5 text-slate-600">
+            {progress.elapsedDays}日差分。時間価値減少 {formatUSD(progress.timeValueDecay)} / 株、1日あたり {formatUSD(progress.decayPerDay)}。本質的価値増加は1日あたり {formatSignedUSD(progress.intrinsicGainPerDay)}。
+          </p>
+          <p className="mt-2 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-xs font-semibold leading-5 text-indigo-900">
+            {progressMessage}
+          </p>
+        </div>
+      ) : (
+        <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold leading-5 text-slate-600">
+          初回スナップショットのため、トレンド判定は表示しません。次回以降の価格入力で直近差分を比較します。
+        </p>
+      )}
+    </section>
+  );
+}
+
+function MiniMetric({ label, value, tone }: { label: string; value: string; tone?: Tone }) {
+  const toneClass = tone === "green" ? "text-emerald-700" : tone === "red" ? "text-rose-700" : tone === "amber" ? "text-amber-700" : "text-slate-950";
+  return (
+    <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5">
+      <div className="text-[11px] font-semibold text-slate-500">{label}</div>
+      <div className={`numeric-input mt-1 font-bold ${toneClass}`}>{value}</div>
+    </div>
+  );
+}
+
 function roundOptionPrice(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.round(value * 100) / 100;
@@ -927,6 +1205,27 @@ function formatOptionalUSD(value?: number): string {
 
 function formatSignedUSD(value: number): string {
   return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
+}
+
+function todayIsoDate(now = new Date()): string {
+  return [
+    now.getFullYear(),
+    `${now.getMonth() + 1}`.padStart(2, "0"),
+    `${now.getDate()}`.padStart(2, "0"),
+  ].join("-");
+}
+
+function daysBetweenIsoDates(from: string, to: string): number {
+  const fromDate = new Date(`${from}T00:00:00`);
+  const toDate = new Date(`${to}T00:00:00`);
+  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) return 1;
+  return Math.ceil((toDate.getTime() - fromDate.getTime()) / 86_400_000);
+}
+
+function sourceLabel(source: OptionValueSnapshotSource): string {
+  if (source === "saxo") return "Saxo候補/手入力";
+  if (source === "moomoo") return "moomoo Bid";
+  return "手入力";
 }
 
 function MiniRow({ label, value }: { label: string; value: string }) {
