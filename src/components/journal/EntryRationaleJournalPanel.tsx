@@ -52,17 +52,22 @@ function TextField({
   value,
   onChange,
   placeholder,
+  rows = 3,
+  className = "",
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  rows?: number;
+  className?: string;
 }) {
   return (
     <label className="grid gap-1 text-sm">
       <span className="font-semibold text-slate-700">{label}</span>
       <textarea
-        className="min-h-20 rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
+        className={`rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100 ${className}`}
+        rows={rows}
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
@@ -92,23 +97,23 @@ function InputField({
   );
 }
 
-function EvidenceThumbnail({
+function EvidencePreview({
   evidence,
   onOpen,
 }: {
   evidence: ChartEvidence;
   onOpen: (ref: string) => void;
 }) {
-  const [thumbnail, setThumbnail] = useState<string | undefined>();
+  const [preview, setPreview] = useState<string | undefined>();
   useEffect(() => {
     let mounted = true;
-    void readJournalImage(evidence.thumbnailRef ?? evidence.imageRef).then((dataUrl) => {
-      if (mounted) setThumbnail(dataUrl);
+    void readJournalImage(evidence.imageRef).then((dataUrl) => {
+      if (mounted) setPreview(dataUrl);
     });
     return () => {
       mounted = false;
     };
-  }, [evidence.thumbnailRef, evidence.imageRef]);
+  }, [evidence.imageRef]);
 
   return (
     <button
@@ -116,15 +121,14 @@ function EvidenceThumbnail({
       className="overflow-hidden rounded-md border border-slate-200 bg-white text-left shadow-sm hover:border-teal-300"
       onClick={() => onOpen(evidence.imageRef)}
     >
-      {thumbnail ? (
-        <img src={thumbnail} alt={evidence.memo || "チャート画像"} className="h-28 w-full object-cover" />
+      {preview ? (
+        <img src={preview} alt="チャート画像" className="h-auto max-h-[420px] min-h-[240px] w-full bg-slate-100 object-contain" />
       ) : (
-        <div className="flex h-28 items-center justify-center bg-slate-100 text-xs font-semibold text-slate-500">画像保存済み</div>
+        <div className="flex min-h-[240px] items-center justify-center bg-slate-100 text-xs font-semibold text-slate-500">画像保存済み</div>
       )}
       <div className="px-2 py-1.5 text-xs leading-5 text-slate-600">
         <div className="font-bold text-slate-900">{sourceLabel(evidence.source)} / {timeframeLabel(evidence.timeframe)}</div>
         <div>{evidence.capturedAt}</div>
-        {evidence.memo ? <div className="line-clamp-2">{evidence.memo}</div> : null}
       </div>
     </button>
   );
@@ -150,7 +154,6 @@ export function EntryRationaleJournalPanel({
   const [selectedImage, setSelectedImage] = useState<string | undefined>();
   const [newEvidenceSource, setNewEvidenceSource] = useState<ChartEvidenceSource>("manual");
   const [newEvidenceTimeframe, setNewEvidenceTimeframe] = useState<ChartEvidenceTimeframe>("daily");
-  const [newEvidenceMemo, setNewEvidenceMemo] = useState("");
   const [fullImage, setFullImage] = useState<string | undefined>();
 
   const updateJournal = (patch: Partial<EntryRationaleJournal>) => onChange(updateJournalTimestamp({ ...journal, ...patch }));
@@ -180,13 +183,12 @@ export function EntryRationaleJournalPanel({
           source: newEvidenceSource,
           timeframe: newEvidenceTimeframe,
           capturedAt: new Date().toISOString(),
-          memo: newEvidenceMemo,
+          memo: "",
           imageRef: refs.imageRef,
           thumbnailRef: refs.thumbnailRef,
         });
       }
       updateJournal({ chartEvidence: [...journal.chartEvidence, ...evidenceItems] });
-      setNewEvidenceMemo("");
       setImageStatus(`${evidenceItems.length}件の画像を保存しました。`);
     } catch (error) {
       setImageStatus(error instanceof Error ? error.message : "画像を保存できませんでした。");
@@ -235,23 +237,70 @@ export function EntryRationaleJournalPanel({
         </div>
       ) : null}
 
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+      <div className="mt-4">
         <TextField
           label="エントリー理由"
           value={journal.entryReason}
           placeholder="なぜこの銘柄・戦略・タイミングで入ると判断したか"
           onChange={(entryReason) => updateJournal({ entryReason })}
+          rows={8}
+          className="min-h-48 text-base leading-7"
         />
-        <TextField
-          label="テクニカル補足メモ"
-          value={journal.technicalMemo ?? ""}
-          placeholder="SlowKD、MACD、移動平均線、出来高、IV/流動性など"
-          onChange={(technicalMemo) => updateJournal({ technicalMemo })}
-        />
-        <TextField label="想定シナリオ" value={journal.expectedScenario ?? ""} onChange={(expectedScenario) => updateJournal({ expectedScenario })} />
-        <TextField label="利確方針" value={journal.profitTakingPlan ?? ""} onChange={(profitTakingPlan) => updateJournal({ profitTakingPlan })} />
-        <TextField label="損切り方針" value={journal.stopLossPlan ?? ""} onChange={(stopLossPlan) => updateJournal({ stopLossPlan })} />
-        <TextField label="仮説が崩れる条件" value={journal.invalidationCondition ?? ""} onChange={(invalidationCondition) => updateJournal({ invalidationCondition })} />
+      </div>
+
+      <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-bold text-slate-900">チャート画像</div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              画像はエントリー理由の近くに大きめ表示します。クリックすると拡大できます。
+            </p>
+          </div>
+          <button
+            type="button"
+            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            チャート画像を添付
+          </button>
+        </div>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            取得元
+            <select className="rounded-md border border-slate-300 bg-white px-2 py-1" value={newEvidenceSource} onChange={(event) => setNewEvidenceSource(event.target.value as ChartEvidenceSource)}>
+              {sourceOptions.map((source) => <option key={source} value={source}>{sourceLabel(source)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">
+            時間軸
+            <select className="rounded-md border border-slate-300 bg-white px-2 py-1" value={newEvidenceTimeframe} onChange={(event) => setNewEvidenceTimeframe(event.target.value as ChartEvidenceTimeframe)}>
+              {timeframeOptions.map((timeframe) => <option key={timeframe} value={timeframe}>{timeframeLabel(timeframe)}</option>)}
+            </select>
+          </label>
+          <input
+            ref={fileInputRef}
+            className="hidden"
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={(event) => void addFiles(event.target.files ?? [])}
+          />
+        </div>
+        <p className="mt-2 text-xs leading-5 text-slate-500">
+          この枠に画像を貼り付け、またはドラッグ&ドロップできます。画像本体はIndexedDBに保存し、JSONには参照だけを残します。
+        </p>
+        {imageStatus ? <p className="mt-2 text-xs font-semibold text-teal-800">{imageStatus}</p> : null}
+        {journal.chartEvidence.length > 0 ? (
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            {journal.chartEvidence.map((evidence) => (
+              <EvidencePreview key={evidence.id} evidence={evidence} onOpen={(ref) => void openImage(ref)} />
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
+            チャート画像は未添付です。
+          </p>
+        )}
       </div>
 
       <div className="mt-4">
@@ -275,54 +324,10 @@ export function EntryRationaleJournalPanel({
         </div>
       </div>
 
-      <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="grid gap-1 text-xs font-semibold text-slate-600">
-            取得元
-            <select className="rounded-md border border-slate-300 bg-white px-2 py-1" value={newEvidenceSource} onChange={(event) => setNewEvidenceSource(event.target.value as ChartEvidenceSource)}>
-              {sourceOptions.map((source) => <option key={source} value={source}>{sourceLabel(source)}</option>)}
-            </select>
-          </label>
-          <label className="grid gap-1 text-xs font-semibold text-slate-600">
-            時間軸
-            <select className="rounded-md border border-slate-300 bg-white px-2 py-1" value={newEvidenceTimeframe} onChange={(event) => setNewEvidenceTimeframe(event.target.value as ChartEvidenceTimeframe)}>
-              {timeframeOptions.map((timeframe) => <option key={timeframe} value={timeframe}>{timeframeLabel(timeframe)}</option>)}
-            </select>
-          </label>
-          <div className="min-w-[220px] flex-1">
-            <InputField label="画像メモ" value={newEvidenceMemo} onChange={setNewEvidenceMemo} />
-          </div>
-          <input
-            ref={fileInputRef}
-            className="hidden"
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={(event) => void addFiles(event.target.files ?? [])}
-          />
-          <button
-            type="button"
-            className="rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            チャート画像を添付
-          </button>
-        </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">
-          この枠に画像を貼り付け、またはドラッグ&ドロップできます。画像本体はIndexedDBに保存し、JSONには参照だけを残します。
-        </p>
-        {imageStatus ? <p className="mt-2 text-xs font-semibold text-teal-800">{imageStatus}</p> : null}
-        {journal.chartEvidence.length > 0 ? (
-          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {journal.chartEvidence.map((evidence) => (
-              <EvidenceThumbnail key={evidence.id} evidence={evidence} onOpen={(ref) => void openImage(ref)} />
-            ))}
-          </div>
-        ) : (
-          <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-500">
-            チャート画像は未添付です。
-          </p>
-        )}
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        <TextField label="想定シナリオ" value={journal.expectedScenario ?? ""} onChange={(expectedScenario) => updateJournal({ expectedScenario })} />
+        <TextField label="利確方針" value={journal.profitTakingPlan ?? ""} onChange={(profitTakingPlan) => updateJournal({ profitTakingPlan })} />
+        <TextField label="損切り方針" value={journal.stopLossPlan ?? ""} onChange={(stopLossPlan) => updateJournal({ stopLossPlan })} />
       </div>
 
       <details className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3" open={reviewMode}>
