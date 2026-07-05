@@ -26,7 +26,6 @@ import { YearlyPerformanceSummaryCard } from "@/components/dashboard/YearlyPerfo
 import { DataPanel } from "@/components/data/DataPanel";
 import { FirstRunNotice } from "@/components/help/FirstRunNotice";
 import { UserGuide } from "@/components/help/UserGuide";
-import { SaxoReadOnlyPanel } from "@/features/saxo/SaxoReadOnlyPanel";
 import {
   describeBestSaxoHistoryOptionLegMismatch,
   findEntryHistoryMatches,
@@ -150,6 +149,7 @@ export default function App() {
     clearCandidates,
     markCandidateWatchOnly,
     updateCandidateJournal,
+    updateCandidateChecklist,
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
@@ -184,8 +184,8 @@ export default function App() {
   );
   const pendingCashEffects = calculatePendingAccountCashEffects(simulations, accountInputs);
   const yearlyPerformanceSummary = calculateYearlyPerformanceSummary(simulations, performanceYear);
-  const canUseExternalQuotes = true;
-  const externalQuoteModeLabel = "株価更新では銘柄ティッカー、為替更新ではUSD/JPY取得リクエストだけを外部サービスへ送信します。";
+  const canUseExternalQuotes = false;
+  const externalQuoteModeLabel = "公開版では自動価格取得を無効化しています。証券会社画面等で確認した株価・為替・オプション価格を手入力してください。";
   const refreshAllQuotes = async () => {
     const tickers = Array.from(new Set(simulations.map((simulation) => normalizeTicker(simulation.ticker)).filter(Boolean)));
     if (tickers.length === 0) {
@@ -1428,6 +1428,7 @@ export default function App() {
                     onWatchOnly={markCandidateWatchOnly}
                     onCreateSimulation={createCandidateSimulation}
                     onJournalChange={updateCandidateJournal}
+                    onChecklistChange={updateCandidateChecklist}
                   />
                 </div>
               ) : null}
@@ -1446,8 +1447,8 @@ export default function App() {
                   新規建玉
                 </button>
               </section>
-              <CollapsibleSection title="Saxo API詳細" collapsed>
-                <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
+              <CollapsibleSection title="公開版データ取込" collapsed>
+                <PublicDataImportGuidance />
               </CollapsibleSection>
               <CollapsibleSection title="口座全体の余力・証拠金詳細" collapsed>
                 <AccountOverview
@@ -1705,6 +1706,7 @@ export default function App() {
                   onWatchOnly={markCandidateWatchOnly}
                   onCreateSimulation={createCandidateSimulation}
                   onJournalChange={updateCandidateJournal}
+                  onChecklistChange={updateCandidateChecklist}
                 />
               </div>
             ) : null}
@@ -1751,8 +1753,8 @@ export default function App() {
               />
             ) : null}
             <CollapsibleSection
-              title={collapseSaxoPanel ? "Saxo API詳細" : undefined}
-              subtitle={collapseSaxoPanel ? saxoPanelSubtitle : undefined}
+              title={collapseSaxoPanel ? "公開版データ取込" : undefined}
+              subtitle={collapseSaxoPanel ? "公開版では自動同期を使わず、手入力とファイル取込で管理します。" : undefined}
               collapsed={collapseSaxoPanel}
               open={collapseSaxoPanel ? isSaxoDetailOpen : undefined}
               onOpenChange={(open) => {
@@ -1760,7 +1762,7 @@ export default function App() {
                 setIsSaxoDetailOpen(open);
               }}
             >
-              <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
+              <PublicDataImportGuidance />
             </CollapsibleSection>
             <CollapsibleSection
               title={collapseAccountOverview ? "口座全体の余力・証拠金詳細" : undefined}
@@ -1890,6 +1892,7 @@ export default function App() {
                     saxoOrderCandidates={saxoOrderCandidates}
                     onChange={upsertSimulation}
                     focusRequest={closeDecisionFocusRequest}
+                    accountInputs={accountInputs}
                     onExecutionDraft={() => {
                       setIsEditorOpen(true);
                       setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
@@ -1916,6 +1919,7 @@ export default function App() {
                       saxoOrderCandidates={saxoOrderCandidates}
                       onChange={upsertSimulation}
                       focusRequest={closeDecisionFocusRequest}
+                      accountInputs={accountInputs}
                       onExecutionDraft={() => {
                         setIsEditorOpen(true);
                         setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
@@ -1961,6 +1965,7 @@ export default function App() {
                     onChange={upsertSimulation}
                     focusRequest={closeDecisionFocusRequest}
                     defaultOpen
+                    accountInputs={accountInputs}
                     onExecutionDraft={() => {
                       setIsEditorOpen(true);
                       setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
@@ -2055,6 +2060,7 @@ export default function App() {
                       saxoOrderCandidates={saxoOrderCandidates}
                       onChange={upsertSimulation}
                       focusRequest={closeDecisionFocusRequest}
+                      accountInputs={accountInputs}
                       onExecutionDraft={() => {
                         setIsEditorOpen(true);
                         setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
@@ -2215,6 +2221,24 @@ function CollapsibleSection({
         {children}
       </div>
     </details>
+  );
+}
+
+function PublicDataImportGuidance() {
+  return (
+    <section className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+      <div className="font-bold text-slate-950">公開版では手入力・ファイル取込で管理します</div>
+      <p className="mt-1">
+        口座残高、建玉、取引履歴、現在価格は証券会社画面等で確認して入力してください。CSV/JSON取込と
+        us_options_screening_package.v1 の持ち込み分析は利用できます。
+      </p>
+      <ul className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
+        <li className="rounded bg-white px-2 py-1">建玉管理: 手入力またはバックアップJSON取込</li>
+        <li className="rounded bg-white px-2 py-1">候補分析: CSV/JSON/screening package取込</li>
+        <li className="rounded bg-white px-2 py-1">現在価格: 証券会社画面で確認して手入力</li>
+        <li className="rounded bg-white px-2 py-1">発注判断: 証券会社画面で最終確認</li>
+      </ul>
+    </section>
   );
 }
 

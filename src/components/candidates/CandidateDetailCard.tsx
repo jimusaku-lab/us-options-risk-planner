@@ -1,14 +1,32 @@
-import type { CandidateSymbol } from "@/types/candidates";
+import type { CandidateReviewChecklistState, CandidateSymbol } from "@/types/candidates";
 import type { EntryRationaleJournal } from "@/types/domain";
-import type { StrategyFitLevel } from "@/types/screening";
+import type { PositionDraftStatus, PublicStrategyFitLevel, StrategyFitLevel, StrategyPrecisionReviewLevel } from "@/types/screening";
 import type { ReactNode } from "react";
 import { EntryRationaleJournalPanel } from "@/components/journal/EntryRationaleJournalPanel";
+import {
+  buildJournalPatchFromCandidateReview,
+  createChecklistStateFromPrecisionReview,
+  mergeChecklistState,
+  summarizeCandidateReview,
+} from "@/domain/candidateReviewChecklist";
+import { updateJournalTimestamp } from "@/domain/entryRationaleJournal";
 import { formatUSD } from "@/lib/format";
 
 type CandidateDetailCardProps = {
   candidate: CandidateSymbol;
   onJournalChange?: (journal: EntryRationaleJournal) => void;
   getDefaultJournal?: () => EntryRationaleJournal;
+  onChecklistChange?: (state: CandidateReviewChecklistState) => void;
+};
+
+type PrecisionBoxItem = {
+  level: StrategyPrecisionReviewLevel;
+  reasons: string[];
+  warnings: string[];
+  targetDteRange?: [number, number];
+  actualDte?: number;
+  targetStrikeRatioRange?: [number, number];
+  actualStrikeRatio?: number;
 };
 
 function formatValue(value: unknown, fallback = "-"): string {
@@ -36,15 +54,57 @@ function fitClass(level: StrategyFitLevel): string {
   return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
+function publicFitLabel(level: PublicStrategyFitLevel): string {
+  if (level === "fit") return "建玉案候補";
+  if (level === "watch") return "監視";
+  if (level === "avoid") return "候補外";
+  if (level === "manual_review_required") return "手動確認";
+  return "データ不足";
+}
+
+function publicFitClass(level: PublicStrategyFitLevel): string {
+  if (level === "fit") return "border-teal-200 bg-teal-50 text-teal-800";
+  if (level === "watch") return "border-sky-200 bg-sky-50 text-sky-800";
+  if (level === "manual_review_required") return "border-amber-200 bg-amber-50 text-amber-900";
+  if (level === "avoid") return "border-rose-200 bg-rose-50 text-rose-800";
+  return "border-slate-200 bg-slate-100 text-slate-700";
+}
+
+function positionDraftStatusLabel(status: PositionDraftStatus): string {
+  if (status === "draft_ready") return "建玉案レビュー可";
+  if (status === "manual_review_required") return "手動確認";
+  return "未準備";
+}
+
+function precisionLevelLabel(level: StrategyPrecisionReviewLevel): string {
+  if (level === "pass") return "通過";
+  if (level === "watch") return "確認";
+  if (level === "blocked") return "避ける";
+  return "データ不足";
+}
+
+function precisionLevelClass(level: StrategyPrecisionReviewLevel): string {
+  if (level === "pass") return "border-teal-200 bg-teal-50 text-teal-800";
+  if (level === "watch") return "border-sky-200 bg-sky-50 text-sky-800";
+  if (level === "blocked") return "border-rose-200 bg-rose-50 text-rose-800";
+  return "border-slate-200 bg-slate-100 text-slate-700";
+}
+
 function strategyLabel(strategy: string): string {
   const labels: Record<string, string> = {
     cash_secured_put_buy_to_own: "CSP取得前提",
     cash_secured_put_avoid_assignment: "CSP反対売買前提",
     covered_call: "Covered Call",
     long_call: "Long Call",
+    wheel: "Wheel",
     short_strangle: "Short Strangle",
+    short_strangle_covered: "Covered Short Strangle",
+    short_strangle_advanced_review: "Short Strangle Advanced Review",
     synthetic_forward: "Synthetic Forward",
     combo: "Combo",
+    itm_short_put_buy_to_own: "ITM Short Put Buy to Own",
+    long_straddle_event: "Long Straddle Event",
+    protective_collar: "Protective Collar",
   };
   return labels[strategy] ?? strategy;
 }
@@ -80,6 +140,86 @@ function Metric({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function PrecisionReviewBox({ title, item }: { title: string; item: PrecisionBoxItem }) {
+  return (
+    <div className={`rounded-md border px-3 py-2 text-xs leading-5 ${precisionLevelClass(item.level)}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-bold">{title}</span>
+        <span className="rounded bg-white/70 px-1.5 py-0.5 font-bold">{precisionLevelLabel(item.level)}</span>
+      </div>
+      {item.targetDteRange ? (
+        <div className="mt-1">DTE {item.actualDte ?? "-"} / 目安 {item.targetDteRange[0]}-{item.targetDteRange[1]}</div>
+      ) : null}
+      {item.targetStrikeRatioRange ? (
+        <div className="mt-1">
+          strike/株価 {item.actualStrikeRatio === undefined ? "-" : item.actualStrikeRatio.toFixed(2)} / 目安 {item.targetStrikeRatioRange[0].toFixed(2)}-{item.targetStrikeRatioRange[1].toFixed(2)}
+        </div>
+      ) : null}
+      <ul className="mt-2 grid gap-1">
+        {[...item.reasons, ...item.warnings].slice(0, 5).map((entry, index) => (
+          <li key={`${title}-${entry}-${index}`}>{entry}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ReviewChecklistEditor({
+  candidate,
+  state,
+  onChange,
+}: {
+  candidate: CandidateSymbol;
+  state: CandidateReviewChecklistState;
+  onChange?: (state: CandidateReviewChecklistState) => void;
+}) {
+  const summary = summarizeCandidateReview({ strategyPrecisionReviews: candidate.strategyPrecisionReviews, reviewChecklistStates: [state] });
+  const updateItems = (items: CandidateReviewChecklistState["items"]) => onChange?.(mergeChecklistState(state, { items }));
+  const updateNote = (note: string) => onChange?.(mergeChecklistState(state, { note }));
+  const reset = () => updateItems(state.items.map((item) => ({ ...item, checked: false })));
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-xs font-bold text-slate-800">建玉案レビューの手動確認チェック</div>
+          <div className="mt-1 text-xs text-slate-600">
+            確認済み {summary.checkedCount}/{summary.totalCount} / 必須未確認 {summary.requiredUncheckedCount} / {summary.label}
+          </div>
+        </div>
+        <button type="button" className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700" onClick={reset}>
+          すべて未確認に戻す
+        </button>
+      </div>
+      <div className="mt-2 grid gap-2 md:grid-cols-2">
+        {state.items.map((item) => (
+          <label key={item.id} className="flex items-start gap-2 rounded-md border border-slate-200 bg-white px-2 py-2 text-xs leading-5 text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={item.checked}
+              onChange={(event) => updateItems(state.items.map((current) => current.id === item.id ? { ...current, checked: event.target.checked } : current))}
+            />
+            <span className="min-w-0">
+              <span className="font-semibold text-slate-900">{item.label}</span>
+              {item.required ? <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-bold text-amber-900">必須</span> : null}
+            </span>
+          </label>
+        ))}
+      </div>
+      <label className="mt-3 grid gap-1 text-xs font-bold text-slate-700">
+        確認メモ
+        <textarea
+          className="min-h-20 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal leading-6 text-slate-900"
+          value={state.note ?? ""}
+          placeholder="証券会社画面で確認したこと、未確認の理由など"
+          onChange={(event) => updateNote(event.target.value)}
+        />
+      </label>
+      <div className="mt-2 text-[11px] font-semibold text-slate-500">最終更新: {state.updatedAt}</div>
+    </div>
+  );
+}
+
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rounded-md border border-slate-200 bg-slate-50/70 p-3">
@@ -89,8 +229,16 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-export function CandidateDetailCard({ candidate, onJournalChange, getDefaultJournal }: CandidateDetailCardProps) {
+export function CandidateDetailCard({ candidate, onJournalChange, getDefaultJournal, onChecklistChange }: CandidateDetailCardProps) {
   const screening = candidate.screeningCandidate;
+  const publicInput = candidate.publicScreeningInput;
+  const completeness = candidate.screeningCompleteness;
+  const chartAnalysis = publicInput?.chartAnalysis;
+  const strategySuitability = candidate.strategySuitability ?? publicInput?.strategySuitability;
+  const positionDrafts = candidate.positionDrafts ?? publicInput?.positionDrafts;
+  const advancedStrategyReviews = candidate.advancedStrategyReviews ?? publicInput?.advancedStrategyReviews;
+  const strategyPrecisionReviews = candidate.strategyPrecisionReviews ?? publicInput?.strategyPrecisionReviews;
+  const optionCandidates = publicInput?.optionCandidates ?? [];
   const technical = screening?.technicalSnapshot;
   const optionQuality = screening?.optionChainQuality;
   const warningItems = [
@@ -100,6 +248,16 @@ export function CandidateDetailCard({ candidate, onJournalChange, getDefaultJour
     ...(optionQuality?.qualityWarnings ?? []),
   ].filter((item): item is string => Boolean(item));
   const missingItems = screening?.missingFields ?? [];
+  const reviewSummary = summarizeCandidateReview(candidate);
+  const updateChecklist = (state: CandidateReviewChecklistState) => onChecklistChange?.(state);
+  const reflectReviewToJournal = (reviewState: CandidateReviewChecklistState) => {
+    const review = strategyPrecisionReviews?.find((item) => item.strategy === reviewState.strategy);
+    if (!review || !onJournalChange) return;
+    const base = candidate.entryRationaleJournal ?? getDefaultJournal?.();
+    if (!base) return;
+    const patch = buildJournalPatchFromCandidateReview(candidate, review, reviewState);
+    onJournalChange(updateJournalTimestamp({ ...base, ...patch }));
+  };
 
   return (
     <div className="rounded-md border border-slate-200 bg-white p-4 text-sm shadow-sm">
@@ -111,15 +269,36 @@ export function CandidateDetailCard({ candidate, onJournalChange, getDefaultJour
           </h3>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {candidate.strategyFitResults?.slice(0, 4).map((result) => (
+          {strategySuitability?.slice(0, 4).map((result) => (
+            <span key={result.strategy} className={`rounded-full border px-2 py-1 text-xs font-bold ${publicFitClass(result.level)}`}>
+              {strategyLabel(result.strategy)}: {publicFitLabel(result.level)}
+            </span>
+          ))}
+          {!strategySuitability?.length ? candidate.strategyFitResults?.slice(0, 4).map((result) => (
             <span key={result.strategy} className={`rounded-full border px-2 py-1 text-xs font-bold ${fitClass(result.fitLevel)}`}>
               {strategyLabel(result.strategy)}: {fitLabel(result.fitLevel)}
             </span>
-          ))}
+          )) : null}
         </div>
       </div>
 
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <Section title="建玉案レビュー前サマリー">
+          <div className="grid gap-3">
+            <div className={`rounded-md border px-3 py-2 text-sm ${reviewSummary.status === "ready_for_review" ? "border-teal-200 bg-teal-50 text-teal-900" : reviewSummary.status === "blocked" ? "border-rose-200 bg-rose-50 text-rose-900" : "border-amber-200 bg-amber-50 text-amber-950"}`}>
+              <div className="font-bold">{reviewSummary.label}</div>
+              <div className="mt-1 text-xs leading-5">
+                確認済み {reviewSummary.checkedCount}/{reviewSummary.totalCount} / 必須未確認 {reviewSummary.requiredUncheckedCount}
+              </div>
+              <div className="mt-1 text-xs leading-5">チェック済みは注文許可ではなく確認記録です。建玉案レビュー可は入力候補として確認可という意味です。</div>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              <ListBlock title="必須未確認" items={reviewSummary.uncheckedRequiredLabels} tone="amber" />
+              <ListBlock title="保留理由" items={reviewSummary.blockedReasons} tone="rose" />
+            </div>
+          </div>
+        </Section>
+
         <Section title="基本情報">
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             <Metric label="symbol" value={candidate.symbol} />
@@ -132,6 +311,83 @@ export function CandidateDetailCard({ candidate, onJournalChange, getDefaultJour
             <Metric label="priceAsOf" value={screening?.priceAsOf} />
             <Metric label="importedAt" value={candidate.importedAt} />
           </div>
+        </Section>
+
+        <Section title="データ充足">
+          {completeness ? (
+            <div className="grid gap-3">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <Metric label="level" value={completeness.level} />
+                <Metric label="strategy" value={completeness.canClassifyStrategy} />
+                <Metric label="chart" value={completeness.canAnalyzeChart} />
+                <Metric label="optionLiquidity" value={completeness.canEvaluateOptionLiquidity} />
+                <Metric label="positionDraft" value={completeness.canCreatePositionDraft} />
+                <Metric label="dataPolicy" value={publicInput ? "ユーザー提供データ" : "-"} />
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <ListBlock title="missingFields" items={completeness.missingFields} tone="amber" />
+                <ListBlock title="warnings" items={completeness.warnings} tone="rose" />
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">公開版データ充足情報はありません。</p>
+          )}
+        </Section>
+
+        <Section title="チャート分析">
+          {chartAnalysis ? (
+            <div className="grid gap-3">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <Metric label="regime" value={chartAnalysis.regime} />
+                <Metric label="confidence" value={chartAnalysis.confidence} />
+                <Metric label="primary" value={chartAnalysis.primaryTimeframe} />
+                <Metric label="asOf" value={chartAnalysis.asOf} />
+              </div>
+              <div className="grid gap-2 md:grid-cols-3">
+                <ListBlock title="reasons" items={chartAnalysis.reasons} tone="teal" />
+                <ListBlock title="warnings" items={chartAnalysis.warnings} tone="amber" />
+                <ListBlock title="missingFields" items={chartAnalysis.missingFields} tone="rose" />
+              </div>
+              {chartAnalysis.timeframes.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left text-slate-500">
+                        <th className="py-2 pr-3">足</th>
+                        <th className="py-2 pr-3">close</th>
+                        <th className="py-2 pr-3">SMA25/50/200</th>
+                        <th className="py-2 pr-3">MACD</th>
+                        <th className="py-2 pr-3">SlowKD</th>
+                        <th className="py-2 pr-3">RSI</th>
+                        <th className="py-2 pr-3">距離</th>
+                        <th className="py-2 pr-3">support/resistance</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {chartAnalysis.timeframes.map((timeframe) => (
+                        <tr key={timeframe.timeframe} className="border-b border-slate-100">
+                          <td className="py-2 pr-3 font-bold text-slate-900">{timeframe.timeframe}</td>
+                          <td className="py-2 pr-3">{formatValue(timeframe.close)}</td>
+                          <td className="py-2 pr-3">{[timeframe.sma25, timeframe.sma50, timeframe.sma200].map((value) => formatValue(value)).join(" / ")}</td>
+                          <td className="py-2 pr-3">{timeframe.macdSignal ?? "-"}</td>
+                          <td className="py-2 pr-3">{timeframe.slowKdSignal ?? "-"}</td>
+                          <td className="py-2 pr-3">{formatValue(timeframe.rsi)}</td>
+                          <td className="py-2 pr-3">
+                            MA25 {formatPercent(timeframe.priceLocation?.distanceFromMa25Pct)} / MA50 {formatPercent(timeframe.priceLocation?.distanceFromMa50Pct)}
+                          </td>
+                          <td className="py-2 pr-3">
+                            S {timeframe.supportLevels?.slice(0, 3).map((value) => formatValue(value)).join(", ") || "-"} / R {timeframe.resistanceLevels?.slice(0, 3).map((value) => formatValue(value)).join(", ") || "-"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">チャート分析はありません。</p>
+          )}
         </Section>
 
         <Section title="株価・テクニカル">
@@ -201,6 +457,250 @@ export function CandidateDetailCard({ candidate, onJournalChange, getDefaultJour
           </div>
         </Section>
       </div>
+
+      <Section title="戦略適性">
+        {strategySuitability?.length ? (
+          <div className="grid gap-3">
+            {strategySuitability.map((result) => (
+              <div key={result.strategy} className="rounded-md border border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-950">{strategyLabel(result.strategy)}</span>
+                  <span className={`rounded-full border px-2 py-0.5 text-xs font-bold ${publicFitClass(result.level)}`}>{publicFitLabel(result.level)}</span>
+                  <span className="text-xs font-semibold text-slate-500">{result.chartRegime ?? "-"} / {result.confidence ?? "-"}</span>
+                </div>
+                <div className="mt-3 grid gap-2 md:grid-cols-4">
+                  <ListBlock title="reasons" items={result.reasons} tone="teal" />
+                  <ListBlock title="warnings" items={result.warnings} tone="amber" />
+                  <ListBlock title="missingFields" items={result.missingFields} tone="rose" />
+                  <ListBlock title="manualReview" items={result.manualReviewReasons} tone="amber" />
+                </div>
+                <ListBlock title="nextChecks" items={result.nextChecks} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">公開版戦略適性はありません。旧戦略別判定を確認してください。</p>
+        )}
+      </Section>
+
+      <Section title="戦略精度レビュー">
+        {strategyPrecisionReviews?.length ? (
+          <div className="grid gap-3">
+            {strategyPrecisionReviews.map((review) => {
+              const checklistState = createChecklistStateFromPrecisionReview(
+                { id: candidate.id, symbol: candidate.symbol },
+                review,
+                candidate.reviewChecklistStates?.find((item) => item.strategy === review.strategy),
+              );
+              return (
+                <div key={review.strategy} className="rounded-md border border-slate-200 bg-white p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-bold text-slate-950">{strategyLabel(review.strategy)}</span>
+                    <span className={`rounded-full border px-2 py-0.5 text-xs font-bold ${publicFitClass(review.level)}`}>{publicFitLabel(review.level)}</span>
+                    <span className="text-xs font-semibold text-slate-500">fitは候補、建玉案はレビュー用です。</span>
+                  </div>
+                  <div className="mt-3 grid gap-2 lg:grid-cols-5">
+                    <PrecisionReviewBox title="チャート最終ゲート" item={review.chartGate} />
+                    <PrecisionReviewBox title="満期レビュー" item={review.expiryReview} />
+                    <PrecisionReviewBox title="strikeレビュー" item={review.strikeReview} />
+                    <PrecisionReviewBox title="流動性レビュー" item={review.liquidityReview} />
+                    <PrecisionReviewBox title="資金レビュー" item={review.capitalReview} />
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-3">
+                    <ListBlock title="避ける理由" items={review.avoidReasons} tone="rose" />
+                    <ListBlock title="手動確認理由" items={review.manualReviewReasons} tone="amber" />
+                    <ListBlock title="次に確認すること" items={review.nextChecks} />
+                  </div>
+                  <ReviewChecklistEditor candidate={candidate} state={checklistState} onChange={updateChecklist} />
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <button
+                      className="rounded-md border border-teal-300 bg-teal-50 px-2.5 py-1.5 font-bold text-teal-900 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={!onJournalChange}
+                      onClick={() => reflectReviewToJournal(checklistState)}
+                    >
+                      候補レビューを根拠メモへ反映
+                    </button>
+                    <span className="text-slate-500">既存メモは自動上書きせず、確認内容を追記します。</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">戦略精度レビューはありません。</p>
+        )}
+      </Section>
+
+      <Section title="オプション候補・流動性">
+        {optionCandidates.length || positionDrafts?.some((draft) => draft.legs.length) ? (
+          <div className="grid gap-3">
+            {optionCandidates.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px] text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-500">
+                      <th className="py-2 pr-3">type</th>
+                      <th className="py-2 pr-3">expiry</th>
+                      <th className="py-2 pr-3">DTE</th>
+                      <th className="py-2 pr-3">strike</th>
+                      <th className="py-2 pr-3">Bid/Ask</th>
+                      <th className="py-2 pr-3">Mid/Last</th>
+                      <th className="py-2 pr-3">Vol/OI</th>
+                      <th className="py-2 pr-3">IV/Delta</th>
+                      <th className="py-2 pr-3">source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {optionCandidates.slice(0, 12).map((option, index) => (
+                      <tr key={option.id ?? `${option.optionType}-${option.expiry}-${option.strike ?? option.strikePrice}-${index}`} className="border-b border-slate-100">
+                        <td className="py-2 pr-3 font-bold text-slate-900">{option.optionType}</td>
+                        <td className="py-2 pr-3">{option.expiry ?? "-"}</td>
+                        <td className="py-2 pr-3">{formatValue(option.dte)}</td>
+                        <td className="py-2 pr-3">{formatValue(option.strikePrice ?? option.strike)}</td>
+                        <td className="py-2 pr-3">{formatValue(option.bid)} / {formatValue(option.ask)}</td>
+                        <td className="py-2 pr-3">{formatValue(option.mid)} / {formatValue(option.last)}</td>
+                        <td className="py-2 pr-3">{formatValue(option.volume)} / {formatValue(option.openInterest)}</td>
+                        <td className="py-2 pr-3">{formatValue(option.iv)} / {formatValue(option.delta)}</td>
+                        <td className="py-2 pr-3">{option.source ?? "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            <p className="text-xs leading-5 text-slate-600">保守価格ルール: 買いはAsk、売りはBid。MidとLastは参考値です。</p>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">オプション候補はありません。</p>
+        )}
+      </Section>
+
+      <Section title="建玉案レビュー">
+        {positionDrafts?.length ? (
+          <div className="grid gap-3">
+            {positionDrafts.map((draft) => (
+              <div key={draft.id} className="rounded-md border border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-950">{strategyLabel(draft.strategy)}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${draft.status === "draft_ready" ? "bg-teal-50 text-teal-800" : draft.status === "manual_review_required" ? "bg-amber-50 text-amber-900" : "bg-slate-100 text-slate-700"}`}>
+                    {positionDraftStatusLabel(draft.status)}
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <Metric label="requiredCapitalUSD" value={draft.requiredCapitalUSD === undefined ? undefined : formatUSD(draft.requiredCapitalUSD)} />
+                  <Metric label="maxLossUSD" value={draft.maxLossUSD === undefined ? undefined : formatUSD(draft.maxLossUSD)} />
+                  <Metric label="availableCashUSD" value={draft.availableCashUSD === undefined ? undefined : formatUSD(draft.availableCashUSD)} />
+                  <Metric label="legs" value={draft.legs.length} />
+                </div>
+                {draft.legs.length ? (
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-left text-slate-500">
+                          <th className="py-2 pr-3">type/side</th>
+                          <th className="py-2 pr-3">expiry</th>
+                          <th className="py-2 pr-3">DTE</th>
+                          <th className="py-2 pr-3">strike</th>
+                          <th className="py-2 pr-3">保守価格</th>
+                          <th className="py-2 pr-3">Mid/Last</th>
+                          <th className="py-2 pr-3">qty</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {draft.legs.map((leg) => (
+                          <tr key={leg.id} className="border-b border-slate-100">
+                            <td className="py-2 pr-3 font-bold text-slate-900">{leg.optionType} / {leg.side}</td>
+                            <td className="py-2 pr-3">{leg.expiry ?? "-"}</td>
+                            <td className="py-2 pr-3">{formatValue(leg.dte)}</td>
+                            <td className="py-2 pr-3">{formatValue(leg.strikePrice)}</td>
+                            <td className="py-2 pr-3">{formatValue(leg.conservativePrice)} {leg.conservativePriceField ? `(${leg.conservativePriceField})` : ""}</td>
+                            <td className="py-2 pr-3">{formatValue(leg.mid)} / {formatValue(leg.last)}</td>
+                            <td className="py-2 pr-3">{formatValue(leg.quantity)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  <ListBlock title="warnings" items={draft.warnings} tone="amber" />
+                  <ListBlock title="missingFields" items={draft.missingFields} tone="rose" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">建玉案レビューはありません。Level 1-2ではチャート・オプション・資金の不足を確認してください。</p>
+        )}
+      </Section>
+
+      <Section title="上級戦略レビュー">
+        {advancedStrategyReviews?.length ? (
+          <div className="grid gap-3">
+            {advancedStrategyReviews.map((review) => (
+              <div key={review.id} className="rounded-md border border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-950">{strategyLabel(review.strategy)}</span>
+                  <span className={`rounded-full border px-2 py-0.5 text-xs font-bold ${publicFitClass(review.level)}`}>{publicFitLabel(review.level)}</span>
+                  <span className="text-xs font-semibold text-slate-500">{review.chartRegime ?? "-"} / {review.confidence ?? "-"}</span>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-slate-600">
+                  上級戦略は比較・手動確認用です。ここから自動発注や建玉入力への自動転記は行いません。
+                </p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <Metric label="netPremiumUSD" value={review.netPremiumUSD === undefined ? undefined : formatUSD(review.netPremiumUSD)} />
+                  <Metric label="requiredCapitalUSD" value={review.requiredCapitalUSD === undefined ? undefined : formatUSD(review.requiredCapitalUSD)} />
+                  <Metric label="maxLossUSD" value={review.maxLossUSD === undefined ? undefined : formatUSD(review.maxLossUSD)} />
+                  <Metric label="stockEquivalentNotionalUSD" value={review.stockEquivalentNotionalUSD === undefined ? undefined : formatUSD(review.stockEquivalentNotionalUSD)} />
+                  <Metric label="breakEvenUpperUSD" value={review.breakEvenUpperUSD === undefined ? undefined : formatUSD(review.breakEvenUpperUSD)} />
+                  <Metric label="breakEvenLowerUSD" value={review.breakEvenLowerUSD === undefined ? undefined : formatUSD(review.breakEvenLowerUSD)} />
+                  <Metric label="effectiveAcquisitionCostUSD" value={review.effectiveAcquisitionCostUSD === undefined ? undefined : formatUSD(review.effectiveAcquisitionCostUSD)} />
+                  <Metric label="legs" value={review.legs.length} />
+                </div>
+                {review.legs.length ? (
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-left text-slate-500">
+                          <th className="py-2 pr-3">type/side</th>
+                          <th className="py-2 pr-3">expiry</th>
+                          <th className="py-2 pr-3">DTE</th>
+                          <th className="py-2 pr-3">strike</th>
+                          <th className="py-2 pr-3">保守価格</th>
+                          <th className="py-2 pr-3">Mid/Last</th>
+                          <th className="py-2 pr-3">警告</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {review.legs.map((leg) => (
+                          <tr key={leg.id} className="border-b border-slate-100">
+                            <td className="py-2 pr-3 font-bold text-slate-900">{leg.optionType} / {leg.side}</td>
+                            <td className="py-2 pr-3">{leg.expiry ?? "-"}</td>
+                            <td className="py-2 pr-3">{formatValue(leg.dte)}</td>
+                            <td className="py-2 pr-3">{formatValue(leg.strikePrice)}</td>
+                            <td className="py-2 pr-3">{formatValue(leg.conservativePrice)} {leg.conservativePriceField ? `(${leg.conservativePriceField})` : ""}</td>
+                            <td className="py-2 pr-3">{formatValue(leg.mid)} / {formatValue(leg.last)}</td>
+                            <td className="py-2 pr-3">{leg.liquidityWarnings.slice(0, 2).join(", ") || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+                <div className="mt-3 grid gap-2 md:grid-cols-4">
+                  <ListBlock title="scenarios" items={review.scenarios} tone="teal" />
+                  <ListBlock title="reasons" items={review.reasons} tone="teal" />
+                  <ListBlock title="warnings" items={review.warnings} tone="amber" />
+                  <ListBlock title="manualReview" items={review.manualReviewReasons} tone="amber" />
+                </div>
+                <ListBlock title="missingFields" items={review.missingFields} tone="rose" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">上級戦略レビューはありません。</p>
+        )}
+      </Section>
 
       <Section title="戦略別判定">
         {candidate.strategyFitResults?.length ? (

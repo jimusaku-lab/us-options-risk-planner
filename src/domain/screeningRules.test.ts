@@ -55,9 +55,15 @@ describe("screening strategy fit rules", () => {
       "cash_secured_put_avoid_assignment",
       "covered_call",
       "long_call",
+      "wheel",
       "short_strangle",
+      "short_strangle_covered",
+      "short_strangle_advanced_review",
       "synthetic_forward",
       "combo",
+      "itm_short_put_buy_to_own",
+      "long_straddle_event",
+      "protective_collar",
     ];
 
     expect(Object.keys(screeningStrategyLabels).sort()).toEqual([...strategyKinds].sort());
@@ -191,8 +197,18 @@ describe("screening strategy fit rules", () => {
     expect(result.missingFields).toContain("optionChainQuality.hasOptionChain");
   });
 
-  it("keeps short strangle, synthetic forward, and combo as deferred review receptacles", () => {
-    const deferredStrategies: StrategyCandidateKind[] = ["short_strangle", "synthetic_forward", "combo"];
+  it("keeps complex and advanced strategies as deferred review receptacles", () => {
+    const deferredStrategies: StrategyCandidateKind[] = [
+      "short_strangle",
+      "short_strangle_covered",
+      "short_strangle_advanced_review",
+      "synthetic_forward",
+      "combo",
+      "wheel",
+      "itm_short_put_buy_to_own",
+      "long_straddle_event",
+      "protective_collar",
+    ];
 
     for (const strategy of deferredStrategies) {
       const result = evaluateStrategyFit(baseCandidate(), {

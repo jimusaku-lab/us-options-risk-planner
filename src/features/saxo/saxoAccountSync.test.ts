@@ -47,16 +47,13 @@ const pAccount: AccountState = {
 };
 
 describe("Saxo read-only account sync", () => {
-  it("only allows read-only local order endpoints", () => {
-    expect(SAXO_READONLY_ENDPOINTS).toContain("GET /api/saxo/orders");
-    expect(SAXO_READONLY_ENDPOINTS).toContain("GET /api/saxo/orders/snapshot");
-    expect(isForbiddenSaxoOrderRoute("/api/saxo/orders")).toBe(false);
-    expect(isForbiddenSaxoOrderRoute("/api/saxo/orders", "POST")).toBe(true);
+  it("keeps public endpoint inventory empty while preserving order-route guard helpers", () => {
+    expect(SAXO_READONLY_ENDPOINTS).toEqual([]);
+    expect(isForbiddenSaxoOrderRoute("/readonly/orders")).toBe(false);
+    expect(isForbiddenSaxoOrderRoute("/readonly/orders", "POST")).toBe(true);
     expect(isForbiddenSaxoOrderRoute("/trade/v2/orders")).toBe(true);
-    expect(isForbiddenSaxoOrderRoute("/api/saxo/accounts/snapshot")).toBe(false);
-    expect(isForbiddenSaxoOrderRoute("/api/saxo/positions")).toBe(false);
-    expect(SAXO_READONLY_ENDPOINTS).toContain("GET /api/saxo/positions");
-    expect(SAXO_READONLY_ENDPOINTS).toContain("GET /api/saxo/positions/snapshot");
+    expect(isForbiddenSaxoOrderRoute("/readonly/accounts/snapshot")).toBe(false);
+    expect(isForbiddenSaxoOrderRoute("/readonly/positions")).toBe(false);
   });
 
   it("creates a diff preview without treating missing Saxo values as zero", () => {
@@ -218,7 +215,6 @@ describe("Saxo read-only account sync", () => {
         hasToken: false,
         readOnly: true,
         orderEndpointsEnabled: false,
-        bindAddress: "127.0.0.1",
         oauthConfigured: false,
       }).code,
     ).toBe("missing_client_id");
@@ -232,7 +228,6 @@ describe("Saxo read-only account sync", () => {
         hasToken: false,
         readOnly: true,
         orderEndpointsEnabled: false,
-        bindAddress: "127.0.0.1",
         oauthConfigured: true,
       }).code,
     ).toBe("missing_environment");

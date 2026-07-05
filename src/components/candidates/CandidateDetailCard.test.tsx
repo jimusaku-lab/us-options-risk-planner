@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CandidateDetailCard } from "./CandidateDetailCard";
 import type { CandidateSymbol } from "@/types/candidates";
 
@@ -114,6 +114,333 @@ function buildCandidate(): CandidateSymbol {
         riskFlags: ["assignment_capital_shortage"],
       },
     ],
+    screeningCompleteness: {
+      level: "level_4_draft_ready",
+      canClassifyStrategy: true,
+      canAnalyzeChart: true,
+      canEvaluateOptionLiquidity: true,
+      canCreatePositionDraft: true,
+      missingFields: [],
+      warnings: [],
+    },
+    publicScreeningInput: {
+      symbol: "NVDA",
+      underlyingPrice: 140,
+      chartAnalysis: {
+        asOf: "2026-07-01T09:00:00+09:00",
+        regime: "bullish_continuation",
+        confidence: "high",
+        primaryTimeframe: "daily",
+        reasons: ["chart regime is bullish"],
+        warnings: ["high chase check"],
+        missingFields: [],
+        timeframes: [
+          {
+            timeframe: "daily",
+            close: 140,
+            sma25: 135,
+            sma50: 132,
+            sma200: 120,
+            macdSignal: "bullish",
+            slowKdSignal: "bullish",
+            rsi: 58,
+            priceLocation: { distanceFromMa25Pct: 3.7, distanceFromMa50Pct: 6.1 },
+            supportLevels: [135, 132],
+            resistanceLevels: [145],
+          },
+        ],
+      },
+      strategySuitability: [
+        {
+          strategy: "long_call",
+          level: "manual_review_required",
+          chartRegime: "bullish_continuation",
+          confidence: "high",
+          reasons: ["strategy chart ok"],
+          warnings: ["manual strategy check"],
+          missingFields: ["capital.maxLossToleranceUSD"],
+          manualReviewReasons: ["review before draft"],
+          nextChecks: ["DTE 150日以上"],
+        },
+      ],
+      optionCandidates: [
+        {
+          id: "call-1",
+          optionType: "call",
+          expiry: "2027-01-15",
+          dte: 198,
+          strike: 145,
+          bid: 8.4,
+          ask: 8.8,
+          mid: 8.6,
+          last: 8.5,
+          volume: 120,
+          openInterest: 900,
+          iv: 0.42,
+          delta: 0.52,
+          source: "user_export",
+        },
+      ],
+      positionDrafts: [
+        {
+          id: "draft-long-call",
+          strategy: "long_call",
+          status: "draft_ready",
+          symbol: "NVDA",
+          requiredCapitalUSD: 880,
+          maxLossUSD: 880,
+          availableCashUSD: 2_000,
+          warnings: ["建玉案レビューのみ"],
+          missingFields: [],
+          legs: [
+            {
+              id: "call-1-leg",
+              optionType: "call",
+              side: "buy",
+              expiry: "2027-01-15",
+              dte: 198,
+              strikePrice: 145,
+              conservativePrice: 8.8,
+              conservativePriceField: "ask",
+              mid: 8.6,
+              last: 8.5,
+              quantity: 1,
+              liquidityWarnings: [],
+              missingFields: [],
+            },
+          ],
+        },
+      ],
+      advancedStrategyReviews: [
+        {
+          id: "NVDA-short-strangle-advanced",
+          strategy: "short_strangle_advanced_review",
+          level: "manual_review_required",
+          symbol: "NVDA",
+          chartRegime: "range_neutral",
+          confidence: "medium",
+          netPremiumUSD: 3.7,
+          requiredCapitalUSD: 13_000,
+          maxLossUSD: 12_630,
+          stockEquivalentNotionalUSD: 28_000,
+          breakEvenUpperUSD: 153.7,
+          breakEvenLowerUSD: 126.3,
+          effectiveAcquisitionCostUSD: 126.3,
+          scenarios: ["レンジ内", "上抜け", "下抜け"],
+          reasons: ["range review"],
+          warnings: ["naked_call_risk: 100株カバーが確認できません。"],
+          missingFields: ["capital.stockShares"],
+          manualReviewReasons: ["裸コール化しないことを確認してください。"],
+          legs: [
+            {
+              id: "short-call",
+              optionType: "call",
+              side: "sell",
+              expiry: "2026-08-21",
+              dte: 51,
+              strikePrice: 150,
+              conservativePrice: 1.7,
+              conservativePriceField: "bid",
+              mid: 1.8,
+              last: 1.75,
+              quantity: 1,
+              liquidityWarnings: ["流動性不足"],
+              missingFields: [],
+            },
+            {
+              id: "short-put",
+              optionType: "put",
+              side: "sell",
+              expiry: "2026-08-21",
+              dte: 51,
+              strikePrice: 130,
+              conservativePrice: 2,
+              conservativePriceField: "bid",
+              mid: 2.1,
+              last: 2.05,
+              quantity: 1,
+              liquidityWarnings: [],
+              missingFields: [],
+            },
+          ],
+        },
+      ],
+      strategyPrecisionReviews: [
+        {
+          strategy: "long_call",
+          level: "manual_review_required",
+          chartGate: {
+            level: "pass",
+            reasons: ["週足50本線が上向きです。"],
+            warnings: [],
+          },
+          expiryReview: {
+            level: "pass",
+            targetDteRange: [150, 9999],
+            actualDte: 198,
+            reasons: ["DTE 198日: コール買いの標準レンジです。"],
+            warnings: [],
+          },
+          strikeReview: {
+            level: "pass",
+            targetStrikeRatioRange: [1, 1.05],
+            actualStrikeRatio: 1.04,
+            reasons: ["strike/株価比 1.04: コール買いレンジ内です。"],
+            warnings: [],
+          },
+          liquidityReview: {
+            level: "pass",
+            reasons: ["Askを保守価格に使用します。", "Bid/Askあり、spread 4.7%"],
+            warnings: [],
+          },
+          capitalReview: {
+            level: "pass",
+            reasons: ["最大損失 $880"],
+            warnings: [],
+          },
+          manualReviewReasons: ["反対売買前提、時間価値減少、損益分岐点を確認してください。"],
+          avoidReasons: [],
+          nextChecks: ["チャート根拠", "満期と時間軸"],
+          checklist: ["チャート根拠を確認した", "証券会社画面の価格を最終確認する"],
+        },
+      ],
+    },
+    strategySuitability: [
+      {
+        strategy: "long_call",
+        level: "manual_review_required",
+        chartRegime: "bullish_continuation",
+        confidence: "high",
+        reasons: ["strategy chart ok"],
+        warnings: ["manual strategy check"],
+        missingFields: ["capital.maxLossToleranceUSD"],
+        manualReviewReasons: ["review before draft"],
+        nextChecks: ["DTE 150日以上"],
+      },
+    ],
+    positionDrafts: [
+      {
+        id: "draft-long-call",
+        strategy: "long_call",
+        status: "draft_ready",
+        symbol: "NVDA",
+        requiredCapitalUSD: 880,
+        maxLossUSD: 880,
+        availableCashUSD: 2_000,
+        warnings: ["建玉案レビューのみ"],
+        missingFields: [],
+        legs: [
+          {
+            id: "call-1-leg",
+            optionType: "call",
+            side: "buy",
+            expiry: "2027-01-15",
+            dte: 198,
+            strikePrice: 145,
+            conservativePrice: 8.8,
+            conservativePriceField: "ask",
+            mid: 8.6,
+            last: 8.5,
+            quantity: 1,
+            liquidityWarnings: [],
+            missingFields: [],
+          },
+        ],
+      },
+    ],
+    advancedStrategyReviews: [
+      {
+        id: "NVDA-short-strangle-advanced",
+        strategy: "short_strangle_advanced_review",
+        level: "manual_review_required",
+        symbol: "NVDA",
+        chartRegime: "range_neutral",
+        confidence: "medium",
+        netPremiumUSD: 3.7,
+        requiredCapitalUSD: 13_000,
+        maxLossUSD: 12_630,
+        stockEquivalentNotionalUSD: 28_000,
+        breakEvenUpperUSD: 153.7,
+        breakEvenLowerUSD: 126.3,
+        effectiveAcquisitionCostUSD: 126.3,
+        scenarios: ["レンジ内", "上抜け", "下抜け"],
+        reasons: ["range review"],
+        warnings: ["naked_call_risk: 100株カバーが確認できません。"],
+        missingFields: ["capital.stockShares"],
+        manualReviewReasons: ["裸コール化しないことを確認してください。"],
+        legs: [
+          {
+            id: "short-call",
+            optionType: "call",
+            side: "sell",
+            expiry: "2026-08-21",
+            dte: 51,
+            strikePrice: 150,
+            conservativePrice: 1.7,
+            conservativePriceField: "bid",
+            mid: 1.8,
+            last: 1.75,
+            quantity: 1,
+            liquidityWarnings: ["流動性不足"],
+            missingFields: [],
+          },
+          {
+            id: "short-put",
+            optionType: "put",
+            side: "sell",
+            expiry: "2026-08-21",
+            dte: 51,
+            strikePrice: 130,
+            conservativePrice: 2,
+            conservativePriceField: "bid",
+            mid: 2.1,
+            last: 2.05,
+            quantity: 1,
+            liquidityWarnings: [],
+            missingFields: [],
+          },
+        ],
+      },
+    ],
+    strategyPrecisionReviews: [
+      {
+        strategy: "long_call",
+        level: "manual_review_required",
+        chartGate: {
+          level: "pass",
+          reasons: ["週足50本線が上向きです。"],
+          warnings: [],
+        },
+        expiryReview: {
+          level: "pass",
+          targetDteRange: [150, 9999],
+          actualDte: 198,
+          reasons: ["DTE 198日: コール買いの標準レンジです。"],
+          warnings: [],
+        },
+        strikeReview: {
+          level: "pass",
+          targetStrikeRatioRange: [1, 1.05],
+          actualStrikeRatio: 1.04,
+          reasons: ["strike/株価比 1.04: コール買いレンジ内です。"],
+          warnings: [],
+        },
+        liquidityReview: {
+          level: "pass",
+          reasons: ["Askを保守価格に使用します。", "Bid/Askあり、spread 4.7%"],
+          warnings: [],
+        },
+        capitalReview: {
+          level: "pass",
+          reasons: ["最大損失 $880"],
+          warnings: [],
+        },
+        manualReviewReasons: ["反対売買前提、時間価値減少、損益分岐点を確認してください。"],
+        avoidReasons: [],
+        nextChecks: ["チャート根拠", "満期と時間軸"],
+        checklist: ["チャート根拠を確認した", "証券会社画面の価格を最終確認する"],
+      },
+    ],
     screeningCandidate: {
       symbol: "NVDA",
       name: "NVIDIA",
@@ -184,12 +511,86 @@ describe("CandidateDetailCard", () => {
     expect(screen.getByText("synthetic delta is high")).toBeInTheDocument();
     expect(screen.getByText("assignment capital shortage")).toBeInTheDocument();
     expect(screen.getByText("assignmentCapitalRequired")).toBeInTheDocument();
+    expect(screen.getByText("データ充足")).toBeInTheDocument();
+    expect(screen.getByText("level_4_draft_ready")).toBeInTheDocument();
+    expect(screen.getByText("チャート分析")).toBeInTheDocument();
+    expect(screen.getByText("chart regime is bullish")).toBeInTheDocument();
+    expect(screen.getByText("戦略適性")).toBeInTheDocument();
+    expect(screen.getAllByText("手動確認").length).toBeGreaterThan(0);
+    expect(screen.getByText("review before draft")).toBeInTheDocument();
+    expect(screen.getByText("戦略精度レビュー")).toBeInTheDocument();
+    expect(screen.getByText("チャート最終ゲート")).toBeInTheDocument();
+    expect(screen.getByText("満期レビュー")).toBeInTheDocument();
+    expect(screen.getByText("strikeレビュー")).toBeInTheDocument();
+    expect(screen.getByText("流動性レビュー")).toBeInTheDocument();
+    expect(screen.getByText("資金レビュー")).toBeInTheDocument();
+    expect(screen.getByText("DTE 198日: コール買いの標準レンジです。")).toBeInTheDocument();
+    expect(screen.getByText("Askを保守価格に使用します。")).toBeInTheDocument();
+    expect(screen.getByText("建玉案レビューの手動確認チェック")).toBeInTheDocument();
+    expect(screen.getAllByText("証券会社画面の価格を最終確認する").length).toBeGreaterThan(0);
+    expect(screen.getByText("建玉案レビュー前サマリー")).toBeInTheDocument();
+    expect(screen.getAllByText(/必須未確認/).length).toBeGreaterThan(0);
+    expect(screen.getByText("オプション候補・流動性")).toBeInTheDocument();
+    expect(screen.getByText("8.4 / 8.8")).toBeInTheDocument();
+    expect(screen.getByText("建玉案レビュー")).toBeInTheDocument();
+    expect(screen.queryByText("draft_ready")).not.toBeInTheDocument();
+    expect(screen.getAllByText("建玉案レビュー可").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("requiredCapitalUSD").length).toBeGreaterThan(0);
+    expect(screen.getByText("上級戦略レビュー")).toBeInTheDocument();
+    expect(screen.getByText("Short Strangle Advanced Review")).toBeInTheDocument();
+    expect(screen.getByText("naked_call_risk: 100株カバーが確認できません。")).toBeInTheDocument();
+    expect(screen.getByText("裸コール化しないことを確認してください。")).toBeInTheDocument();
+    expect(screen.getByText("$153.70")).toBeInTheDocument();
 
     expect(screen.queryByText("secret-token")).not.toBeInTheDocument();
     expect(screen.queryByText("secret-password")).not.toBeInTheDocument();
     expect(screen.queryByText("123456789")).not.toBeInTheDocument();
     expect(screen.queryByText("/Users/motomichi/private/input.json")).not.toBeInTheDocument();
     expect(screen.queryByText("secret-api-key")).not.toBeInTheDocument();
+  });
+
+  it("saves checklist changes and reflects review details to the journal only when requested", () => {
+    const onChecklistChange = vi.fn();
+    const onJournalChange = vi.fn();
+    const candidate = buildCandidate();
+
+    render(
+      <CandidateDetailCard
+        candidate={candidate}
+        onChecklistChange={onChecklistChange}
+        onJournalChange={onJournalChange}
+        getDefaultJournal={() => ({
+          id: "journal-default",
+          candidateId: candidate.id,
+          symbol: candidate.symbol,
+          underlyingName: candidate.company,
+          strategy: "custom",
+          accountCode: "UNKNOWN",
+          status: "candidate",
+          createdAt: "2026-07-05T00:00:00.000Z",
+          updatedAt: "2026-07-05T00:00:00.000Z",
+          entryReason: "既存の根拠",
+          technicalTags: [],
+          technicalMemo: "",
+          expectedScenario: "",
+          profitTakingPlan: "",
+          stopLossPlan: "",
+          invalidationCondition: "",
+          chartEvidence: [],
+          review: { outcome: "not_reviewed" },
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/チャート根拠を確認した/));
+    expect(onChecklistChange).toHaveBeenCalledTimes(1);
+    expect(onChecklistChange.mock.calls[0][0].items.some((item: { label: string; checked: boolean }) => item.label === "チャート根拠を確認した" && item.checked)).toBe(true);
+    expect(onJournalChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "候補レビューを根拠メモへ反映" }));
+    expect(onJournalChange).toHaveBeenCalledTimes(1);
+    expect(onJournalChange.mock.calls[0][0].entryReason).toContain("候補レビュー: NVDA / コール買い");
+    expect(JSON.stringify(onJournalChange.mock.calls[0][0])).not.toContain("secret-token");
   });
 
   it("does not crash for legacy candidates without screeningCandidate", () => {

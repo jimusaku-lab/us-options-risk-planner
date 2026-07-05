@@ -155,10 +155,10 @@ describe("candidate parsers", () => {
     expect(result.candidates[0].technicalTimingPatterns?.[0].kind).toBe("upside_reversal_combo");
   });
 
-  it("normalizes moomoo OpenD screening run fixtures into ScreeningCandidate without keeping secrets", () => {
+  it("normalizes moomoo screening run fixtures into ScreeningCandidate without keeping secrets", () => {
     const result = normalizeMoomooScreeningRunToCandidateImport(
       {
-        source: "moomoo_opend",
+        source: "moomoo_file_import",
         asOf: "2026-06-30T09:00:00+09:00",
         permissions: { usOption: "permission_missing" },
         candidates: [
@@ -193,7 +193,7 @@ describe("candidate parsers", () => {
       totalRows: 1,
       importedCount: 1,
       errorCount: 0,
-      source: "moomoo_opend",
+      source: "moomoo_file_import",
       format: "json",
       asOf: "2026-06-30T09:00:00+09:00",
     });

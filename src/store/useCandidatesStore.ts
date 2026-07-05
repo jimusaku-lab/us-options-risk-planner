@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CandidateImportSummary, CandidateSymbol } from "@/types/candidates";
+import type { CandidateImportSummary, CandidateReviewChecklistState, CandidateSymbol } from "@/types/candidates";
 import type { EntryRationaleJournal } from "@/types/domain";
 
 const CANDIDATES_KEY = "us-options-candidate-symbols-v1";
@@ -29,6 +29,7 @@ type CandidatesStore = {
   clearCandidates: () => void;
   markCandidateWatchOnly: (id: string, watchOnly: boolean) => void;
   updateCandidateJournal: (id: string, journal: EntryRationaleJournal) => void;
+  updateCandidateChecklist: (id: string, checklist: CandidateReviewChecklistState) => void;
 };
 
 const initialCandidates = loadJson<CandidateSymbol[]>(CANDIDATES_KEY, []);
@@ -38,11 +39,21 @@ export const useCandidatesStore = create<CandidatesStore>((set) => ({
   lastImportedAt: initialCandidates[0]?.importedAt,
   importWarnings: [],
   importCandidateSymbols: (candidates, warnings = [], summary) =>
-    set(() => {
-      saveJson(CANDIDATES_KEY, candidates);
+    set((state) => {
+      const previousById = new Map(state.candidates.map((candidate) => [candidate.id, candidate]));
+      const restoredCandidates = candidates.map((candidate) => {
+        const previous = previousById.get(candidate.id);
+        if (!previous) return candidate;
+        return {
+          ...candidate,
+          entryRationaleJournal: candidate.entryRationaleJournal ?? previous.entryRationaleJournal,
+          reviewChecklistStates: candidate.reviewChecklistStates?.length ? candidate.reviewChecklistStates : previous.reviewChecklistStates,
+        };
+      });
+      saveJson(CANDIDATES_KEY, restoredCandidates);
       return {
-        candidates,
-        lastImportedAt: candidates[0]?.importedAt,
+        candidates: restoredCandidates,
+        lastImportedAt: restoredCandidates[0]?.importedAt,
         importWarnings: warnings,
         lastImportSummary: summary,
       };
@@ -64,6 +75,22 @@ export const useCandidatesStore = create<CandidatesStore>((set) => ({
     set((state) => {
       const candidates = state.candidates.map((candidate) =>
         candidate.id === id ? { ...candidate, entryRationaleJournal: journal } : candidate,
+      );
+      saveJson(CANDIDATES_KEY, candidates);
+      return { candidates };
+    }),
+  updateCandidateChecklist: (id, checklist) =>
+    set((state) => {
+      const candidates = state.candidates.map((candidate) =>
+        candidate.id === id
+          ? {
+              ...candidate,
+              reviewChecklistStates: [
+                checklist,
+                ...(candidate.reviewChecklistStates ?? []).filter((item) => item.strategy !== checklist.strategy),
+              ],
+            }
+          : candidate,
       );
       saveJson(CANDIDATES_KEY, candidates);
       return { candidates };

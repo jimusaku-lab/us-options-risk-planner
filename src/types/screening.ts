@@ -3,14 +3,40 @@ export type StrategyCandidateKind =
   | "cash_secured_put_avoid_assignment"
   | "covered_call"
   | "long_call"
+  | "wheel"
   | "short_strangle"
+  | "short_strangle_covered"
+  | "short_strangle_advanced_review"
   | "synthetic_forward"
-  | "combo";
+  | "combo"
+  | "itm_short_put_buy_to_own"
+  | "long_straddle_event"
+  | "protective_collar";
 
 export type ScreeningDataSource = "manual" | "csv" | "json" | "tradingview" | "moomoo" | "saxo" | "calculated";
 export type ScreeningDelayStatus = "real_time" | "delayed" | "end_of_day" | "unknown";
 export type TechnicalSignal = "bullish" | "bearish" | "neutral" | "golden_cross" | "dead_cross" | "watch" | "unknown";
 export type StrategyFitLevel = "fit" | "watch" | "avoid" | "insufficient_data";
+export type PublicStrategyFitLevel = StrategyFitLevel | "manual_review_required";
+export type ChartRegime =
+  | "bullish_continuation"
+  | "upside_reversal"
+  | "bullish_pullback"
+  | "range_neutral"
+  | "bearish_breakdown"
+  | "downtrend"
+  | "downtrend_rebound"
+  | "event_large_move_unknown"
+  | "insufficient_data";
+export type ChartConfidence = "high" | "medium" | "low" | "insufficient";
+export type ChartTimeframe = "monthly" | "weekly" | "daily";
+export type PositionDraftStatus = "not_ready" | "manual_review_required" | "draft_ready";
+export type ScreeningCompletenessLevel =
+  | "insufficient"
+  | "level_1_symbol_price"
+  | "level_2_chart_ready"
+  | "level_3_option_ready"
+  | "level_4_draft_ready";
 export type TechnicalSignalEventType =
   | "slowkd_golden_cross"
   | "macd_golden_cross"
@@ -51,6 +77,69 @@ export type TechnicalSnapshot = {
   signalEvents?: TechnicalSignalEvent[];
   patternCandidates?: TechnicalTimingPattern[];
   movingAverageSlopes?: Partial<MovingAverageSlopes>;
+};
+
+export type OhlcvBar = {
+  date: string;
+  open?: number;
+  high?: number;
+  low?: number;
+  close: number;
+  volume?: number;
+};
+
+export type ChartTimeframeSnapshot = {
+  timeframe: ChartTimeframe;
+  close?: number;
+  sma5?: number;
+  sma10?: number;
+  sma20?: number;
+  sma13?: number;
+  sma25?: number;
+  sma26?: number;
+  sma50?: number;
+  sma52?: number;
+  sma75?: number;
+  sma100?: number;
+  sma200?: number;
+  macdSignal?: TechnicalSignal;
+  slowKdSignal?: TechnicalSignal;
+  rsi?: number;
+  macd?: {
+    macd?: number;
+    signal?: number;
+    histogram?: number;
+  };
+  slowKd?: {
+    k?: number;
+    d?: number;
+  };
+  movingAverageSlopes?: Partial<MovingAverageSlopes>;
+  priceLocation?: PriceLocation;
+  recentHigh?: number;
+  recentLow?: number;
+  supportLevels?: number[];
+  resistanceLevels?: number[];
+  fibonacciLevels?: {
+    high?: number;
+    low?: number;
+    retracement382?: number;
+    retracement500?: number;
+    retracement618?: number;
+  };
+  ohlcv?: OhlcvBar[];
+  notes?: string[];
+};
+
+export type ChartAnalysisSnapshot = {
+  asOf?: string;
+  regime: ChartRegime;
+  confidence: ChartConfidence;
+  primaryTimeframe: ChartTimeframe;
+  timeframes: ChartTimeframeSnapshot[];
+  reasons: string[];
+  warnings: string[];
+  missingFields: string[];
 };
 
 export type TechnicalSignalEvent = {
@@ -183,6 +272,18 @@ export type StrategyFitResult = {
   numericChecks: NumericCheck[];
 };
 
+export type StrategySuitability = {
+  strategy: StrategyCandidateKind;
+  level: PublicStrategyFitLevel;
+  chartRegime?: ChartRegime;
+  confidence?: ChartConfidence;
+  reasons: string[];
+  warnings: string[];
+  missingFields: string[];
+  manualReviewReasons?: string[];
+  nextChecks: string[];
+};
+
 export type SyntheticForwardLeg = {
   type: SyntheticForwardLegType;
   expiry: string;
@@ -196,6 +297,176 @@ export type SyntheticForwardLeg = {
   iv?: number;
   delta?: number;
   sourceId?: string;
+};
+
+export type PublicOptionCandidateInput = {
+  id?: string;
+  optionType: "call" | "put";
+  expiry?: string;
+  dte?: number;
+  strike?: number;
+  strikePrice?: number;
+  bid?: number;
+  ask?: number;
+  mid?: number;
+  last?: number;
+  volume?: number;
+  openInterest?: number;
+  iv?: number;
+  delta?: number;
+  gamma?: number;
+  theta?: number;
+  vega?: number;
+  source?: string;
+};
+
+export type OptionLegDraft = {
+  id: string;
+  optionType: "call" | "put";
+  side: "buy" | "sell";
+  expiry?: string;
+  dte?: number;
+  strikePrice?: number;
+  conservativePrice?: number;
+  conservativePriceField?: "bid" | "ask";
+  mid?: number;
+  last?: number;
+  quantity?: number;
+  liquidityWarnings: string[];
+  missingFields: string[];
+};
+
+export type PositionDraft = {
+  id: string;
+  strategy: StrategyCandidateKind;
+  status: PositionDraftStatus;
+  symbol: string;
+  legs: OptionLegDraft[];
+  requiredCapitalUSD?: number;
+  maxLossUSD?: number;
+  availableCashUSD?: number;
+  warnings: string[];
+  missingFields: string[];
+};
+
+export type StrategyPrecisionReviewLevel = "pass" | "watch" | "blocked" | "insufficient_data";
+
+export type StrategyPrecisionSubReview = {
+  level: StrategyPrecisionReviewLevel;
+  reasons: string[];
+  warnings: string[];
+};
+
+export type StrategyPrecisionExpiryReview = StrategyPrecisionSubReview & {
+  targetDteRange?: [number, number];
+  actualDte?: number;
+};
+
+export type StrategyPrecisionStrikeReview = StrategyPrecisionSubReview & {
+  targetStrikeRatioRange?: [number, number];
+  actualStrikeRatio?: number;
+};
+
+export type StrategyPrecisionReview = {
+  strategy: StrategyCandidateKind;
+  level: PublicStrategyFitLevel;
+  chartGate: StrategyPrecisionSubReview;
+  expiryReview: StrategyPrecisionExpiryReview;
+  strikeReview: StrategyPrecisionStrikeReview;
+  liquidityReview: StrategyPrecisionSubReview;
+  capitalReview: StrategyPrecisionSubReview;
+  manualReviewReasons: string[];
+  avoidReasons: string[];
+  nextChecks: string[];
+  checklist: string[];
+};
+
+export type AdvancedStrategyReview = {
+  id: string;
+  strategy: StrategyCandidateKind;
+  level: PublicStrategyFitLevel;
+  symbol: string;
+  chartRegime?: ChartRegime;
+  confidence?: ChartConfidence;
+  legs: OptionLegDraft[];
+  netPremiumUSD?: number;
+  requiredCapitalUSD?: number;
+  maxLossUSD?: number;
+  stockEquivalentNotionalUSD?: number;
+  breakEvenUpperUSD?: number;
+  breakEvenLowerUSD?: number;
+  effectiveAcquisitionCostUSD?: number;
+  scenarios: string[];
+  reasons: string[];
+  warnings: string[];
+  missingFields: string[];
+  manualReviewReasons: string[];
+};
+
+export type PublicScreeningCandidateInput = {
+  symbol: string;
+  name?: string;
+  market?: string;
+  sector?: string;
+  underlyingPrice?: number;
+  priceAsOf?: string;
+  delayStatus?: ScreeningDelayStatus;
+  technicalSnapshot?: Partial<TechnicalSnapshot>;
+  chartAnalysis?: ChartAnalysisSnapshot;
+  dailyOhlcv?: OhlcvBar[];
+  optionCandidates?: PublicOptionCandidateInput[];
+  optionChainQuality?: Partial<OptionChainQuality>;
+  candidateStrategies?: StrategyCandidateInput[];
+  strategySuitability?: StrategySuitability[];
+  capital?: {
+    availableCashUSD?: number;
+    buyingPowerUSD?: number;
+    stockShares?: number;
+    stockCostBasisUSD?: number;
+    maxLossToleranceUSD?: number;
+    assignmentCapitalAvailableUSD?: number;
+  };
+  existingPosition?: {
+    stockShares?: number;
+    stockCostBasisUSD?: number;
+  };
+  event?: {
+    earningsDate?: string;
+    importantEventDate?: string;
+    expectedMovePct?: number;
+    historicalPostEventMovePct?: number;
+  };
+  positionDrafts?: PositionDraft[];
+  advancedStrategyReviews?: AdvancedStrategyReview[];
+  strategyPrecisionReviews?: StrategyPrecisionReview[];
+  riskFlags?: string[];
+  missingFields?: string[];
+  warnings?: string[];
+  notes?: string;
+  rawSourceRow?: Record<string, unknown>;
+};
+
+export type PublicScreeningPackage = {
+  schemaVersion: "us_options_screening_package.v1";
+  generatedAt?: string;
+  source: "manual" | "moomoo_user_export" | "tradingview_user_export" | "csv" | "json" | "calculated";
+  dataPolicy: {
+    userProvided: true;
+    containsCredentials: false;
+    redistributionChecked?: boolean;
+    notes: string[];
+  };
+  candidates: PublicScreeningCandidateInput[];
+};
+
+export type ScreeningCompletenessResult = {
+  level: ScreeningCompletenessLevel;
+  canClassifyStrategy: boolean;
+  canAnalyzeChart: boolean;
+  canEvaluateOptionLiquidity: boolean;
+  canCreatePositionDraft: boolean;
+  missingFields: string[];
+  warnings: string[];
 };
 
 export type SyntheticForwardCandidate = {

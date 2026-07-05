@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { cleanup, render, screen } from "@testing-library/react";
 import type { SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
 import type { OptionLeg, TradeSimulation } from "@/types/domain";
+import type { AccountInputs } from "@/store/useOptionsStore";
 import {
+  CloseDecisionCard,
   buildLongOptionValueSnapshot,
   buildOptionValueTimeline,
   buildSaxoOptionPremiumCandidateInput,
@@ -14,6 +18,78 @@ import {
   isSaxoPriceFeedNoAccess,
   upsertOptionValueSnapshot,
 } from "./CloseDecisionCard";
+
+afterEach(() => cleanup());
+
+function createAccountInputs(): AccountInputs {
+  return {
+    P: {
+      accountCode: "P",
+      currency: "JPY",
+      cashBalance: 200_224,
+      buyingPower: 200_224,
+      marginAvailable: 200_224,
+      marginUsagePercent: 0,
+      updatedAt: "2026-07-05T00:00:00.000Z",
+    },
+    N: {
+      accountCode: "N",
+      currency: "USD",
+      cashBalance: 10_000,
+      buyingPower: 10_000,
+      marginAvailable: 10_000,
+      marginUsagePercent: 0,
+      updatedAt: "2026-07-05T00:00:00.000Z",
+    },
+  };
+}
+
+function createLongCallSimulation(overrides: Partial<TradeSimulation> = {}): TradeSimulation {
+  return {
+    id: "long-call",
+    name: "V C340 long call",
+    ticker: "V",
+    strategyType: "long_call",
+    status: "open",
+    accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+    entryDate: "2026-06-30",
+    expiryDate: "2026-11-20",
+    dte: 143,
+    currentPriceUSD: 360,
+    fxRateJPY: 164.23105,
+    referenceFxRateJPY: 164.23105,
+    brokerCommissionUSD: 2.25,
+    brokerCommissionJPY: 0,
+    exchangeFeesJPY: 0,
+    fxConversionCostJPY: 0,
+    carryingCostJPY: 0,
+    brokerMarginJPY: 0,
+    marginBufferMultiplier: 1,
+    availableCashJPY: 0,
+    denominatorMode: "custom",
+    stockPosition: null,
+    optionLegs: [
+      {
+        id: "long-call-leg",
+        type: "call",
+        side: "buy",
+        strikeUSD: 340,
+        premiumUSD: 24.1,
+        quantity: 1,
+        expiryDate: "2026-11-20",
+        closeCostUSD: 36.4,
+        closePlan: {
+          enabled: true,
+          closePriceUSD: 36.4,
+          profitTargetPriceUSD: 33,
+          stopLossPriceUSD: 11,
+          commissionUSD: 2.25,
+        },
+      },
+    ],
+    ...overrides,
+  } as TradeSimulation;
+}
 
 function createOrder(overrides: Partial<SaxoApiOrderSnapshot>): SaxoApiOrderSnapshot {
   return {
@@ -187,6 +263,42 @@ describe("long option close annualized return", () => {
       entryCost: 0,
       elapsedDays: 5,
     })).toBeNull();
+  });
+});
+
+describe("long option exit proceeds preview", () => {
+  it("shows P account JPY exit proceeds and projected P cash after close", () => {
+    render(
+      createElement(CloseDecisionCard, {
+        simulation: createLongCallSimulation(),
+        onChange: () => undefined,
+        defaultOpen: true,
+        accountInputs: createAccountInputs(),
+      }),
+    );
+
+    expect(screen.getAllByText("反対売買時の参考受取額").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/手数料後 597,432円 \/ \$3,637.75/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("P口座現金残高").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/現在 200,224円 \/ 決済後見込み 797,656円/).length).toBeGreaterThan(0);
+  });
+
+  it("does not mix P account cash into an N account long option", () => {
+    render(
+      createElement(CloseDecisionCard, {
+        simulation: createLongCallSimulation({
+          id: "long-call-n",
+          accountEnvironment: "PROD_N_USD_SETTLEMENT",
+        }),
+        onChange: () => undefined,
+        defaultOpen: true,
+        accountInputs: createAccountInputs(),
+      }),
+    );
+
+    expect(screen.queryByText("P口座現金残高")).toBeNull();
+    expect(screen.getAllByText("N口座USD現金残高").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/現在 \$10,000.00 \/ 決済後見込み \$13,637.75/).length).toBeGreaterThan(0);
   });
 });
 

@@ -9,7 +9,7 @@ import {
   calculateUsedMarginJPY,
   calculateUsedMarginUSD,
 } from "@/domain/calculations";
-import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
+import { calculateDashboardPremiumDisplay, type LongOptionOrderDisplay } from "@/domain/dashboardDisplay";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 function formatReferenceJPY(value: number | undefined): string {
@@ -20,6 +20,54 @@ function formatReferenceJPY(value: number | undefined): string {
 
 function formatSignedUSD(value: number): string {
   return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
+}
+
+function buildLongOptionExitProceedsValue(simulation: TradeSimulation, longOptionDisplay: LongOptionOrderDisplay): string {
+  const preview = longOptionDisplay.exitProceedsPreview;
+  if (!preview) return "現在価格未入力";
+  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
+    return `手数料後 ${formatUSD(preview.netUSD)}`;
+  }
+  return preview.netJPY !== undefined ? `手数料後 ${formatJPY(preview.netJPY)}` : "手数料後 参考JPY未計算";
+}
+
+function buildLongOptionExitProceedsNote(simulation: TradeSimulation, longOptionDisplay: LongOptionOrderDisplay): string {
+  const preview = longOptionDisplay.exitProceedsPreview;
+  if (!preview) return "現在オプション価格を入れると、反対売買時の参考受取額を表示します。";
+  const grossJpy = preview.grossJPY !== undefined ? formatJPY(preview.grossJPY) : "参考JPY未計算";
+  const netJpy = preview.netJPY !== undefined ? formatJPY(preview.netJPY) : "参考JPY未計算";
+  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
+    return `手数料前 ${formatUSD(preview.grossUSD)} / 手数料後 ${formatUSD(preview.netUSD)}。参考 ${netJpy}。`;
+  }
+  return `手数料前 ${grossJpy} / ${formatUSD(preview.grossUSD)}。手数料後 ${netJpy} / ${formatUSD(preview.netUSD)}。`;
+}
+
+function buildLongOptionExitCashValue(
+  simulation: TradeSimulation,
+  accountInputs: AccountInputs | undefined,
+  longOptionDisplay: LongOptionOrderDisplay,
+): string {
+  const preview = longOptionDisplay.exitProceedsPreview;
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const account = accountInputs?.[isN ? "N" : "P"];
+  if (!account) return isN ? "N口座USD現金 未取得" : "P口座現金残高 未取得";
+  if (!preview) {
+    return isN ? `現在 ${formatUSD(account.cashBalance)}` : `現在 ${formatJPY(account.cashBalance)}`;
+  }
+  if (isN) {
+    return `現在 ${formatUSD(account.cashBalance)} / 決済後見込み ${formatUSD(account.cashBalance + preview.netUSD)}`;
+  }
+  if (preview.netJPY === undefined) {
+    return `現在 ${formatJPY(account.cashBalance)} / 決済後見込み 参考JPY未計算`;
+  }
+  return `現在 ${formatJPY(account.cashBalance)} / 決済後見込み ${formatJPY(account.cashBalance + preview.netJPY)}`;
+}
+
+function buildLongOptionExitCashNote(simulation: TradeSimulation): string {
+  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
+    return "決済前プレビューです。正式なUSD現金残高は決済実績保存後に更新します。";
+  }
+  return "決済前プレビューです。正式なP口座JPY現金残高は決済実績保存後に更新します。N口座USD残高とは混ぜません。";
 }
 
 type FundingSource = {
@@ -251,6 +299,16 @@ export function SummaryCards({
                 : "SaxoTraderGOのBid、または実際に使う売却指値を手入力してください。",
               `利確/損切りライン ${formatUSD(longOptionDisplay.profitTargetPriceUSD)} / ${formatUSD(longOptionDisplay.stopLossPriceUSD)}。`,
             ].join(" "),
+          },
+          {
+            title: "反対売買時の参考受取額",
+            value: buildLongOptionExitProceedsValue(simulation, longOptionDisplay),
+            note: buildLongOptionExitProceedsNote(simulation, longOptionDisplay),
+          },
+          {
+            title: simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "N口座USD現金残高" : "P口座現金残高",
+            value: buildLongOptionExitCashValue(simulation, accountInputs, longOptionDisplay),
+            note: buildLongOptionExitCashNote(simulation),
           },
           {
             title: "現在決済ベース",

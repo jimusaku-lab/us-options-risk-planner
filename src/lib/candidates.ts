@@ -1,6 +1,7 @@
 import { evaluateScreeningCandidate } from "@/domain/screeningRules";
 import { buildUpsideReversalComboPattern } from "@/domain/technicalPatterns";
 import { evaluateSyntheticForwardCandidate } from "@/domain/syntheticForward";
+import { normalizePublicScreeningPackageToCandidateImport } from "@/lib/publicScreeningPackage";
 import type { CandidateImportError, CandidateImportFormat, CandidateImportResult, CandidateSource, CandidateSymbol } from "@/types/candidates";
 import type { OptionChainQuality, ScreeningCandidate, ScreeningDataSource, ScreeningDelayStatus, StrategyCandidateInput, SyntheticForwardLeg, TechnicalSnapshot } from "@/types/screening";
 
@@ -256,7 +257,6 @@ function parseJsonPayload(text: string): { rows: CandidateRow[]; source?: Candid
 
 function normalizeCandidateSource(value: string): CandidateSource {
   const normalized = value.trim().toLowerCase();
-  if (normalized === "moomoo_opend") return "moomoo_opend";
   if (normalized === "moomoo_file_import") return "moomoo_file_import";
   if (normalized === "legacy_tradingview" || /tradingview/i.test(value)) return "legacy_tradingview";
   if (normalized === "manual_import" || /manual/i.test(value)) return "manual_import";
@@ -265,7 +265,7 @@ function normalizeCandidateSource(value: string): CandidateSource {
 }
 
 function toScreeningDataSource(source: CandidateSource): ScreeningDataSource {
-  if (source === "moomoo_file_import" || source === "moomoo_opend") return "moomoo";
+  if (source === "moomoo_file_import") return "moomoo";
   if (source === "legacy_tradingview" || source === "tradingview") return "tradingview";
   if (source === "imported_csv") return "csv";
   return "manual";
@@ -697,7 +697,7 @@ export function normalizeMoomooScreeningRunToCandidateImport(
   run: MoomooScreeningRun,
   importedAt = new Date().toISOString(),
 ): CandidateImportResult {
-  const source: CandidateSource = run.source === "moomoo_file_import" ? "moomoo_file_import" : "moomoo_opend";
+  const source: CandidateSource = "moomoo_file_import";
   const asOf = typeof run.asOf === "string" ? run.asOf : importedAt;
   const usOptionPermission = normalizeMoomooOptionPermission(run.permissions?.usOption);
   const rows = [
@@ -713,7 +713,7 @@ export function normalizeMoomooScreeningRunToCandidateImport(
       asOf,
       candidates,
     }),
-    "moomoo_opend_screening_candidates.json",
+    "moomoo_screening_candidates.json",
     importedAt,
   );
 }
@@ -721,6 +721,12 @@ export function normalizeMoomooScreeningRunToCandidateImport(
 export function parseCandidateImport(text: string, fileName: string, importedAt = new Date().toISOString()): CandidateImportResult {
   const lowerFileName = fileName.toLowerCase();
   const format: CandidateImportFormat = lowerFileName.endsWith(".csv") ? "csv" : "json";
+  if (format === "json") {
+    const parsed = JSON.parse(stripBom(text)) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && (parsed as { schemaVersion?: unknown }).schemaVersion === "us_options_screening_package.v1") {
+      return normalizePublicScreeningPackageToCandidateImport(parsed, importedAt);
+    }
+  }
   const inferredSource: CandidateSource = legacyTradingViewPattern.test(fileName)
     ? "legacy_tradingview"
     : lowerFileName.endsWith(".csv")

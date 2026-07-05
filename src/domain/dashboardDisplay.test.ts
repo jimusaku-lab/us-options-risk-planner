@@ -409,6 +409,54 @@ describe("dashboard premium display", () => {
     expect(display.longOptionOrderDisplay?.profitTargetPriceUSD).toBe(33);
     expect(display.longOptionOrderDisplay?.stopLossPriceUSD).toBe(11);
     expect(display.longOptionOrderDisplay?.currentCloseAnnualizedReturnPct).toBeDefined();
+    expect(display.longOptionOrderDisplay?.exitProceedsPreview?.grossUSD).toBeCloseTo(2_400, 8);
+    expect(display.longOptionOrderDisplay?.exitProceedsPreview?.netUSD).toBeCloseTo(2_397.75, 8);
+    expect(display.longOptionOrderDisplay?.exitProceedsPreview?.grossJPY).toBeCloseTo(387_960, 8);
+    expect(display.longOptionOrderDisplay?.exitProceedsPreview?.netJPY).toBeCloseTo(387_596.2875, 8);
+  });
+
+  it("calculates long option exit proceeds without treating missing option price as zero", () => {
+    const simulation: TradeSimulation = {
+      ...createPlannedCoveredCall({
+        id: "v-c340-long-call-exit-preview",
+        status: "planned",
+        name: "V C340 long call",
+        ticker: "V",
+        strategyType: "long_call",
+        currentPriceUSD: 0,
+        fxRateJPY: 164.23105,
+        referenceFxRateJPY: 164.23105,
+        entryDate: "2026-06-30",
+        expiryDate: "2026-11-20",
+        dte: 143,
+        stockPosition: null,
+        denominatorMode: "custom",
+        optionLegs: [
+          {
+            id: "call-leg",
+            type: "call",
+            side: "buy",
+            strikeUSD: 340,
+            premiumUSD: 24.1,
+            quantity: 1,
+            expiryDate: "2026-11-20",
+            closeCostUSD: 36.4,
+            closePlan: {
+              enabled: true,
+              closePriceUSD: 36.4,
+              commissionUSD: 2.25,
+            },
+          },
+        ],
+        brokerCommissionUSD: 2.25,
+      }),
+    };
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(display.longOptionOrderDisplay?.exitProceedsPreview?.grossUSD).toBeCloseTo(3_640, 8);
+    expect(display.longOptionOrderDisplay?.exitProceedsPreview?.netUSD).toBeCloseTo(3_637.75, 8);
+    expect(display.longOptionOrderDisplay?.exitProceedsPreview?.netJPY).toBeCloseTo(597_431.5021375, 8);
   });
 
   it("keeps missing long-call underlying price undefined instead of treating it as zero", () => {

@@ -73,6 +73,16 @@ export type LongOptionOrderDisplay = {
   strikeUSD: number;
   currentPriceUSD?: number;
   quantity: number;
+  exitProceedsPreview?: LongOptionExitProceedsPreview;
+};
+
+export type LongOptionExitProceedsPreview = {
+  grossUSD: number;
+  netUSD: number;
+  grossJPY?: number;
+  netJPY?: number;
+  closeCommissionUSD: number;
+  fxRateJPY?: number;
 };
 
 export function getEffectiveFxRateJPY(simulation: TradeSimulation): number | null {
@@ -140,6 +150,31 @@ function getSingleLongOptionLeg(simulation: TradeSimulation) {
   return leg;
 }
 
+export function calculateLongOptionExitProceedsPreview({
+  closePriceUSD,
+  quantity,
+  closeCommissionUSD,
+  fxRateJPY,
+}: {
+  closePriceUSD?: number;
+  quantity: number;
+  closeCommissionUSD: number;
+  fxRateJPY?: number | null;
+}): LongOptionExitProceedsPreview | undefined {
+  if (closePriceUSD === undefined || !Number.isFinite(closePriceUSD) || closePriceUSD <= 0) return undefined;
+  const grossUSD = closePriceUSD * 100 * Math.max(1, quantity);
+  const netUSD = grossUSD - closeCommissionUSD;
+  const hasFxRate = fxRateJPY !== undefined && fxRateJPY !== null && Number.isFinite(fxRateJPY) && fxRateJPY > 0;
+  return {
+    grossUSD,
+    netUSD,
+    grossJPY: hasFxRate ? grossUSD * fxRateJPY : undefined,
+    netJPY: hasFxRate ? netUSD * fxRateJPY : undefined,
+    closeCommissionUSD,
+    fxRateJPY: hasFxRate ? fxRateJPY : undefined,
+  };
+}
+
 function calculateLongOptionOrderDisplay(params: {
   simulation: TradeSimulation;
   feeUSD: number;
@@ -168,6 +203,12 @@ function calculateLongOptionOrderDisplay(params: {
         : undefined;
   const currentOptionValueUSD = closePriceUSD !== undefined ? closePriceUSD * 100 * leg.quantity : undefined;
   const closeCommissionUSD = leg.closePlan?.commissionUSD ?? params.feeUSD;
+  const exitProceedsPreview = calculateLongOptionExitProceedsPreview({
+    closePriceUSD,
+    quantity: leg.quantity,
+    closeCommissionUSD,
+    fxRateJPY: effectiveFxRateJPY,
+  });
   const estimatedProfitUSD =
     currentOptionValueUSD !== undefined ? currentOptionValueUSD - paidPremiumUSD - params.feeUSD - closeCommissionUSD : undefined;
   const estimatedProfitJPY = estimatedProfitUSD !== undefined ? estimatedProfitUSD * effectiveFxRateJPY : undefined;
@@ -214,6 +255,7 @@ function calculateLongOptionOrderDisplay(params: {
     strikeUSD: leg.strikeUSD,
     currentPriceUSD,
     quantity: leg.quantity,
+    exitProceedsPreview,
   };
 }
 

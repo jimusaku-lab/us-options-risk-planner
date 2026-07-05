@@ -126,4 +126,48 @@ describe("position export", () => {
     const parsed = parseWorkspaceJson(legacyJson);
     expect(parsed.simulations[0].optionCloseExecutions?.[0].confirmed).toBe(true);
   });
+
+  it("round trips candidate review journal details without dangerous local fields", () => {
+    const simulationWithJournal = {
+      ...sampleAmznSimulation,
+      entryRationaleJournal: {
+        id: "journal-review",
+        candidateId: "candidate-AMZN",
+        positionId: sampleAmznSimulation.id,
+        symbol: sampleAmznSimulation.ticker,
+        underlyingName: sampleAmznSimulation.underlyingName,
+        strategy: sampleAmznSimulation.strategyType,
+        accountCode: "DEMO" as const,
+        status: "planned" as const,
+        entryDate: sampleAmznSimulation.entryDate,
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T01:00:00.000Z",
+        entryReason: "候補レビュー: AMZN / カバードコール\n確認済み:\n- チャート根拠を確認した",
+        technicalTags: ["候補レビュー確認", "レビュー準備"],
+        technicalMemo: "チャート最終ゲート: pass",
+        expectedScenario: "入力候補として確認可",
+        profitTakingPlan: "",
+        stopLossPlan: "",
+        invalidationCondition: "",
+        chartEvidence: [],
+        review: { outcome: "not_reviewed" as const },
+      },
+    };
+    const json = exportWorkspaceJson({
+      workspace: "demo",
+      simulations: [simulationWithJournal],
+      exportedAt: "2026-07-05T00:00:00.000Z",
+    });
+
+    const parsed = parseWorkspaceJson(json);
+    const serialized = JSON.stringify(parsed);
+
+    expect(parsed.simulations[0].entryRationaleJournal?.entryReason).toContain("候補レビュー: AMZN / カバードコール");
+    expect(parsed.simulations[0].entryRationaleJournal?.technicalTags).toContain("候補レビュー確認");
+    expect(serialized).not.toContain("token");
+    expect(serialized).not.toContain("password");
+    expect(serialized).not.toContain("accountId");
+    expect(serialized).not.toContain("localPath");
+    expect(serialized).not.toContain("apiKey");
+  });
 });

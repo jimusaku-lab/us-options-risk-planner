@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CandidatePanel } from "./CandidatePanel";
 import type { CandidateSymbol } from "@/types/candidates";
@@ -13,10 +13,12 @@ const baseProps = {
   onWatchOnly: vi.fn(),
   onCreateSimulation: vi.fn(),
   onJournalChange: vi.fn(),
+  onChecklistChange: vi.fn(),
 };
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("CandidatePanel", () => {
@@ -24,13 +26,62 @@ describe("CandidatePanel", () => {
     render(<CandidatePanel {...baseProps} />);
 
     expect(screen.getByRole("heading", { name: "スクリーニング候補" })).toBeInTheDocument();
-    expect(screen.getByText(/moomooスクリーニング候補を確認/)).toBeInTheDocument();
-    expect(screen.getByText(/moomoo OpenD連携は後続工程です/)).toBeInTheDocument();
+    expect(screen.getByText(/持ち込みデータからスクリーニング候補を確認/)).toBeInTheDocument();
+    expect(screen.getByText(/外部自動取得に接続せず/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /候補ファイル取込/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "サンプルを読み込む" }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: "サンプルJSONを開く" })).toHaveAttribute("href", "/samples/us-options-screening-sample-v1.json");
     expect(screen.getByRole("button", { name: "スクリーニング候補を閉じる" })).toBeInTheDocument();
-    expect(screen.getByText(/moomoo候補JSON\/CSV、または互換CSV/)).toBeInTheDocument();
+    expect(screen.getByText(/まずはサンプルで候補画面を試せます/)).toBeInTheDocument();
+    expect(screen.getByText(/候補は売買推奨ではなく確認用の分類/)).toBeInTheDocument();
     expect(screen.queryByText(/TradingView/)).not.toBeInTheDocument();
     expect(screen.queryByText(/tradingview_candidates/)).not.toBeInTheDocument();
+  });
+
+  it("loads the bundled public sample through the existing import path", async () => {
+    const onImport = vi.fn();
+    const samplePackage = {
+      schemaVersion: "us_options_screening_package.v1",
+      generatedAt: "2026-07-05T09:30:00+09:00",
+      source: "manual",
+      dataPolicy: { userProvided: true, containsCredentials: false, redistributionChecked: true },
+      candidates: [
+        {
+          symbol: "PSAMPLE",
+          name: "Public Sample",
+          market: "US",
+          underlyingPrice: 100,
+          priceAsOf: "2026-07-05T09:30:00+09:00",
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      text: async () => JSON.stringify(samplePackage),
+    })));
+
+    render(<CandidatePanel {...baseProps} onImport={onImport} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "サンプルを読み込む" })[0]);
+
+    await waitFor(() => expect(onImport).toHaveBeenCalledTimes(1));
+    expect(fetch).toHaveBeenCalledWith("/samples/us-options-screening-sample-v1.json", { cache: "no-store" });
+    expect(onImport.mock.calls[0][0][0]).toMatchObject({ symbol: "PSAMPLE", company: "Public Sample" });
+    expect(screen.getByText(/サンプル読込済み 1\/1件/)).toBeInTheDocument();
+  });
+
+  it("shows a status message when bundled sample loading fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status: 404,
+      text: async () => "",
+    })));
+
+    render(<CandidatePanel {...baseProps} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "サンプルを読み込む" })[0]);
+
+    expect(await screen.findByText(/サンプルJSONを取得できませんでした。HTTP 404/)).toBeInTheDocument();
   });
 
   it("renders candidates with new moomoo source names without breaking actions", () => {
@@ -160,8 +211,127 @@ describe("CandidatePanel", () => {
 
     expect(screen.getByText("取込済み候補")).toBeInTheDocument();
     expect(screen.getByText("1/2件")).toBeInTheDocument();
-    expect(screen.getByText("long_call: fit")).toBeInTheDocument();
-    expect(screen.getByText("priceAsOf")).toBeInTheDocument();
+    expect(screen.getAllByText("確認優先度").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("コール買い").length).toBeGreaterThan(0);
+    expect(screen.getByText("未確認事項")).toBeInTheDocument();
+  });
+
+  it("shows public screening completeness, chart, strategy suitability, and draft status in the list", () => {
+    const candidate: CandidateSymbol = {
+      id: "public-MSFT-1",
+      source: "manual_import",
+      importedAt: "2026-07-04T09:00:00+09:00",
+      rank: 1,
+      symbol: "MSFT",
+      company: "Microsoft",
+      priceUSD: 500,
+      score: 90,
+      suggestedUse: "screening package level_4_draft_ready",
+      screeningCompleteness: {
+        level: "level_4_draft_ready",
+        canClassifyStrategy: true,
+        canAnalyzeChart: true,
+        canEvaluateOptionLiquidity: true,
+        canCreatePositionDraft: true,
+        missingFields: [],
+        warnings: [],
+      },
+      publicScreeningInput: {
+        symbol: "MSFT",
+        underlyingPrice: 500,
+        chartAnalysis: {
+          regime: "bullish_continuation",
+          confidence: "high",
+          primaryTimeframe: "daily",
+          timeframes: [],
+          reasons: ["chart ok"],
+          warnings: [],
+          missingFields: [],
+        },
+      },
+      strategySuitability: [
+        {
+          strategy: "long_call",
+          level: "manual_review_required",
+          chartRegime: "bullish_continuation",
+          confidence: "high",
+          reasons: [],
+          warnings: [],
+          missingFields: [],
+          manualReviewReasons: ["check"],
+          nextChecks: [],
+        },
+      ],
+      positionDrafts: [
+        {
+          id: "draft",
+          strategy: "long_call",
+          status: "draft_ready",
+          symbol: "MSFT",
+          legs: [],
+          requiredCapitalUSD: 1_000,
+          maxLossUSD: 1_000,
+          availableCashUSD: 2_000,
+          warnings: [],
+          missingFields: [],
+        },
+      ],
+    };
+
+    render(<CandidatePanel {...baseProps} candidates={[candidate]} />);
+
+    expect(screen.getByText("L4 建玉案レビュー可")).toBeInTheDocument();
+    expect(screen.getAllByText(/bullish_continuation/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/high/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("建玉案レビュー可").length).toBeGreaterThan(0);
+    expect(screen.getByText(/コール買い \/ 手動確認/)).toBeInTheDocument();
+    expect(screen.getByText("上位理由")).toBeInTheDocument();
+    expect(screen.getByText("減点理由")).toBeInTheDocument();
+    expect(screen.getByText("未確認事項")).toBeInTheDocument();
+  });
+
+  it("shows review state and requires explicit proceed when required checks are unfinished", () => {
+    const onCreateSimulation = vi.fn();
+    const candidate: CandidateSymbol = {
+      id: "public-MSFT-review",
+      source: "manual_import",
+      importedAt: "2026-07-05T09:00:00+09:00",
+      rank: 1,
+      symbol: "MSFT",
+      company: "Microsoft",
+      priceUSD: 500,
+      score: 90,
+      suggestedUse: "long call review",
+      strategyPrecisionReviews: [
+        {
+          strategy: "long_call",
+          level: "manual_review_required",
+          chartGate: { level: "pass", reasons: ["週足が上向き"], warnings: [] },
+          expiryReview: { level: "pass", targetDteRange: [150, 9999], actualDte: 180, reasons: ["DTE ok"], warnings: [] },
+          strikeReview: { level: "pass", targetStrikeRatioRange: [1, 1.05], actualStrikeRatio: 1.02, reasons: ["strike ok"], warnings: [] },
+          liquidityReview: { level: "pass", reasons: ["Askあり"], warnings: [] },
+          capitalReview: { level: "pass", reasons: ["最大損失確認"], warnings: [] },
+          manualReviewReasons: [],
+          avoidReasons: [],
+          nextChecks: [],
+          checklist: ["チャート根拠を確認した", "証券会社画面の価格を最終確認する"],
+        },
+      ],
+    };
+
+    render(<CandidatePanel {...baseProps} candidates={[candidate]} onCreateSimulation={onCreateSimulation} />);
+
+    expect(screen.getAllByText("要確認").length).toBeGreaterThan(0);
+    expect(screen.getByText((_, element) => element?.textContent === "確認0/2 必須未確認 2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle("コール買い候補として建玉案を作成"));
+
+    expect(screen.getByRole("dialog", { name: "建玉案レビュー前確認" })).toBeInTheDocument();
+    expect(onCreateSimulation).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "未確認を理解して建玉案レビューへ進む" }));
+
+    expect(onCreateSimulation).toHaveBeenCalledWith(candidate, "long_call");
   });
 
   it("calls onClose from the panel close button", () => {

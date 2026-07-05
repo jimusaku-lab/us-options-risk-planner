@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import type { ExitBrokerOrderType, ExitOrderPlanMode, OptionLeg, OptionType, OptionValueSnapshot, OptionValueSnapshotSource, TradeSimulation } from "@/types/domain";
+import type { AccountInputs } from "@/store/useOptionsStore";
 import { calculateCloseCostJPY, calculatePremiumJPY, calculatePremiumUSD } from "@/domain/calculations";
+import { calculateLongOptionExitProceedsPreview, type LongOptionExitProceedsPreview } from "@/domain/dashboardDisplay";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { createJournalForSimulation } from "@/domain/entryRationaleJournal";
 import { calculateProfitTakeBuybackPriceUSD, getExitDeadlineInfo, getExitOrderPlanForLeg } from "@/domain/exitOrderPlan";
 import { createOptionCloseExecutionDraft } from "@/domain/optionCloseExecutions";
-import { fetchSaxoOptionPremiumCandidate } from "@/features/saxo/saxoApiClient";
+import { fetchSaxoOptionPremiumCandidate, isSaxoLocalApiAvailable } from "@/features/saxo/saxoApiClient";
 import { findOrderCandidatesForLeg, type SaxoApiOrderSnapshot, type SaxoOptionPremiumCandidate } from "@/features/saxo/saxoAccountSync";
 import { EntryRationaleJournalPanel } from "@/components/journal/EntryRationaleJournalPanel";
 import { NumberInput } from "@/components/ui/NumberInput";
@@ -19,6 +21,7 @@ export function CloseDecisionCard({
   focusRequest,
   onExecutionDraft,
   defaultOpen = false,
+  accountInputs,
 }: {
   simulation: TradeSimulation;
   saxoOrderCandidates?: SaxoApiOrderSnapshot[];
@@ -26,6 +29,7 @@ export function CloseDecisionCard({
   focusRequest?: { anchorId: string; requestId: number } | null;
   onExecutionDraft?: () => void;
   defaultOpen?: boolean;
+  accountInputs?: AccountInputs;
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const shortLegs = simulation.optionLegs.filter((leg) => leg.side === "sell");
@@ -122,6 +126,7 @@ export function CloseDecisionCard({
                 onClosePriceChange={(closeCostUSD, source) => updateLongOptionClosePrice(leg, closeCostUSD, source)}
                 onClosePlanChange={(closePlanPatch) => updateLeg(leg.id, { closePlan: { enabled: true, ...(leg.closePlan ?? {}), ...closePlanPatch } })}
                 onExecutionDraft={() => addExecutionDraft(leg)}
+                accountInputs={accountInputs}
               />
             ))}
           </div>
@@ -541,6 +546,17 @@ function ApiPremiumCandidatePanel({
 }) {
   const noAccess = isSaxoPriceFeedNoAccess(candidate);
   const manualInputGuidance = getPremiumCandidateManualInputGuidance(candidate);
+  if (!isSaxoLocalApiAvailable) {
+    return (
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+        <div className="font-bold text-slate-950">価格確認</div>
+        <p className="mt-1">
+          公開版では自動価格取得を使いません。証券会社画面のBid/Ask/Lastを確認し、現在オプション価格へ手入力してください。
+          入力値はこのカード内の判定にだけ使われ、発注や決済保存は自動実行されません。
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -738,6 +754,7 @@ function LongOptionCloseCard({
   onClosePriceChange,
   onClosePlanChange,
   onExecutionDraft,
+  accountInputs,
 }: {
   leg: OptionLeg;
   simulation: TradeSimulation;
@@ -747,6 +764,7 @@ function LongOptionCloseCard({
   onClosePriceChange: (closePriceUSD: number, source: OptionValueSnapshotSource) => void;
   onClosePlanChange: (closePlanPatch: Partial<NonNullable<OptionLeg["closePlan"]>>) => void;
   onExecutionDraft: () => void;
+  accountInputs?: AccountInputs;
 }) {
   const [apiCandidate, setApiCandidate] = useState<SaxoOptionPremiumCandidate | null>(null);
   const [apiCandidateMessage, setApiCandidateMessage] = useState("");
@@ -756,8 +774,21 @@ function LongOptionCloseCard({
   const paidPremiumJPY = calculatePremiumJPY({ premiumUSD: leg.premiumUSD, quantity: leg.quantity, fxRateJPY });
   const currentOptionValueUSD = closePriceUSD !== undefined && closePriceUSD > 0 ? closePriceUSD * 100 * leg.quantity : null;
   const closeCommissionUSD = leg.closePlan?.commissionUSD ?? openCommissionUSD;
+  const effectiveFxRateJPY =
+    simulation.referenceFxRateJPY !== undefined && simulation.referenceFxRateJPY > 0
+      ? simulation.referenceFxRateJPY
+      : fxRateJPY > 0
+        ? fxRateJPY
+        : undefined;
+  const exitProceedsPreview = calculateLongOptionExitProceedsPreview({
+    closePriceUSD,
+    quantity: leg.quantity,
+    closeCommissionUSD,
+    fxRateJPY: effectiveFxRateJPY,
+  });
+  const accountCashLabel = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "N口座USD現金残高" : "P口座現金残高";
   const estimatedProfitUSD = currentOptionValueUSD === null ? null : currentOptionValueUSD - paidPremiumUSD - openCommissionUSD - closeCommissionUSD;
-  const estimatedProfitJPY = estimatedProfitUSD === null ? null : estimatedProfitUSD * fxRateJPY;
+  const estimatedProfitJPY = estimatedProfitUSD === null ? null : estimatedProfitUSD * (effectiveFxRateJPY ?? 0);
   const profitPct = estimatedProfitUSD === null || paidPremiumUSD <= 0 ? null : (estimatedProfitUSD / paidPremiumUSD) * 100;
   const elapsedDays = calculateElapsedDaysSinceEntry(simulation.entryDate);
   const entryCostUSD = paidPremiumUSD + openCommissionUSD;
@@ -907,6 +938,9 @@ function LongOptionCloseCard({
         profitTargetPriceUSD={profitTargetPriceUSD}
         stopLossPriceUSD={stopLossPriceUSD}
         dte={dte}
+        exitProceedsValue={formatLongOptionExitProceedsValue(simulation, exitProceedsPreview)}
+        accountCashLabel={accountCashLabel}
+        accountCashValue={formatLongOptionAccountCashPreview(simulation, accountInputs, exitProceedsPreview)}
       />
       <dl className="mt-3 grid gap-2 text-sm">
         <Row label="支払プレミアム" value={`${formatUSD(paidPremiumUSD)} / 参考 ${formatJPY(paidPremiumJPY)}`} />
@@ -926,7 +960,26 @@ function LongOptionCloseCard({
         />
         <Row
           label="現在評価額"
-          value={currentOptionValueUSD === null ? "未計算" : `${formatUSD(currentOptionValueUSD)} / 参考 ${formatJPY(currentOptionValueUSD * fxRateJPY)}`}
+          value={
+            currentOptionValueUSD === null
+              ? "未計算"
+              : `${formatUSD(currentOptionValueUSD)} / ${
+                  effectiveFxRateJPY ? `参考 ${formatJPY(currentOptionValueUSD * effectiveFxRateJPY)}` : "参考JPY未計算"
+                }`
+          }
+        />
+        <Row
+          label="反対売買時の参考受取額"
+          value={formatLongOptionExitProceedsValue(simulation, exitProceedsPreview)}
+          tone={exitProceedsPreview ? "green" : undefined}
+        />
+        <Row
+          label="受取額内訳"
+          value={formatLongOptionExitProceedsBreakdown(exitProceedsPreview)}
+        />
+        <Row
+          label={accountCashLabel}
+          value={formatLongOptionAccountCashPreview(simulation, accountInputs, exitProceedsPreview)}
         />
         <Row
           label="評価損益"
@@ -1071,6 +1124,9 @@ function LongOptionTimeValueDecayView({
   profitTargetPriceUSD,
   stopLossPriceUSD,
   dte,
+  exitProceedsValue,
+  accountCashLabel,
+  accountCashValue,
 }: {
   currentSnapshot: OptionValueSnapshot | null;
   timeline: OptionValueSnapshot[];
@@ -1080,6 +1136,9 @@ function LongOptionTimeValueDecayView({
   profitTargetPriceUSD: number;
   stopLossPriceUSD: number;
   dte: number;
+  exitProceedsValue: string;
+  accountCashLabel: string;
+  accountCashValue: string;
 }) {
   if (!currentSnapshot) {
     return (
@@ -1088,6 +1147,10 @@ function LongOptionTimeValueDecayView({
         <p className="mt-2 leading-6 text-slate-600">
           現在株価と現在オプション価格を入れると、本質的価値・時間的価値・時間的価値比率を表示します。
         </p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <MiniMetric label="反対売買時の参考受取額" value={exitProceedsValue} />
+          <MiniMetric label={accountCashLabel} value={accountCashValue} />
+        </div>
       </section>
     );
   }
@@ -1143,6 +1206,8 @@ function LongOptionTimeValueDecayView({
         />
         <MiniMetric label="利確/損切りライン" value={`${formatUSD(profitTargetPriceUSD)} / ${formatUSD(stopLossPriceUSD)}`} />
         <MiniMetric label="残存日数" value={`${dte}日`} tone={dte <= 7 ? "amber" : undefined} />
+        <MiniMetric label="反対売買時の参考受取額" value={exitProceedsValue} />
+        <MiniMetric label={accountCashLabel} value={accountCashValue} />
       </div>
 
       <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1218,6 +1283,46 @@ function calculateRemainingDaysUntilExpiry(expiryDate: string, now = new Date())
 
 function formatOptionalUSD(value?: number): string {
   return value !== undefined && Number.isFinite(value) ? formatUSD(value) : "未取得";
+}
+
+function formatLongOptionExitProceedsValue(
+  simulation: TradeSimulation,
+  preview: LongOptionExitProceedsPreview | undefined,
+): string {
+  if (!preview) return "現在価格未入力";
+  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
+    return preview.netJPY !== undefined
+      ? `手数料後 ${formatUSD(preview.netUSD)} / 参考 ${formatJPY(preview.netJPY)}`
+      : `手数料後 ${formatUSD(preview.netUSD)} / 参考JPY未計算`;
+  }
+  return preview.netJPY !== undefined
+    ? `手数料後 ${formatJPY(preview.netJPY)} / ${formatUSD(preview.netUSD)}`
+    : `手数料後 参考JPY未計算 / ${formatUSD(preview.netUSD)}`;
+}
+
+function formatLongOptionExitProceedsBreakdown(preview: LongOptionExitProceedsPreview | undefined): string {
+  if (!preview) return "現在オプション価格を入れると、手数料前後の参考受取額を表示します。";
+  const grossJPY = preview.grossJPY !== undefined ? formatJPY(preview.grossJPY) : "参考JPY未計算";
+  const netJPY = preview.netJPY !== undefined ? formatJPY(preview.netJPY) : "参考JPY未計算";
+  return `手数料前 ${formatUSD(preview.grossUSD)} / ${grossJPY}、手数料後 ${formatUSD(preview.netUSD)} / ${netJPY}`;
+}
+
+function formatLongOptionAccountCashPreview(
+  simulation: TradeSimulation,
+  accountInputs: AccountInputs | undefined,
+  preview: LongOptionExitProceedsPreview | undefined,
+): string {
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const account = accountInputs?.[isN ? "N" : "P"];
+  if (!account) return isN ? "N口座USD現金 未取得" : "P口座現金残高 未取得";
+  if (!preview) return isN ? `現在 ${formatUSD(account.cashBalance)}` : `現在 ${formatJPY(account.cashBalance)}`;
+  if (isN) {
+    return `現在 ${formatUSD(account.cashBalance)} / 決済後見込み ${formatUSD(account.cashBalance + preview.netUSD)}`;
+  }
+  if (preview.netJPY === undefined) {
+    return `現在 ${formatJPY(account.cashBalance)} / 決済後見込み 参考JPY未計算`;
+  }
+  return `現在 ${formatJPY(account.cashBalance)} / 決済後見込み ${formatJPY(account.cashBalance + preview.netJPY)}`;
 }
 
 function formatSignedUSD(value: number): string {

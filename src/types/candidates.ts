@@ -1,8 +1,19 @@
-import type { ScreeningCandidate, StrategyFitResult, SyntheticForwardEvaluation, TechnicalTimingPattern } from "@/types/screening";
+import type {
+  PositionDraft,
+  PublicScreeningCandidateInput,
+  ScreeningCandidate,
+  ScreeningCompletenessResult,
+  AdvancedStrategyReview,
+  StrategyPrecisionReview,
+  StrategyFitResult,
+  StrategySuitability,
+  SyntheticForwardEvaluation,
+  TechnicalTimingPattern,
+  StrategyCandidateKind,
+} from "@/types/screening";
 import type { EntryRationaleJournal } from "@/types/domain";
 
 export type CandidateSource =
-  | "moomoo_opend"
   | "moomoo_file_import"
   | "manual"
   | "manual_import"
@@ -36,11 +47,37 @@ export type CandidateSymbol = {
   alreadyHasPosition?: boolean;
   watchOnly?: boolean;
   screeningCandidate?: ScreeningCandidate;
+  publicScreeningInput?: PublicScreeningCandidateInput;
+  screeningCompleteness?: ScreeningCompletenessResult;
+  strategySuitability?: StrategySuitability[];
+  positionDrafts?: PositionDraft[];
+  advancedStrategyReviews?: AdvancedStrategyReview[];
+  strategyPrecisionReviews?: StrategyPrecisionReview[];
+  reviewChecklistStates?: CandidateReviewChecklistState[];
   strategyFitResults?: StrategyFitResult[];
   technicalTimingPatterns?: TechnicalTimingPattern[];
   syntheticForwardCandidates?: SyntheticForwardEvaluation[];
   entryRationaleJournal?: EntryRationaleJournal;
 };
+
+export type CandidateReviewChecklistItem = {
+  id: string;
+  label: string;
+  checked: boolean;
+  required: boolean;
+  source: "common" | "strategy" | "manual";
+};
+
+export type CandidateReviewChecklistState = {
+  candidateId: string;
+  symbol: string;
+  strategy: StrategyCandidateKind;
+  updatedAt: string;
+  items: CandidateReviewChecklistItem[];
+  note?: string;
+};
+
+export type CandidateReviewReadinessStatus = "ready_for_review" | "needs_review" | "blocked";
 
 export type CandidateImportFormat = "json" | "csv";
 

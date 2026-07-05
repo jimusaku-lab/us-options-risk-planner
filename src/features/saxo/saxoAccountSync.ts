@@ -26,7 +26,7 @@ export type SaxoApiStatus = {
   lastSyncedAt?: string;
   readOnly: true;
   orderEndpointsEnabled: false;
-  bindAddress: "127.0.0.1";
+  bindAddress?: string;
   oauthConfigured: boolean;
   clientIdConfigured?: boolean;
   redirectUri?: string;
@@ -65,7 +65,7 @@ export type SaxoTokenPersistenceStatus = {
 export type SaxoConfigStatus = {
   mode: "saxo_readonly";
   readOnly: true;
-  bindAddress: "127.0.0.1";
+  bindAddress?: string;
   clientIdConfigured: boolean;
   clientIdMasked?: string;
   environment: SaxoEnvironment;
@@ -331,40 +331,14 @@ export type SaxoAccountDiffRow = {
   status: "changed" | "same" | "missing";
 };
 
-export const SAXO_READONLY_ENDPOINTS = [
-  "GET /api/saxo/status",
-  "GET /api/saxo/config/status",
-  "POST /api/saxo/config/local",
-  "GET /api/saxo/auth/start",
-  "GET /api/saxo/auth/callback",
-  "POST /api/saxo/logout",
-  "POST /api/saxo/persistence/enable",
-  "POST /api/saxo/persistence/disable",
-  "GET /api/saxo/session/capabilities",
-  "GET /api/saxo/client",
-  "GET /api/saxo/accounts",
-  "GET /api/saxo/accounts/:accountKey/balance",
-  "GET /api/saxo/accounts/:accountKey/margin",
-  "GET /api/saxo/accounts/snapshot",
-  "GET /api/saxo/positions",
-  "GET /api/saxo/accounts/:accountKey/positions",
-  "GET /api/saxo/positions/snapshot",
-  "GET /api/saxo/orders",
-  "GET /api/saxo/accounts/:accountKey/orders",
-  "GET /api/saxo/orders/snapshot",
-  "GET /api/saxo/history/discovery",
-  "GET /api/saxo/closed-positions",
-  "GET /api/saxo/trades",
-  "GET /api/saxo/options/premium-candidate",
-] as const;
+export const SAXO_READONLY_ENDPOINTS = [] as const;
 
 export const SAXO_FORBIDDEN_ORDER_ROUTE_PATTERNS = [
   /\/trade\/v\d+\/orders?/i,
-  /\/api\/saxo\/positions?\/.*\/orders?/i,
 ] as const;
 
 export function isForbiddenSaxoOrderRoute(path: string, method = "GET"): boolean {
-  if (/\/api\/saxo\/orders?/i.test(path) && method !== "GET") return true;
+  if (/\/orders?/i.test(path) && method !== "GET") return true;
   return SAXO_FORBIDDEN_ORDER_ROUTE_PATTERNS.some((pattern) => pattern.test(path));
 }
 

@@ -13,9 +13,15 @@ export const screeningStrategyLabels: Record<StrategyCandidateKind, string> = {
   cash_secured_put_avoid_assignment: "P売り、買いたくない",
   covered_call: "カバードコール",
   long_call: "コール買い",
+  wheel: "ホイール",
   short_strangle: "ショートストラングル",
+  short_strangle_covered: "カバー付きショートストラングル",
+  short_strangle_advanced_review: "ショートストラングル上級確認",
   synthetic_forward: "シンセティック",
   combo: "コンボ",
+  itm_short_put_buy_to_own: "ITM P売り取得前提",
+  long_straddle_event: "イベント・ロングストラドル",
+  protective_collar: "プロテクティブカラー",
 };
 
 function inRange(value: number | undefined, min: number, max: number): boolean {
@@ -225,9 +231,13 @@ function evaluateDeferredComplexStrategy(candidate: ScreeningCandidate, input: S
   const warnings =
     input.strategy === "short_strangle"
       ? ["ショートストラングルは200株相当の資金枠、同一口座、同一満期の確認が必要です。"]
+      : input.strategy === "short_strangle_covered" || input.strategy === "short_strangle_advanced_review"
+        ? ["ショートストラングル系は裸コール化、200株相当資金、同一満期を上級レビューで確認します。"]
       : input.strategy === "synthetic_forward"
         ? ["シンセティックは同一満期のコール買いとプット売りを組み合わせるため、下落時の複合損失確認が必要です。"]
-        : ["コンボはATM付近のコール買いと買ってよいプット売りの組み合わせとして、後続工程で詳細判定します。"];
+        : input.strategy === "combo"
+          ? ["コンボはATM付近のコール買いと買ってよいプット売りの組み合わせとして、後続工程で詳細判定します。"]
+          : ["上級戦略は自動建玉化せず、上級戦略レビューで手動確認します。"];
   return makeResult({
     strategy: input.strategy,
     fitLevel: "watch",
@@ -250,8 +260,14 @@ export function evaluateStrategyFit(candidate: ScreeningCandidate, input: Strate
     case "long_call":
       return evaluateLongCall(candidate, input);
     case "short_strangle":
+    case "short_strangle_covered":
+    case "short_strangle_advanced_review":
     case "synthetic_forward":
     case "combo":
+    case "wheel":
+    case "itm_short_put_buy_to_own":
+    case "long_straddle_event":
+    case "protective_collar":
       return evaluateDeferredComplexStrategy(candidate, input);
     default:
       return makeResult({
