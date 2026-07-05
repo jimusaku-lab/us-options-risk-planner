@@ -1,0 +1,604 @@
+{
+  "schemaVersion": "us_options_screening_package.v1",
+  "generatedAt": "2026-07-05T09:00:00+09:00",
+  "source": "manual",
+  "dataPolicy": {
+    "userProvided": true,
+    "containsCredentials": false,
+    "redistributionChecked": true,
+    "notes": [
+      "Demo-only screening package with synthetic values.",
+      "Not market data, not investment advice, and not a trade recommendation."
+    ]
+  },
+  "candidates": [
+    {
+      "symbol": "PSAMPLE1",
+      "name": "Public Sample Level 1",
+      "market": "US",
+      "sector": "Demo",
+      "underlyingPrice": 42.5,
+      "priceAsOf": "2026-07-05T09:00:00+09:00",
+      "delayStatus": "unknown",
+      "notes": "Level 1 sample: symbol and underlying price only."
+    },
+    {
+      "symbol": "PSAMPLE2",
+      "name": "Public Sample Level 2",
+      "market": "US",
+      "sector": "Demo",
+      "underlyingPrice": 88,
+      "priceAsOf": "2026-07-05T09:00:00+09:00",
+      "delayStatus": "end_of_day",
+      "chartAnalysis": {
+        "asOf": "2026-07-05T09:00:00+09:00",
+        "regime": "range_neutral",
+        "confidence": "low",
+        "primaryTimeframe": "daily",
+        "timeframes": [
+          {
+            "timeframe": "daily",
+            "close": 88,
+            "sma25": 87,
+            "sma50": 88.5,
+            "sma200": 92,
+            "rsi": 49,
+            "notes": ["Synthetic range-bound chart for public sample."]
+          }
+        ],
+        "reasons": ["Demo chart is range-bound and confidence is low."],
+        "warnings": ["Weak chart evidence; keep as watch or insufficient review."],
+        "missingFields": []
+      },
+      "candidateStrategies": [
+        {
+          "strategy": "long_call",
+          "dte": 166,
+          "strikePrice": 90,
+          "premium": 4.1
+        }
+      ],
+      "optionCandidates": [
+        {
+          "id": "psample2-last-only-call",
+          "optionType": "call",
+          "expiry": "2026-12-18",
+          "dte": 166,
+          "strike": 90,
+          "last": 4.1,
+          "volume": 80,
+          "openInterest": 900,
+          "iv": 0.31,
+          "delta": 0.48,
+          "source": "demo_last_only"
+        }
+      ],
+      "warnings": ["Last-only option quote intentionally lacks Bid/Ask."]
+    },
+    {
+      "symbol": "PSAMPLE3",
+      "name": "Public Sample Level 3",
+      "market": "US",
+      "sector": "Demo",
+      "underlyingPrice": 120,
+      "priceAsOf": "2026-07-05T09:00:00+09:00",
+      "delayStatus": "end_of_day",
+      "chartAnalysis": {
+        "asOf": "2026-07-05T09:00:00+09:00",
+        "regime": "bullish_continuation",
+        "confidence": "medium",
+        "primaryTimeframe": "daily",
+        "timeframes": [
+          {
+            "timeframe": "daily",
+            "close": 120,
+            "sma25": 116,
+            "sma50": 111,
+            "sma200": 96,
+            "rsi": 61,
+            "priceLocation": {
+              "aboveMa25": true,
+              "aboveMa50": true,
+              "aboveMa200": true,
+              "distanceFromMa25Pct": 3.45
+            },
+            "notes": ["Synthetic bullish continuation chart."]
+          }
+        ],
+        "reasons": ["Synthetic price is above key moving averages."],
+        "warnings": [],
+        "missingFields": []
+      },
+      "candidateStrategies": [
+        {
+          "strategy": "long_call",
+          "dte": 166,
+          "strikePrice": 124,
+          "premium": 5.6
+        }
+      ],
+      "optionCandidates": [
+        {
+          "id": "psample3-long-call",
+          "optionType": "call",
+          "expiry": "2026-12-18",
+          "dte": 166,
+          "strike": 124,
+          "bid": 5.2,
+          "ask": 5.6,
+          "mid": 5.4,
+          "last": 5.35,
+          "volume": 260,
+          "openInterest": 1800,
+          "iv": 0.34,
+          "delta": 0.52,
+          "gamma": 0.018,
+          "theta": -0.025,
+          "vega": 0.22,
+          "source": "demo_bid_ask"
+        }
+      ],
+      "notes": "Level 3 sample: option liquidity exists, but no capital data is supplied."
+    },
+    {
+      "symbol": "PSAMPLE4",
+      "name": "Public Sample Level 4 Ready",
+      "market": "US",
+      "sector": "Demo",
+      "underlyingPrice": 100,
+      "priceAsOf": "2026-07-05T09:00:00+09:00",
+      "delayStatus": "end_of_day",
+      "chartAnalysis": {
+        "asOf": "2026-07-05T09:00:00+09:00",
+        "regime": "bullish_continuation",
+        "confidence": "high",
+        "primaryTimeframe": "daily",
+        "timeframes": [
+          {
+            "timeframe": "daily",
+            "close": 100,
+            "sma25": 96,
+            "sma50": 91,
+            "sma200": 78,
+            "rsi": 58,
+            "movingAverageSlopes": {
+              "ma25": "up",
+              "ma50": "up",
+              "ma200": "up"
+            },
+            "priceLocation": {
+              "aboveMa25": true,
+              "aboveMa50": true,
+              "aboveMa200": true,
+              "distanceFromMa25Pct": 4.17,
+              "distanceFromMa50Pct": 9.89
+            },
+            "supportLevels": [96, 91],
+            "resistanceLevels": [105, 112],
+            "fibonacciLevels": {
+              "high": 112,
+              "low": 78,
+              "retracement382": 99.01,
+              "retracement500": 95,
+              "retracement618": 90.99
+            },
+            "notes": ["Synthetic high-confidence continuation chart."]
+          }
+        ],
+        "reasons": ["Demo trend is above rising moving averages."],
+        "warnings": [],
+        "missingFields": []
+      },
+      "candidateStrategies": [
+        {
+          "strategy": "long_call",
+          "dte": 166,
+          "strikePrice": 102,
+          "premium": 6.2
+        },
+        {
+          "strategy": "cash_secured_put_buy_to_own",
+          "dte": 45,
+          "strikePrice": 94,
+          "premium": 2.4,
+          "longTermHoldEligible": true,
+          "coveredCallTransitionPossible": true,
+          "assignmentCapitalRequired": 9400,
+          "availableCash": 12000
+        },
+        {
+          "strategy": "synthetic_forward",
+          "sameAccount": true,
+          "sameExpiry": true
+        }
+      ],
+      "strategySuitability": [
+        {
+          "strategy": "long_call",
+          "level": "fit",
+          "chartRegime": "bullish_continuation",
+          "confidence": "high",
+          "reasons": [
+            "Synthetic trend, DTE, and strike data are complete enough for a long-call review."
+          ],
+          "warnings": [],
+          "missingFields": [],
+          "manualReviewReasons": [],
+          "nextChecks": [
+            "Confirm the option quote and risk amount in the broker screen before any action."
+          ]
+        },
+        {
+          "strategy": "cash_secured_put_buy_to_own",
+          "level": "manual_review_required",
+          "chartRegime": "bullish_continuation",
+          "confidence": "high",
+          "reasons": [
+            "Synthetic put candidate has Bid/Ask and enough assignment cash in this sample."
+          ],
+          "warnings": [
+            "Assignment risk and long-term holding intent still require manual review."
+          ],
+          "missingFields": [],
+          "manualReviewReasons": [
+            "Confirm assignment capital, downside plan, and final quote manually."
+          ],
+          "nextChecks": [
+            "Check the final option chain and assignment plan in the broker screen."
+          ]
+        }
+      ],
+      "optionCandidates": [
+        {
+          "id": "psample4-long-call",
+          "optionType": "call",
+          "expiry": "2026-12-18",
+          "dte": 166,
+          "strike": 102,
+          "bid": 5.9,
+          "ask": 6.2,
+          "mid": 6.05,
+          "last": 6.1,
+          "volume": 420,
+          "openInterest": 2400,
+          "iv": 0.29,
+          "delta": 0.55,
+          "gamma": 0.021,
+          "theta": -0.018,
+          "vega": 0.24,
+          "source": "demo_bid_ask"
+        },
+        {
+          "id": "psample4-buy-to-own-put",
+          "optionType": "put",
+          "expiry": "2026-08-21",
+          "dte": 47,
+          "strike": 94,
+          "bid": 2.2,
+          "ask": 2.4,
+          "mid": 2.3,
+          "last": 2.25,
+          "volume": 310,
+          "openInterest": 1900,
+          "iv": 0.27,
+          "delta": -0.32,
+          "gamma": 0.017,
+          "theta": -0.014,
+          "vega": 0.18,
+          "source": "demo_bid_ask"
+        }
+      ],
+      "capital": {
+        "availableCashUSD": 12000,
+        "buyingPowerUSD": 12000,
+        "maxLossToleranceUSD": 1500,
+        "assignmentCapitalAvailableUSD": 12000
+      },
+      "positionDrafts": [
+        {
+          "id": "psample4-long-call-draft",
+          "strategy": "long_call",
+          "status": "draft_ready",
+          "symbol": "PSAMPLE4",
+          "legs": [
+            {
+              "id": "psample4-long-call",
+              "optionType": "call",
+              "side": "buy",
+              "expiry": "2026-12-18",
+              "dte": 166,
+              "strikePrice": 102,
+              "conservativePrice": 6.2,
+              "conservativePriceField": "ask",
+              "mid": 6.05,
+              "last": 6.1,
+              "quantity": 1,
+              "liquidityWarnings": [],
+              "missingFields": []
+            }
+          ],
+          "requiredCapitalUSD": 620,
+          "maxLossUSD": 620,
+          "availableCashUSD": 12000,
+          "warnings": [
+            "Demo draft only; final quote and risk amount must be checked manually."
+          ],
+          "missingFields": []
+        },
+        {
+          "id": "psample4-buy-to-own-put-review",
+          "strategy": "cash_secured_put_buy_to_own",
+          "status": "manual_review_required",
+          "symbol": "PSAMPLE4",
+          "legs": [
+            {
+              "id": "psample4-buy-to-own-put",
+              "optionType": "put",
+              "side": "sell",
+              "expiry": "2026-08-21",
+              "dte": 47,
+              "strikePrice": 94,
+              "conservativePrice": 2.2,
+              "conservativePriceField": "bid",
+              "mid": 2.3,
+              "last": 2.25,
+              "quantity": 1,
+              "liquidityWarnings": [],
+              "missingFields": []
+            }
+          ],
+          "requiredCapitalUSD": 9400,
+          "maxLossUSD": 9400,
+          "availableCashUSD": 12000,
+          "warnings": [
+            "Assignment and long-term holding plan require manual review."
+          ],
+          "missingFields": []
+        }
+      ],
+      "advancedStrategyReviews": [
+        {
+          "id": "psample4-synthetic-review",
+          "strategy": "synthetic_forward",
+          "level": "manual_review_required",
+          "symbol": "PSAMPLE4",
+          "chartRegime": "bullish_continuation",
+          "confidence": "high",
+          "legs": [],
+          "scenarios": ["Synthetic forward is shown as an advanced review only."],
+          "reasons": ["Same-expiry long call and short put can be reviewed together."],
+          "warnings": ["Advanced strategies are not converted to positions automatically."],
+          "missingFields": [],
+          "manualReviewReasons": ["Confirm combined downside, assignment capital, and liquidity manually."]
+        }
+      ],
+      "notes": "Level 4 sample: long call draft can become review-ready; advanced strategy remains manual review."
+    },
+    {
+      "symbol": "PSAMPLE5",
+      "name": "Public Sample Capital Shortage",
+      "market": "US",
+      "sector": "Demo",
+      "underlyingPrice": 60,
+      "priceAsOf": "2026-07-05T09:00:00+09:00",
+      "delayStatus": "end_of_day",
+      "chartAnalysis": {
+        "asOf": "2026-07-05T09:00:00+09:00",
+        "regime": "bullish_pullback",
+        "confidence": "medium",
+        "primaryTimeframe": "daily",
+        "timeframes": [
+          {
+            "timeframe": "daily",
+            "close": 60,
+            "sma25": 59,
+            "sma50": 56,
+            "sma200": 49,
+            "rsi": 52,
+            "notes": ["Synthetic pullback chart."]
+          }
+        ],
+        "reasons": ["Demo chart is a pullback within an uptrend."],
+        "warnings": [],
+        "missingFields": []
+      },
+      "candidateStrategies": [
+        {
+          "strategy": "cash_secured_put_buy_to_own",
+          "dte": 45,
+          "strikePrice": 55,
+          "premium": 1.8,
+          "longTermHoldEligible": true,
+          "coveredCallTransitionPossible": true,
+          "assignmentCapitalRequired": 5500,
+          "availableCash": 1000
+        }
+      ],
+      "optionCandidates": [
+        {
+          "id": "psample5-short-put",
+          "optionType": "put",
+          "expiry": "2026-08-21",
+          "dte": 47,
+          "strike": 55,
+          "bid": 1.7,
+          "ask": 1.9,
+          "mid": 1.8,
+          "last": 1.82,
+          "volume": 180,
+          "openInterest": 1200,
+          "iv": 0.33,
+          "delta": -0.29,
+          "source": "demo_bid_ask"
+        }
+      ],
+      "capital": {
+        "availableCashUSD": 1000,
+        "buyingPowerUSD": 1000,
+        "maxLossToleranceUSD": 800,
+        "assignmentCapitalAvailableUSD": 1000
+      },
+      "warnings": ["Capital shortage demo; draft should not become ready."]
+    },
+    {
+      "symbol": "PSAMPLE6",
+      "name": "Public Sample Avoid Assignment Put Too Near",
+      "market": "US",
+      "sector": "Demo",
+      "underlyingPrice": 100,
+      "priceAsOf": "2026-07-05T09:00:00+09:00",
+      "delayStatus": "end_of_day",
+      "chartAnalysis": {
+        "asOf": "2026-07-05T09:00:00+09:00",
+        "regime": "range_neutral",
+        "confidence": "medium",
+        "primaryTimeframe": "daily",
+        "timeframes": [
+          {
+            "timeframe": "daily",
+            "close": 100,
+            "sma25": 99,
+            "sma50": 100,
+            "sma200": 96,
+            "rsi": 50,
+            "notes": ["Synthetic range chart for avoid-assignment put review."]
+          }
+        ],
+        "reasons": ["Range condition is present, but strike distance must be checked."],
+        "warnings": [],
+        "missingFields": []
+      },
+      "candidateStrategies": [
+        {
+          "strategy": "cash_secured_put_avoid_assignment",
+          "dte": 45,
+          "strikePrice": 90,
+          "premium": 2.6,
+          "profitTakeRuleSet": true,
+          "stopLossRuleSet": true,
+          "latestCloseDateSet": true,
+          "assignmentCapitalRequired": 9000,
+          "availableCash": 12000
+        }
+      ],
+      "strategySuitability": [
+        {
+          "strategy": "cash_secured_put_avoid_assignment",
+          "level": "fit",
+          "chartRegime": "range_neutral",
+          "confidence": "medium",
+          "reasons": ["Range chart is compatible with far put review."],
+          "warnings": [],
+          "missingFields": [],
+          "manualReviewReasons": [],
+          "nextChecks": ["Confirm the put strike is far enough away."]
+        }
+      ],
+      "optionCandidates": [
+        {
+          "id": "psample6-near-short-put",
+          "optionType": "put",
+          "expiry": "2026-08-21",
+          "dte": 47,
+          "strike": 90,
+          "bid": 2.4,
+          "ask": 2.8,
+          "mid": 2.6,
+          "last": 2.55,
+          "volume": 160,
+          "openInterest": 1100,
+          "iv": 0.3,
+          "delta": -0.38,
+          "source": "demo_bid_ask"
+        }
+      ],
+      "capital": {
+        "availableCashUSD": 12000,
+        "buyingPowerUSD": 12000,
+        "assignmentCapitalAvailableUSD": 12000
+      },
+      "notes": "Avoid-assignment put sample: strike is intentionally too close to the stock price."
+    },
+    {
+      "symbol": "PSAMPLE7",
+      "name": "Public Sample Covered Call Below Cost",
+      "market": "US",
+      "sector": "Demo",
+      "underlyingPrice": 100,
+      "priceAsOf": "2026-07-05T09:00:00+09:00",
+      "delayStatus": "end_of_day",
+      "chartAnalysis": {
+        "asOf": "2026-07-05T09:00:00+09:00",
+        "regime": "range_neutral",
+        "confidence": "medium",
+        "primaryTimeframe": "daily",
+        "timeframes": [
+          {
+            "timeframe": "daily",
+            "close": 100,
+            "sma25": 100,
+            "sma50": 99,
+            "sma200": 95,
+            "rsi": 52,
+            "notes": ["Synthetic range chart for covered call review."]
+          }
+        ],
+        "reasons": ["Range chart can be compatible with covered call review."],
+        "warnings": [],
+        "missingFields": []
+      },
+      "candidateStrategies": [
+        {
+          "strategy": "covered_call",
+          "dte": 45,
+          "strikePrice": 104,
+          "premium": 2.3,
+          "stockShares": 100,
+          "stockCostBasis": 110
+        }
+      ],
+      "strategySuitability": [
+        {
+          "strategy": "covered_call",
+          "level": "fit",
+          "chartRegime": "range_neutral",
+          "confidence": "medium",
+          "reasons": ["Range chart is compatible with covered call review."],
+          "warnings": [],
+          "missingFields": [],
+          "manualReviewReasons": [],
+          "nextChecks": ["Confirm strike is above cost basis and acceptable sale price."]
+        }
+      ],
+      "optionCandidates": [
+        {
+          "id": "psample7-covered-call-below-cost",
+          "optionType": "call",
+          "expiry": "2026-08-21",
+          "dte": 47,
+          "strike": 104,
+          "bid": 2.1,
+          "ask": 2.5,
+          "mid": 2.3,
+          "last": 2.35,
+          "volume": 140,
+          "openInterest": 1000,
+          "iv": 0.28,
+          "delta": 0.34,
+          "source": "demo_bid_ask"
+        }
+      ],
+      "capital": {
+        "availableCashUSD": 5000,
+        "buyingPowerUSD": 5000,
+        "stockShares": 100,
+        "stockCostBasisUSD": 110
+      },
+      "existingPosition": {
+        "stockShares": 100,
+        "stockCostBasisUSD": 110
+      },
+      "notes": "Covered call sample: strike is intentionally below cost basis and should be avoided."
+    }
+  ]
+}
