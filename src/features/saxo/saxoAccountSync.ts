@@ -1317,8 +1317,8 @@ export function createSaxoSetupGuidance(status: SaxoApiStatus | null, apiErrorMe
     return {
       code: "local_api_down",
       tone: "danger",
-      title: "SaxoローカルAPIが起動していません",
-      detail: apiErrorMessage ?? "別ターミナルでローカルAPIを起動してから、状態更新を押してください。",
+      title: "Saxo自動接続は利用できません",
+      detail: apiErrorMessage ?? "公開版では証券会社画面で確認した価格・履歴・残高を手入力してください。",
       command: "SAXO_CLIENT_ID=... SAXO_ENVIRONMENT=sim npm run dev:all",
     };
   }

@@ -11,7 +11,7 @@ import type {
 
 export const isSaxoLocalApiAvailable = false;
 const PUBLIC_SAXO_DISABLED_MESSAGE =
-  "公開版ではSaxoローカルAPI接続を無効化しています。証券会社画面で確認した価格・履歴・残高を手入力またはCSV/JSON取込で反映してください。";
+  "公開版ではSaxo自動接続を無効化しています。証券会社画面で確認した価格・履歴・残高を手入力またはCSV/JSON取込で反映してください。";
 
 export type SaxoAccountsResponse = {
   environment: "sim" | "live";

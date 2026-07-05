@@ -31,8 +31,8 @@ describe("Saxo API client", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(fetchSaxoStatus()).rejects.toThrow("公開版ではSaxoローカルAPI接続を無効化しています");
-    expect(() => startSaxoAuth()).toThrow("公開版ではSaxoローカルAPI接続を無効化しています");
+    await expect(fetchSaxoStatus()).rejects.toThrow("公開版ではSaxo自動接続を無効化しています");
+    expect(() => startSaxoAuth()).toThrow("公開版ではSaxo自動接続を無効化しています");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
