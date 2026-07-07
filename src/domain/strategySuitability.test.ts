@@ -70,11 +70,143 @@ describe("strategy suitability integration", () => {
     const results = evaluateCandidateStrategySuitabilities({
       candidate: baseCandidate(),
       chartAnalysis: chart("range_neutral", "medium"),
+      capital: { saxoRequiredMarginUSD: 2_000, saxoMarginAvailableUSD: 3_000, cashBalanceUSD: 5_000 },
     });
 
     expect(["fit", "watch"]).toContain(levelFor(results, "covered_call"));
     expect(["fit", "watch"]).toContain(levelFor(results, "cash_secured_put_avoid_assignment"));
     expect(["watch", "manual_review_required", "insufficient_data", "avoid"]).toContain(levelFor(results, "long_call"));
+  });
+
+  it("does not mark buy-to-own put as fit when assignment purchase cash is missing", () => {
+    const candidate = baseCandidate({
+      candidateStrategies: [
+        {
+          strategy: "cash_secured_put_buy_to_own",
+          dte: 45,
+          strikePrice: 95,
+          longTermHoldEligible: true,
+          coveredCallTransitionPossible: true,
+        },
+      ],
+    });
+    const results = evaluateCandidateStrategySuitabilities({
+      candidate,
+      chartAnalysis: chart("bullish_pullback", "medium"),
+    });
+
+    expect(results[0].level).toBe("manual_review_required");
+    expect(results[0].missingFields).toContain("capital.assignmentCapitalAvailableUSD");
+    expect(results[0].warnings.join(" ")).toContain("現物株購入代金確認待ち");
+  });
+
+  it("blocks buy-to-own put when assignment purchase cash is insufficient", () => {
+    const candidate = baseCandidate({
+      candidateStrategies: [
+        {
+          strategy: "cash_secured_put_buy_to_own",
+          dte: 45,
+          strikePrice: 95,
+          longTermHoldEligible: true,
+          coveredCallTransitionPossible: true,
+          assignmentCapitalRequired: 9_500,
+        },
+      ],
+    });
+    const results = evaluateCandidateStrategySuitabilities({
+      candidate,
+      chartAnalysis: chart("bullish_pullback", "medium"),
+      capital: { assignmentCapitalAvailableUSD: 8_000 },
+    });
+
+    expect(results[0].level).toBe("avoid");
+    expect(results[0].warnings.join(" ")).toContain("必要資金が不足");
+  });
+
+  it("does not mark covered call as fit without same-account stock shares", () => {
+    const candidate = baseCandidate({
+      candidateStrategies: [
+        {
+          strategy: "covered_call",
+          dte: 45,
+          strikePrice: 104,
+          stockCostBasis: 90,
+        },
+      ],
+    });
+    const results = evaluateCandidateStrategySuitabilities({
+      candidate,
+      chartAnalysis: chart("range_neutral", "medium"),
+    });
+
+    expect(results[0].level).toBe("insufficient_data");
+    expect(results[0].missingFields).toContain("stockShares");
+  });
+
+  it("uses capital stock shares as the covered call same-account gate", () => {
+    const candidate = baseCandidate({
+      candidateStrategies: [
+        {
+          strategy: "covered_call",
+          dte: 45,
+          strikePrice: 104,
+          stockCostBasis: 90,
+        },
+      ],
+    });
+    const results = evaluateCandidateStrategySuitabilities({
+      candidate,
+      chartAnalysis: chart("range_neutral", "medium"),
+      capital: { stockShares: 100, stockCostBasisUSD: 90 },
+    });
+
+    expect(results[0].level).toBe("fit");
+  });
+
+  it("keeps avoid-assignment put at margin confirmation wait when Saxo margin data is missing", () => {
+    const candidate = baseCandidate({
+      candidateStrategies: [
+        {
+          strategy: "cash_secured_put_avoid_assignment",
+          dte: 45,
+          strikePrice: 70,
+          profitTakeRuleSet: true,
+          stopLossRuleSet: true,
+          latestCloseDateSet: true,
+        },
+      ],
+    });
+    const results = evaluateCandidateStrategySuitabilities({
+      candidate,
+      chartAnalysis: chart("range_neutral", "medium"),
+    });
+
+    expect(results[0].level).toBe("manual_review_required");
+    expect(results[0].warnings.join(" ")).toContain("証拠金確認待ち");
+    expect(results[0].missingFields).toEqual(expect.arrayContaining(["capital.saxoRequiredMarginUSD", "capital.saxoMarginAvailableUSD", "capital.cashBalanceUSD"]));
+  });
+
+  it("blocks avoid-assignment put when Saxo margin cash coverage is below 2x", () => {
+    const candidate = baseCandidate({
+      candidateStrategies: [
+        {
+          strategy: "cash_secured_put_avoid_assignment",
+          dte: 45,
+          strikePrice: 70,
+          profitTakeRuleSet: true,
+          stopLossRuleSet: true,
+          latestCloseDateSet: true,
+        },
+      ],
+    });
+    const results = evaluateCandidateStrategySuitabilities({
+      candidate,
+      chartAnalysis: chart("range_neutral", "medium"),
+      capital: { saxoRequiredMarginUSD: 2_000, saxoMarginAvailableUSD: 3_000, cashBalanceUSD: 3_500 },
+    });
+
+    expect(results[0].level).toBe("avoid");
+    expect(results[0].warnings.join(" ")).toContain("2倍未満");
   });
 
   it("blocks downtrend for long call and avoid-assignment put", () => {
@@ -137,6 +269,7 @@ describe("strategy suitability integration", () => {
     const results = evaluateCandidateStrategySuitabilities({
       candidate,
       chartAnalysis: chart("range_neutral", "medium"),
+      capital: { saxoRequiredMarginUSD: 2_000, saxoMarginAvailableUSD: 3_000, cashBalanceUSD: 5_000 },
     });
 
     expect(results[0].level).toBe("watch");

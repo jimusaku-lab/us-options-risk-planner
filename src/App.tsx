@@ -150,6 +150,7 @@ export default function App() {
     markCandidateWatchOnly,
     updateCandidateJournal,
     updateCandidateChecklist,
+    updateCandidatePositionDraftReview,
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
@@ -1429,6 +1430,7 @@ export default function App() {
                     onCreateSimulation={createCandidateSimulation}
                     onJournalChange={updateCandidateJournal}
                     onChecklistChange={updateCandidateChecklist}
+                    onDraftReviewChecklistChange={updateCandidatePositionDraftReview}
                   />
                 </div>
               ) : null}
@@ -1707,6 +1709,7 @@ export default function App() {
                   onCreateSimulation={createCandidateSimulation}
                   onJournalChange={updateCandidateJournal}
                   onChecklistChange={updateCandidateChecklist}
+                  onDraftReviewChecklistChange={updateCandidatePositionDraftReview}
                 />
               </div>
             ) : null}

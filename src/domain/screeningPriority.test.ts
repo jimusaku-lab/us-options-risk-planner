@@ -1,150 +1,139 @@
 import { describe, expect, it } from "vitest";
-import { evaluateCandidatePriority } from "@/domain/screeningPriority";
+import { buildStrategyPriorityReviews, evaluateCandidatePriority } from "@/domain/screeningPriority";
 import type { CandidateSymbol } from "@/types/candidates";
 
-describe("screening priority", () => {
-  it("keeps strong chart candidates above weak chart candidates even when option data exists", () => {
-    const strong = makeCandidate("STRONG", {
-      chartRegime: "upside_reversal",
-      confidence: "high",
-      bidAsk: true,
-      draftReady: true,
-    });
-    const weak = makeCandidate("WEAK", {
-      chartRegime: "range_neutral",
-      confidence: "low",
-      bidAsk: true,
-      draftReady: true,
-    });
+describe("screening priority review", () => {
+  it("keeps chart insufficient candidates at insufficient_data", () => {
+    const candidate = makeCandidate("NOCHART", { chart: false });
 
-    const strongReview = evaluateCandidatePriority(strong);
-    const weakReview = evaluateCandidatePriority(weak);
+    const review = evaluateCandidatePriority(candidate, { targetStrategy: "long_call" });
 
-    expect(strongReview.priorityScore).toBeGreaterThan(weakReview.priorityScore);
-    expect(strongReview.priorityBand).toBe("high");
-    expect(weakReview.penaltyReasons.join(" ")).toContain("チャート根拠が弱い");
+    expect(review.band).toBe("insufficient_data");
+    expect(review.chartScore).toBe(0);
+    expect(review.nextDataNeeded.join(" ")).toContain("チャート分析");
   });
 
-  it("blocks capital shortage candidates from the top band", () => {
-    const shortage = makeCandidate("SHORT", {
-      chartRegime: "bullish_continuation",
-      confidence: "high",
-      bidAsk: true,
-      capitalShortage: true,
-    });
+  it("shows option bid/ask as next data when options are missing", () => {
+    const candidate = makeCandidate("L2", { level: "level_2_chart_ready", optionBidAsk: false });
 
-    const review = evaluateCandidatePriority(shortage);
+    const review = evaluateCandidatePriority(candidate, { targetStrategy: "cash_secured_put_buy_to_own" });
 
-    expect(review.priorityBand).toBe("blocked");
-    expect(review.priorityScore).toBeLessThanOrEqual(35);
-    expect(review.penaltyReasons.join(" ")).toContain("資金不足");
+    expect(review.band).toBe("secondary_watch");
+    expect(review.nextDataNeeded.join(" ")).toContain("option bid/ask");
+    expect(review.nextDataNeeded.join(" ")).toContain("capital");
   });
 
-  it("penalizes last-only option quotes", () => {
-    const lastOnly = makeCandidate("LAST", {
-      chartRegime: "bullish_continuation",
-      confidence: "high",
-      lastOnly: true,
+  it("maps strategy avoid to avoid band", () => {
+    const candidate = makeCandidate("AVOID", { strategyLevel: "avoid" });
+
+    const review = evaluateCandidatePriority(candidate, { targetStrategy: "long_call" });
+
+    expect(review.band).toBe("avoid");
+    expect(review.blockers.join(" ")).toContain("候補外");
+  });
+
+  it("adds stock quality score for large liquid stock screen candidates", () => {
+    const candidate = makeCandidate("BIG", {
+      rawSourceRow: { screeningPreset: "large_liquid_core" },
+      marketCapUSD: 500_000_000_000,
+      volume: 10_000_000,
+      relativeVolume: 1.3,
     });
 
-    const review = evaluateCandidatePriority(lastOnly);
+    const review = evaluateCandidatePriority(candidate, { targetStrategy: "covered_call" });
 
-    expect(review.priorityBand).toBe("blocked");
-    expect(review.penaltyReasons.join(" ")).toContain("Lastのみ");
-    expect(review.missingChecks.join(" ")).toContain("オプションBid/Ask");
+    expect(review.stockQualityScore).toBeGreaterThanOrEqual(7);
+    expect(review.reasons.join(" ")).toContain("大型株");
+  });
+
+  it("creates strategy-specific reviews for operation switching", () => {
+    const reviews = buildStrategyPriorityReviews(makeCandidate("OPS", {}));
+
+    expect(reviews.map((review) => review.targetStrategy)).toContain("long_call");
+    expect(reviews.map((review) => review.targetStrategy)).toContain("covered_call");
+    expect(reviews.every((review) => review.candidateId === "OPS")).toBe(true);
   });
 });
 
 function makeCandidate(
   symbol: string,
   options: {
-    chartRegime: "bullish_continuation" | "upside_reversal" | "range_neutral";
-    confidence: "high" | "medium" | "low";
-    bidAsk?: boolean;
-    lastOnly?: boolean;
-    draftReady?: boolean;
-    capitalShortage?: boolean;
+    chart?: boolean;
+    level?: "level_2_chart_ready" | "level_4_draft_ready";
+    optionBidAsk?: boolean;
+    strategyLevel?: "fit" | "watch" | "avoid" | "manual_review_required" | "insufficient_data";
+    rawSourceRow?: Record<string, string>;
+    marketCapUSD?: number;
+    volume?: number;
+    relativeVolume?: number;
   },
 ): CandidateSymbol {
-  const draftStatus = options.capitalShortage ? "not_ready" : options.draftReady ? "draft_ready" : "manual_review_required";
-  const optionCandidate = options.lastOnly
-    ? { optionType: "call" as const, expiry: "2026-12-18", strike: 105, last: 5.2, volume: 100, openInterest: 1000 }
-    : options.bidAsk
-      ? { optionType: "call" as const, expiry: "2026-12-18", strike: 105, bid: 5, ask: 5.4, mid: 5.2, last: 5.2, volume: 100, openInterest: 1000 }
-      : undefined;
+  const chart = options.chart !== false;
+  const level = options.level ?? "level_2_chart_ready";
+  const optionBidAsk = options.optionBidAsk ?? false;
   return {
     id: symbol,
     source: "manual_import",
-    importedAt: "2026-07-05T00:00:00.000Z",
+    importedAt: "2026-07-06T00:00:00.000Z",
+    rawSourceRow: options.rawSourceRow,
     rank: 1,
     symbol,
     company: symbol,
     priceUSD: 100,
+    marketCapUSD: options.marketCapUSD,
+    volume: options.volume,
+    relativeVolume: options.relativeVolume,
     score: 80,
     suggestedUse: "test",
     screeningCompleteness: {
-      level: optionCandidate ? "level_4_draft_ready" : "level_2_chart_ready",
-      canAnalyzeChart: true,
+      level,
+      canAnalyzeChart: chart,
       canClassifyStrategy: true,
-      canEvaluateOptionLiquidity: Boolean(optionCandidate),
-      canCreatePositionDraft: Boolean(optionCandidate),
-      missingFields: [],
+      canEvaluateOptionLiquidity: optionBidAsk,
+      canCreatePositionDraft: level === "level_4_draft_ready",
+      missingFields: optionBidAsk ? [] : ["optionCandidates.bidAsk"],
       warnings: [],
     },
     publicScreeningInput: {
       symbol,
       underlyingPrice: 100,
-      chartAnalysis: {
-        regime: options.chartRegime,
-        confidence: options.confidence,
+      chartAnalysis: chart ? {
+        regime: "bullish_pullback",
+        confidence: "high",
         primaryTimeframe: "daily",
         timeframes: [],
-        reasons: ["chart reason"],
+        reasons: ["chart"],
         warnings: [],
         missingFields: [],
-      },
-      optionCandidates: optionCandidate ? [optionCandidate] : [],
-      capital: { availableCashUSD: options.capitalShortage ? 100 : 10_000, maxLossToleranceUSD: 1_500, assignmentCapitalAvailableUSD: options.capitalShortage ? 100 : 10_000 },
+      } : undefined,
+      optionCandidates: optionBidAsk ? [{ optionType: "call", expiry: "2026-12-18", strike: 105, bid: 4, ask: 4.3, volume: 100, openInterest: 1000 }] : [],
     },
     strategySuitability: [
       {
         strategy: "long_call",
-        level: "fit",
-        chartRegime: options.chartRegime,
-        confidence: options.confidence,
+        level: options.strategyLevel ?? "fit",
+        reasons: [],
+        warnings: [],
+        missingFields: [],
+        nextChecks: [],
+      },
+      {
+        strategy: "covered_call",
+        level: options.strategyLevel ?? "fit",
+        reasons: [],
+        warnings: [],
+        missingFields: [],
+        nextChecks: [],
+      },
+      {
+        strategy: "cash_secured_put_buy_to_own",
+        level: options.strategyLevel ?? "fit",
         reasons: [],
         warnings: [],
         missingFields: [],
         nextChecks: [],
       },
     ],
-    positionDrafts: optionCandidate
-      ? [
-          {
-            id: `${symbol}-draft`,
-            strategy: "long_call",
-            status: draftStatus,
-            symbol,
-            requiredCapitalUSD: options.capitalShortage ? 800 : 540,
-            maxLossUSD: 540,
-            availableCashUSD: options.capitalShortage ? 100 : 10_000,
-            warnings: options.capitalShortage ? ["利用可能資金が不足しています。"] : [],
-            missingFields: [],
-            legs: [
-              {
-                id: `${symbol}-leg`,
-                optionType: "call",
-                side: "buy",
-                expiry: "2026-12-18",
-                strikePrice: 105,
-                conservativePrice: options.lastOnly ? undefined : 5.4,
-                conservativePriceField: options.lastOnly ? undefined : "ask",
-                liquidityWarnings: [],
-                missingFields: options.lastOnly ? ["conservativePrice"] : [],
-              },
-            ],
-          },
-        ]
-      : [],
+    positionDrafts: [],
   };
 }

@@ -3,7 +3,7 @@ import { detectScreeningCompleteness } from "@/domain/screeningCompleteness";
 import { analyzeChart } from "@/domain/chartAnalysis";
 import { evaluateCandidateStrategySuitabilities } from "@/domain/strategySuitability";
 import { selectOptionLegCandidates } from "@/domain/optionLegSelection";
-import { buildPositionDraftsForCandidate } from "@/domain/positionDrafts";
+import { buildPositionDraftsForCandidate, finalizePositionDraftForReview } from "@/domain/positionDrafts";
 import { buildAdvancedStrategyReviewsForCandidate } from "@/domain/advancedStrategyReviews";
 import { buildStrategyPrecisionReviewsForCandidate } from "@/domain/strategyPrecision";
 import type { CandidateImportResult, CandidateSource, CandidateSymbol } from "@/types/candidates";
@@ -117,11 +117,16 @@ export function normalizePublicScreeningCandidate(
   const strategySuitability = preliminaryInput.strategySuitability?.length
     ? preliminaryInput.strategySuitability
     : chartAnalysis
-      ? evaluateCandidateStrategySuitabilities({ candidate, chartAnalysis })
+      ? evaluateCandidateStrategySuitabilities({
+          candidate,
+          chartAnalysis,
+          capital: preliminaryInput.capital,
+          existingPosition: preliminaryInput.existingPosition,
+        })
       : undefined;
   const legSelections = buildLegSelections(preliminaryInput, candidate.symbol, strategySuitability);
   const positionDrafts = preliminaryInput.positionDrafts?.length
-    ? preliminaryInput.positionDrafts
+    ? preliminaryInput.positionDrafts.map(finalizePositionDraftForReview)
     : legSelections.length
       ? buildPositionDraftsForCandidate({
           symbol: candidate.symbol,

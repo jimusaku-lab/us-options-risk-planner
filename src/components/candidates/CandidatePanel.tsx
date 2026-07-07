@@ -2,27 +2,34 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Eye, FileJson, FileUp, GitCompare, ListFilter, Plus, RotateCcw, Save, Trash2, X } from "lucide-react";
 import type { CandidateImportSummary, CandidateReviewChecklistState, CandidateSymbol } from "@/types/candidates";
 import type { EntryRationaleJournal, TradeSimulation } from "@/types/domain";
-import type { PositionDraftStatus, PublicStrategyFitLevel, ScreeningCompletenessLevel } from "@/types/screening";
+import type { PositionDraftReviewChecklistId, PositionDraftStatus, PublicStrategyFitLevel, ScreeningCompletenessLevel } from "@/types/screening";
 import { summarizeCandidateReview } from "@/domain/candidateReviewChecklist";
 import { createJournalForCandidate, getJournalStatusLabel } from "@/domain/entryRationaleJournal";
+import {
+  screeningDisplayItems,
+  screeningDisplayLabel,
+  screeningDisplayValue,
+  screeningStrategyLabel,
+} from "@/domain/screeningDisplayLabels";
 import { buildScreeningComparisonItem } from "@/domain/screeningComparison";
 import {
   applyScreeningPreset,
   defaultScreeningFilters,
   filterAndSortScreeningCandidates,
   strategyViewOptions,
+  targetStrategyOptions,
   type SavedScreeningFilter,
   type ScreeningFilterState,
   type ScreeningPresetId,
 } from "@/domain/screeningFilters";
-import { evaluateCandidatePriority, getBestDraft, getBestOptionQuote, priorityBandLabel, type ScreeningPriorityReview } from "@/domain/screeningPriority";
+import { buildScreeningPriorityReviewMap, getBestDraft, getBestOptionQuote, priorityBandLabel, selectPriorityReview, type ScreeningPriorityReview } from "@/domain/screeningPriority";
 import { parseCandidateImport } from "@/lib/candidates";
 import { formatUSD } from "@/lib/format";
 import { CandidateDetailCard } from "./CandidateDetailCard";
 
 const FILTER_STORAGE_KEY = "us-options-screening-practical-filters-v1";
 const SAVED_FILTER_STORAGE_KEY = "us-options-screening-saved-filters-v1";
-const PUBLIC_SAMPLE_FILE_NAME = "us-options-screening-sample-v1.json";
+const PUBLIC_SAMPLE_FILE_NAME = "us-options-screening-sample-levels-v1.json";
 
 function publicSampleUrl(): string {
   const base = import.meta.env.BASE_URL || "/";
@@ -30,27 +37,15 @@ function publicSampleUrl(): string {
 }
 
 function completenessLabel(level?: ScreeningCompletenessLevel): string {
-  if (level === "level_4_draft_ready") return "L4 建玉案レビュー可";
-  if (level === "level_3_option_ready") return "L3 オプション確認可";
-  if (level === "level_2_chart_ready") return "L2 チャート確認可";
-  if (level === "level_1_symbol_price") return "L1 銘柄/株価";
-  if (level === "insufficient") return "不足";
-  return "-";
+  return level ? screeningDisplayLabel("completeness", level) : "-";
 }
 
 function strategySuitabilityLabel(level: PublicStrategyFitLevel): string {
-  if (level === "fit") return "候補";
-  if (level === "watch") return "監視";
-  if (level === "avoid") return "候補外";
-  if (level === "manual_review_required") return "手動確認";
-  return "データ不足";
+  return screeningDisplayLabel("publicFitLevel", level);
 }
 
 function positionDraftStatusLabel(status?: PositionDraftStatus): string {
-  if (status === "draft_ready") return "建玉案レビュー可";
-  if (status === "manual_review_required") return "手動確認";
-  if (status === "not_ready") return "未準備";
-  return "建玉案なし";
+  return status ? screeningDisplayLabel("positionDraftStatus", status) : "建玉案なし";
 }
 
 function readFilters(): ScreeningFilterState {
@@ -73,14 +68,16 @@ function readSavedFilters(): SavedScreeningFilter[] {
 }
 
 function priorityBandClass(review?: ScreeningPriorityReview): string {
-  if (review?.priorityBand === "high") return "border-teal-200 bg-teal-50 text-teal-900";
-  if (review?.priorityBand === "medium") return "border-sky-200 bg-sky-50 text-sky-900";
-  if (review?.priorityBand === "blocked") return "border-rose-200 bg-rose-50 text-rose-900";
+  if (review?.band === "primary_watch") return "border-teal-200 bg-teal-50 text-teal-900";
+  if (review?.band === "secondary_watch") return "border-sky-200 bg-sky-50 text-sky-900";
+  if (review?.band === "manual_review") return "border-amber-200 bg-amber-50 text-amber-950";
+  if (review?.band === "avoid") return "border-rose-200 bg-rose-50 text-rose-900";
   return "border-slate-200 bg-slate-50 text-slate-700";
 }
 
-function shortList(items: string[] | undefined, fallback = "-"): string {
-  return items?.length ? items.slice(0, 2).join(" / ") : fallback;
+function shortList(items: string[] | undefined, fallback = "-", displayKind?: string): string {
+  const displayItems = displayKind ? screeningDisplayItems(displayKind, items) : items;
+  return displayItems?.length ? displayItems.slice(0, 2).join(" / ") : fallback;
 }
 
 function sortLabel(value: ScreeningFilterState["sort"]): string {
@@ -115,6 +112,7 @@ export function CandidatePanel({
   onCreateSimulation,
   onJournalChange,
   onChecklistChange,
+  onDraftReviewChecklistChange,
 }: {
   candidates: CandidateSymbol[];
   importWarnings: string[];
@@ -127,6 +125,7 @@ export function CandidatePanel({
   onCreateSimulation: (candidate: CandidateSymbol, strategy: CandidateDraftStrategy) => void;
   onJournalChange: (candidateId: string, journal: EntryRationaleJournal) => void;
   onChecklistChange: (candidateId: string, state: CandidateReviewChecklistState) => void;
+  onDraftReviewChecklistChange: (candidateId: string, draftId: string, itemId: PositionDraftReviewChecklistId, checked: boolean) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState("");
@@ -142,13 +141,17 @@ export function CandidatePanel({
     () => new Set(simulations.map((simulation) => simulation.ticker.trim().toUpperCase()).filter(Boolean)),
     [simulations],
   );
-  const priorityReviews = useMemo(
-    () => new Map(candidates.map((candidate) => [candidate.id, evaluateCandidatePriority(candidate, { existingSymbols })])),
+  const priorityReviewsByCandidateId = useMemo(
+    () => buildScreeningPriorityReviewMap(candidates, { existingSymbols }),
     [candidates, existingSymbols],
   );
+  const priorityReviews = useMemo(
+    () => new Map(candidates.map((candidate) => [candidate.id, selectPriorityReview(priorityReviewsByCandidateId[candidate.id], filters.targetStrategy) as ScreeningPriorityReview])),
+    [candidates, filters.targetStrategy, priorityReviewsByCandidateId],
+  );
   const visibleCandidates = useMemo(
-    () => filterAndSortScreeningCandidates(candidates, priorityReviews, filters),
-    [candidates, filters, priorityReviews],
+    () => filterAndSortScreeningCandidates(candidates, priorityReviewsByCandidateId, filters),
+    [candidates, filters, priorityReviewsByCandidateId],
   );
   const comparisonCandidates = useMemo(
     () => selectedComparisonIds
@@ -243,6 +246,13 @@ export function CandidatePanel({
     setStatus(`フィルタ条件「${saved.name}」を復元しました。`);
   };
 
+  const deleteSavedFilter = (id: string) => {
+    const next = savedFilters.filter((item) => item.id !== id);
+    setSavedFilters(next);
+    if (typeof window !== "undefined") window.localStorage.setItem(SAVED_FILTER_STORAGE_KEY, JSON.stringify(next));
+    setStatus("フィルタ条件を削除しました。");
+  };
+
   const toggleComparison = (candidateId: string) => {
     setSelectedComparisonIds((current) => {
       if (current.includes(candidateId)) return current.filter((id) => id !== candidateId);
@@ -310,8 +320,8 @@ export function CandidatePanel({
           <div><div className="font-bold text-slate-900">取込済み候補</div><div>{importSummary.importedCount}/{importSummary.totalRows}件</div></div>
           <div><div className="font-bold text-slate-900">要確認</div><div>{importSummary.warningCount}件</div></div>
           <div><div className="font-bold text-slate-900">エラー</div><div>{importSummary.errorCount}件</div></div>
-          <div><div className="font-bold text-slate-900">データソース</div><div>{importSummary.source}</div></div>
-          <div><div className="font-bold text-slate-900">asOf</div><div>{importSummary.asOf ?? "-"}</div></div>
+          <div><div className="font-bold text-slate-900">データソース</div><div>{screeningDisplayValue("dataSource", importSummary.source)}</div></div>
+          <div><div className="font-bold text-slate-900">データ時点</div><div>{importSummary.asOf ?? "-"}</div></div>
           <div><div className="font-bold text-slate-900">最終取込</div><div>{importSummary.importedAt}</div></div>
         </div>
       ) : null}
@@ -352,7 +362,7 @@ export function CandidatePanel({
           <label className="text-xs font-bold text-slate-700">
             優先度
             <select className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900" value={filters.priorityBand} onChange={(event) => updateFilters({ priorityBand: event.target.value as ScreeningFilterState["priorityBand"] })}>
-              <option value="all">すべて</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option><option value="blocked">保留</option>
+              <option value="all">すべて</option><option value="primary_watch">確認優先</option><option value="secondary_watch">次点</option><option value="manual_review">手動確認</option><option value="avoid">候補外</option><option value="insufficient_data">データ不足</option>
             </select>
           </label>
           <label className="text-xs font-bold text-slate-700">
@@ -388,7 +398,10 @@ export function CandidatePanel({
         <div className="mt-3 text-xs font-bold text-slate-700">戦略別ビュー</div>
         <div className="mt-1 flex flex-wrap items-center gap-2">
           {strategyViewOptions.map((option) => (
-            <button key={option.id} className={`rounded-md border px-2.5 py-1.5 text-xs font-bold ${filters.view === option.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`} onClick={() => updateFilters({ view: option.id })}>
+            <button key={option.id} className={`rounded-md border px-2.5 py-1.5 text-xs font-bold ${filters.view === option.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700"}`} onClick={() => updateFilters({
+              view: option.id,
+              targetStrategy: targetStrategyOptions.some((item) => item.id === option.id) ? option.id as ScreeningFilterState["targetStrategy"] : option.id === "combo_upside" ? "upside_reversal_combo" : option.id === "missing_data" || option.id === "advanced_manual" ? "all" : filters.targetStrategy,
+            })}>
               {option.label}
             </button>
           ))}
@@ -431,6 +444,15 @@ export function CandidatePanel({
             </select>
           </label>
         </div>
+        {savedFilters.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {savedFilters.map((saved) => (
+              <button key={saved.id} className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-600" onClick={() => deleteSavedFilter(saved.id)}>
+                削除: {saved.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {importWarnings.length > 0 ? (
@@ -489,16 +511,16 @@ export function CandidatePanel({
                       <button className="rounded border border-slate-300 px-2 py-1 font-bold" onClick={() => toggleComparison(item.candidateId)}>解除</button>
                     </div>
                     <div className="mt-2 grid grid-cols-2 gap-1">
-                      <div>Level: {item.level}</div><div>Chart: {item.chart} / {item.confidence}</div>
+                      <div>Level: {screeningDisplayValue("level", item.level)}</div><div>チャート: {screeningDisplayValue("regime", item.chart)} / {screeningDisplayValue("confidence", item.confidence)}</div>
                       <div>戦略: {item.primaryStrategy}</div><div>建玉案: {item.draftStatus}</div>
                       <div>満期: {item.expiry}</div><div>Strike: {item.strike}</div>
                       <div>Bid/Ask: {item.bid} / {item.ask}</div><div>Mid/Last: {item.mid} / {item.last}</div>
-                      <div>Spread: {item.spreadRate}</div><div>Vol/OI: {item.volume} / {item.openInterest}</div>
+                      <div>スプレッド: {item.spreadRate}</div><div>Vol/OI: {item.volume} / {item.openInterest}</div>
                       <div>保守価格: {item.conservativePrice}</div><div>必要資金: {item.requiredCapital}</div>
                       <div>利用可能: {item.availableCash}</div><div>最大損失: {item.maxLoss}</div>
                     </div>
-                    <div className="mt-2 rounded bg-slate-50 px-2 py-1">上位理由: {shortList(item.topReasons)}</div>
-                    <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-amber-900">減点/未確認: {shortList([...item.penaltyReasons, ...item.missingChecks])}</div>
+                    <div className="mt-2 rounded bg-slate-50 px-2 py-1">上位理由: {shortList(item.topReasons, "-", "reasons")}</div>
+                    <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-amber-900">減点/未確認: {shortList([...item.penaltyReasons, ...item.missingChecks], "-", "nextDataNeeded")}</div>
                   </div>
                 ))}
               </div>
@@ -511,7 +533,8 @@ export function CandidatePanel({
             const hasPosition = existingSymbols.has(candidate.symbol);
             const isExpanded = expandedCandidateId === candidate.id;
             const journalStatus = getJournalStatusLabel(candidate.entryRationaleJournal);
-            const review = priorityReviews.get(candidate.id) ?? evaluateCandidatePriority(candidate, { existingSymbols });
+            const strategyReviews = priorityReviewsByCandidateId[candidate.id] ?? [];
+            const review = priorityReviews.get(candidate.id) ?? selectPriorityReview(strategyReviews, filters.targetStrategy);
             const chartAnalysis = candidate.publicScreeningInput?.chartAnalysis;
             const topDraft = getBestDraft(candidate);
             const topQuote = getBestOptionQuote(candidate);
@@ -525,7 +548,7 @@ export function CandidatePanel({
                     <div className="grid gap-2">
                       <div className={`rounded-md border px-3 py-2 ${priorityBandClass(review)}`}>
                         <div className="text-[11px] font-bold uppercase tracking-normal">確認優先度</div>
-                        <div className="mt-1 flex items-end gap-2"><span className="text-xl font-black">{priorityBandLabel(review.priorityBand)}</span><span className="text-sm font-bold">{review.priorityScore}</span></div>
+                        <div className="mt-1 flex items-end gap-2"><span className="text-xl font-black">{review ? priorityBandLabel(review.band) : "-"}</span><span className="text-sm font-bold">{review?.score ?? "-"}</span></div>
                       </div>
                       <button className={`inline-flex h-9 items-center justify-center gap-1 rounded-md border px-2 text-xs font-bold ${isSelected ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"}`} onClick={() => toggleComparison(candidate.id)}>
                         <GitCompare size={14} />
@@ -546,21 +569,29 @@ export function CandidatePanel({
                       </div>
                       <div className="grid gap-2 text-xs text-slate-700 md:grid-cols-6">
                         <div><span className="font-bold text-slate-900">価格</span><br />{candidate.priceUSD === undefined ? "-" : formatUSD(candidate.priceUSD)}</div>
-                        <div><span className="font-bold text-slate-900">Level</span><br />{completenessLabel(candidate.screeningCompleteness?.level)}</div>
-                        <div><span className="font-bold text-slate-900">チャート</span><br />{chartAnalysis ? `${chartAnalysis.regime} / ${chartAnalysis.confidence}` : "-"}</div>
+                        <div><span className="font-bold text-slate-900">データ充足</span><br />{completenessLabel(candidate.screeningCompleteness?.level)}</div>
+                        <div><span className="font-bold text-slate-900">チャート</span><br />{chartAnalysis ? `${screeningDisplayLabel("chartRegime", chartAnalysis.regime)} / 信頼度: ${screeningDisplayLabel("chartConfidence", chartAnalysis.confidence)}` : "-"}</div>
                         <div>
                           <span className="font-bold text-slate-900">戦略</span><br />
                           {topSuitability
-                            ? `${review.primaryStrategyLabel ?? topSuitability.strategy} / ${strategySuitabilityLabel(topSuitability.level)}`
-                            : review.primaryStrategyLabel ?? "-"}
+                            ? `${review?.primaryStrategyLabel ?? screeningStrategyLabel(topSuitability.strategy)} / ${strategySuitabilityLabel(topSuitability.level)}`
+                            : review?.primaryStrategyLabel ?? "-"}
                         </div>
-                        <div><span className="font-bold text-slate-900">建玉案</span><br />{positionDraftStatusLabel(topDraft?.status)}</div>
+                        <div>
+                          <span className="font-bold text-slate-900">建玉案</span><br />
+                          {positionDraftStatusLabel(topDraft?.status)}
+                          {topDraft ? (
+                            <div className="text-slate-500">
+                              {topDraft.capital?.capitalQuality ? screeningDisplayValue("capitalQuality", topDraft.capital.capitalQuality) : "-"} / 必要 {topDraft.requiredCapitalUSD === undefined ? "-" : formatUSD(topDraft.requiredCapitalUSD)} / 最大損失 {topDraft.maxLossUSD === undefined ? "-" : formatUSD(topDraft.maxLossUSD)}
+                            </div>
+                          ) : null}
+                        </div>
                         <div><span className="font-bold text-slate-900">確認</span><br />{reviewSummary.checkedCount}/{reviewSummary.totalCount || "-"} 必須未確認 {reviewSummary.requiredUncheckedCount}</div>
                       </div>
                       <div className="grid gap-2 md:grid-cols-3">
-                        <div className="rounded-md border border-teal-100 bg-teal-50 px-3 py-2 text-xs leading-5 text-teal-950"><div className="font-bold">上位理由</div><div>{shortList(review.topReasons)}</div></div>
-                        <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950"><div className="font-bold">減点理由</div><div>{shortList(review.penaltyReasons)}</div></div>
-                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700"><div className="font-bold">未確認事項</div><div>{shortList(review.missingChecks)}</div></div>
+                        <div className="rounded-md border border-teal-100 bg-teal-50 px-3 py-2 text-xs leading-5 text-teal-950"><div className="font-bold">上位理由</div><div>{shortList(review?.reasons ?? review?.topReasons, "-", "reasons")}</div></div>
+                        <div className="rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950"><div className="font-bold">減点理由</div><div>{shortList(review?.blockers ?? review?.penaltyReasons, "-", "blockers")}</div></div>
+                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700"><div className="font-bold">未確認事項</div><div>{shortList(review?.nextDataNeeded ?? review?.missingChecks, "-", "nextDataNeeded")}</div></div>
                       </div>
                     </div>
                     <div className="grid content-start gap-2 text-xs text-slate-700">
@@ -583,9 +614,12 @@ export function CandidatePanel({
                   <div className="rounded-md border border-slate-200 bg-slate-50/70 p-3">
                     <CandidateDetailCard
                       candidate={candidate}
+                      priorityReviews={strategyReviews}
                       onJournalChange={(journal) => onJournalChange(candidate.id, journal)}
                       getDefaultJournal={() => createJournalForCandidate(candidate)}
                       onChecklistChange={(state) => onChecklistChange(candidate.id, state)}
+                      onDraftReviewChecklistChange={(draftId, itemId, checked) => onDraftReviewChecklistChange(candidate.id, draftId, itemId, checked)}
+                      reviewHandoffSource="public"
                     />
                   </div>
                 ) : null}
@@ -613,7 +647,7 @@ export function CandidatePanel({
                     <div className="font-bold">確認状態</div>
                     <div>確認済み {summary.checkedCount}/{summary.totalCount} / 必須未確認 {summary.requiredUncheckedCount}</div>
                     {summary.uncheckedRequiredLabels.length ? <div className="mt-1">必須未確認: {summary.uncheckedRequiredLabels.join(" / ")}</div> : null}
-                    {summary.blockedReasons.length ? <div className="mt-1 text-rose-900">保留理由: {summary.blockedReasons.join(" / ")}</div> : null}
+                    {summary.blockedReasons.length ? <div className="mt-1 text-rose-900">保留理由: {screeningDisplayItems("blockers", summary.blockedReasons).join(" / ")}</div> : null}
                   </div>
                   <div className="mt-4 flex flex-wrap justify-end gap-2">
                     <button className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700" onClick={() => setDraftGate(null)}>キャンセル</button>

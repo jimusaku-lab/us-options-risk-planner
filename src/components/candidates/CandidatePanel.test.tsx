@@ -14,6 +14,7 @@ const baseProps = {
   onCreateSimulation: vi.fn(),
   onJournalChange: vi.fn(),
   onChecklistChange: vi.fn(),
+  onDraftReviewChecklistChange: vi.fn(),
 };
 
 afterEach(() => {
@@ -30,7 +31,7 @@ describe("CandidatePanel", () => {
     expect(screen.getByText(/外部自動取得に接続せず/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /候補ファイル取込/ })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "サンプルを読み込む" }).length).toBeGreaterThan(0);
-    expect(screen.getByRole("link", { name: "サンプルJSONを開く" })).toHaveAttribute("href", "/samples/us-options-screening-sample-v1.json");
+    expect(screen.getByRole("link", { name: "サンプルJSONを開く" })).toHaveAttribute("href", "/samples/us-options-screening-sample-levels-v1.json");
     expect(screen.getByRole("button", { name: "スクリーニング候補を閉じる" })).toBeInTheDocument();
     expect(screen.getByText(/まずはサンプルで候補画面を試せます/)).toBeInTheDocument();
     expect(screen.getByText(/候補は売買推奨ではなく確認用の分類/)).toBeInTheDocument();
@@ -65,7 +66,7 @@ describe("CandidatePanel", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "サンプルを読み込む" })[0]);
 
     await waitFor(() => expect(onImport).toHaveBeenCalledTimes(1));
-    expect(fetch).toHaveBeenCalledWith("/samples/us-options-screening-sample-v1.json", { cache: "no-store" });
+    expect(fetch).toHaveBeenCalledWith("/samples/us-options-screening-sample-levels-v1.json", { cache: "no-store" });
     expect(onImport.mock.calls[0][0][0]).toMatchObject({ symbol: "PSAMPLE", company: "Public Sample" });
     expect(screen.getByText(/サンプル読込済み 1\/1件/)).toBeInTheDocument();
   });
@@ -281,8 +282,9 @@ describe("CandidatePanel", () => {
     render(<CandidatePanel {...baseProps} candidates={[candidate]} />);
 
     expect(screen.getByText("L4 建玉案レビュー可")).toBeInTheDocument();
-    expect(screen.getAllByText(/bullish_continuation/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/high/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/上昇継続/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/信頼度: 高/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/bullish_continuation/)).not.toBeInTheDocument();
     expect(screen.getAllByText("建玉案レビュー可").length).toBeGreaterThan(0);
     expect(screen.getByText(/コール買い \/ 手動確認/)).toBeInTheDocument();
     expect(screen.getByText("上位理由")).toBeInTheDocument();

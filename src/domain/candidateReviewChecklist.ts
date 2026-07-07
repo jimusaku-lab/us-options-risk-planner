@@ -160,7 +160,7 @@ export function strategyLabel(strategy: StrategyCandidateKind): string {
   const labels: Record<StrategyCandidateKind, string> = {
     long_call: "コール買い",
     cash_secured_put_buy_to_own: "買いたいP売り",
-    cash_secured_put_avoid_assignment: "買いたくないP売り",
+    cash_secured_put_avoid_assignment: "買わないプット売り",
     covered_call: "カバードコール",
     wheel: "Wheel",
     short_strangle: "ショートストラングル",

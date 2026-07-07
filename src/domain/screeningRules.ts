@@ -10,7 +10,7 @@ import type {
 
 export const screeningStrategyLabels: Record<StrategyCandidateKind, string> = {
   cash_secured_put_buy_to_own: "P売り、買ってよい",
-  cash_secured_put_avoid_assignment: "P売り、買いたくない",
+  cash_secured_put_avoid_assignment: "買わないプット売り",
   covered_call: "カバードコール",
   long_call: "コール買い",
   wheel: "ホイール",

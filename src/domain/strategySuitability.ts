@@ -4,6 +4,7 @@ import type {
   ChartAnalysisSnapshot,
   ChartRegime,
   PublicStrategyFitLevel,
+  PublicScreeningCandidateInput,
   ScreeningCandidate,
   StrategyCandidateInput,
   StrategyCandidateKind,
@@ -15,6 +16,8 @@ export type StrategySuitabilityInput = {
   candidate: ScreeningCandidate;
   chartAnalysis?: ChartAnalysisSnapshot;
   strategies?: StrategyCandidateInput[];
+  capital?: PublicScreeningCandidateInput["capital"];
+  existingPosition?: PublicScreeningCandidateInput["existingPosition"];
 };
 
 const initialStrategyOrder: StrategyCandidateKind[] = [
@@ -47,8 +50,10 @@ export function evaluateCandidateStrategySuitabilities(input: StrategySuitabilit
   const strategies = (input.strategies ?? input.candidate.candidateStrategies).filter(isInitialStrategy);
   return rankStrategySuitabilities(
     strategies.map((strategy) => {
-      const baseFit = evaluateStrategyFit(input.candidate, strategy);
-      return applyChartGateToStrategyFit(strategy, baseFit, input.chartAnalysis);
+      const enrichedStrategy = enrichStrategyWithOperationalInputs(strategy, input.capital, input.existingPosition);
+      const baseFit = evaluateStrategyFit(input.candidate, enrichedStrategy);
+      const chartGated = applyChartGateToStrategyFit(enrichedStrategy, baseFit, input.chartAnalysis);
+      return applyCapitalAndPositionGate(enrichedStrategy, chartGated, input.capital, input.existingPosition);
     }),
   );
 }
@@ -314,6 +319,165 @@ function gateLevelForStrategy(strategy: StrategyCandidateKind, gateLevel: "pass"
   return strategy === "cash_secured_put_buy_to_own" || strategy === "covered_call" ? "watch" : "avoid";
 }
 
+function applyCapitalAndPositionGate(
+  strategy: StrategyCandidateInput,
+  suitability: StrategySuitability,
+  capital?: PublicScreeningCandidateInput["capital"],
+  existingPosition?: PublicScreeningCandidateInput["existingPosition"],
+): StrategySuitability {
+  if (suitability.level === "avoid" || suitability.level === "insufficient_data") return suitability;
+  switch (strategy.strategy) {
+    case "cash_secured_put_buy_to_own":
+      return gateBuyToOwnPut(strategy, suitability, capital);
+    case "covered_call":
+      return gateCoveredCall(strategy, suitability, capital, existingPosition);
+    case "cash_secured_put_avoid_assignment":
+      return gateAvoidAssignmentPut(suitability, capital);
+    default:
+      return suitability;
+  }
+}
+
+function enrichStrategyWithOperationalInputs(
+  strategy: StrategyCandidateInput,
+  capital?: PublicScreeningCandidateInput["capital"],
+  existingPosition?: PublicScreeningCandidateInput["existingPosition"],
+): StrategyCandidateInput {
+  if (strategy.strategy === "cash_secured_put_buy_to_own") {
+    const assignmentCapitalRequired = finitePositive(strategy.assignmentCapitalRequired) ?? (isFiniteNumber(strategy.strikePrice) ? strategy.strikePrice * 100 : undefined);
+    const availableCash = finitePositive(strategy.availableCash) ?? finitePositive(capital?.assignmentCapitalAvailableUSD) ?? finitePositive(capital?.availableCashUSD);
+    return { ...strategy, assignmentCapitalRequired, availableCash };
+  }
+  if (strategy.strategy === "covered_call") {
+    const stockShares = finitePositive(strategy.stockShares) ?? finitePositive(capital?.stockShares) ?? finitePositive(existingPosition?.stockShares);
+    const stockCostBasis = finitePositive(strategy.stockCostBasis) ?? finitePositive(capital?.stockCostBasisUSD) ?? finitePositive(existingPosition?.stockCostBasisUSD);
+    return { ...strategy, stockShares, stockCostBasis };
+  }
+  return strategy;
+}
+
+function gateBuyToOwnPut(
+  strategy: StrategyCandidateInput,
+  suitability: StrategySuitability,
+  capital?: PublicScreeningCandidateInput["capital"],
+): StrategySuitability {
+  const requiredCapital = finitePositive(strategy.assignmentCapitalRequired) ?? (isFiniteNumber(strategy.strikePrice) ? strategy.strikePrice * 100 : undefined);
+  const availableCapital = finitePositive(capital?.assignmentCapitalAvailableUSD) ?? finitePositive(capital?.availableCashUSD) ?? finitePositive(strategy.availableCash);
+  const warnings = ["買いたいP売りはN口座/P口座の現物株購入代金確認を必須ゲートにします。"];
+  if (!isFiniteNumber(requiredCapital)) {
+    return downgradeSuitability(suitability, "manual_review_required", {
+      warnings,
+      missingFields: ["capital.assignmentCapitalRequiredUSD"],
+      manualReviewReasons: ["strike x 100 x 枚数の現物株購入代金を確認してください。"],
+    });
+  }
+  if (!isFiniteNumber(availableCapital)) {
+    return downgradeSuitability(suitability, "manual_review_required", {
+      warnings: [...warnings, "現物株購入代金確認待ちです。"],
+      missingFields: ["capital.assignmentCapitalAvailableUSD"],
+      manualReviewReasons: ["対象N口座/P口座に現物株購入代金があるか確認してください。"],
+    });
+  }
+  if (availableCapital < requiredCapital) {
+    return downgradeSuitability(suitability, "avoid", {
+      warnings: [...warnings, "strike x 100 x 枚数の現物株購入代金の必要資金が不足しています。"],
+      missingFields: ["capital.assignmentCapitalAvailableUSD"],
+      manualReviewReasons: [],
+    });
+  }
+  return {
+    ...suitability,
+    reasons: unique([...suitability.reasons, "現物株購入代金ゲートを確認済みです。"]),
+    warnings: unique([...suitability.warnings, ...warnings]),
+  };
+}
+
+function gateCoveredCall(
+  strategy: StrategyCandidateInput,
+  suitability: StrategySuitability,
+  capital?: PublicScreeningCandidateInput["capital"],
+  existingPosition?: PublicScreeningCandidateInput["existingPosition"],
+): StrategySuitability {
+  const shares = finitePositive(capital?.stockShares) ?? finitePositive(existingPosition?.stockShares) ?? finitePositive(strategy.stockShares);
+  const requiredShares = 100;
+  if (!isFiniteNumber(shares)) {
+    return downgradeSuitability(suitability, "manual_review_required", {
+      warnings: ["カバードコールは同一口座100株以上の現物株確認を必須ゲートにします。", "現物株確認待ちです。"],
+      missingFields: ["capital.stockShares"],
+      manualReviewReasons: ["同一口座に100株以上あるか確認してください。"],
+    });
+  }
+  if (shares < requiredShares) {
+    return downgradeSuitability(suitability, "avoid", {
+      warnings: ["同一口座の現物株が100株未満のためカバードコール候補にしません。"],
+      missingFields: ["capital.stockShares"],
+      manualReviewReasons: [],
+    });
+  }
+  return {
+    ...suitability,
+    reasons: unique([...suitability.reasons, "同一口座100株以上の現物株ゲートを確認済みです。"]),
+  };
+}
+
+function gateAvoidAssignmentPut(
+  suitability: StrategySuitability,
+  capital?: PublicScreeningCandidateInput["capital"],
+): StrategySuitability {
+  const requiredMargin = finitePositive(capital?.saxoRequiredMarginUSD);
+  const marginAvailable = finitePositive(capital?.saxoMarginAvailableUSD);
+  const cashBalance = finitePositive(capital?.cashBalanceUSD) ?? finitePositive(capital?.availableCashUSD);
+  const missingFields = [
+    !isFiniteNumber(requiredMargin) ? "capital.saxoRequiredMarginUSD" : undefined,
+    !isFiniteNumber(marginAvailable) ? "capital.saxoMarginAvailableUSD" : undefined,
+    !isFiniteNumber(cashBalance) ? "capital.cashBalanceUSD" : undefined,
+  ].filter((field): field is string => Boolean(field));
+  const gateWarnings = ["買わないプット売りはSaxoの必要証拠金、証拠金余力、現金残高2倍以上を必須ゲートにします。"];
+  if (missingFields.length > 0) {
+    return downgradeSuitability(suitability, "manual_review_required", {
+      warnings: [...gateWarnings, "証拠金確認待ちです。"],
+      missingFields,
+      manualReviewReasons: ["Saxoの必要証拠金、証拠金余力、現金残高を確認してください。"],
+    });
+  }
+  const confirmedRequiredMargin = requiredMargin as number;
+  const confirmedMarginAvailable = marginAvailable as number;
+  const confirmedCashBalance = cashBalance as number;
+  if (confirmedMarginAvailable < confirmedRequiredMargin) {
+    return downgradeSuitability(suitability, "avoid", {
+      warnings: [...gateWarnings, "Saxoの証拠金余力が必要証拠金を下回っています。"],
+      missingFields: [],
+      manualReviewReasons: [],
+    });
+  }
+  if (confirmedCashBalance < confirmedRequiredMargin * 2) {
+    return downgradeSuitability(suitability, "avoid", {
+      warnings: [...gateWarnings, "現金残高が必要証拠金の2倍未満です。"],
+      missingFields: [],
+      manualReviewReasons: [],
+    });
+  }
+  return {
+    ...suitability,
+    reasons: unique([...suitability.reasons, "Saxo証拠金・余力・現金2倍ゲートを確認済みです。"]),
+    warnings: unique([...suitability.warnings, ...gateWarnings]),
+  };
+}
+
+function downgradeSuitability(
+  suitability: StrategySuitability,
+  level: PublicStrategyFitLevel,
+  additions: Pick<StrategySuitability, "warnings" | "missingFields"> & { manualReviewReasons: string[] },
+): StrategySuitability {
+  return {
+    ...suitability,
+    level: minLevel(suitability.level, level),
+    warnings: unique([...suitability.warnings, ...additions.warnings]),
+    missingFields: unique([...suitability.missingFields, ...additions.missingFields]),
+    manualReviewReasons: unique([...(suitability.manualReviewReasons ?? []), ...additions.manualReviewReasons]),
+  };
+}
+
 function minLevel(...levels: PublicStrategyFitLevel[]): PublicStrategyFitLevel {
   return levels.reduce((current, next) => (levelRank[next] < levelRank[current] ? next : current));
 }
@@ -349,4 +513,12 @@ function isInitialStrategy(strategy: StrategyCandidateInput): boolean {
 
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function finitePositive(value: unknown): number | undefined {
+  return isFiniteNumber(value) && value >= 0 ? value : undefined;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }

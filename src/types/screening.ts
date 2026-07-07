@@ -336,6 +336,58 @@ export type OptionLegDraft = {
   missingFields: string[];
 };
 
+export type PositionDraftReviewChecklistId =
+  | "chart_confirmed"
+  | "strategy_confirmed"
+  | "expiry_strike_confirmed"
+  | "bid_ask_confirmed"
+  | "liquidity_confirmed"
+  | "capital_confirmed"
+  | "max_loss_confirmed"
+  | "assignment_confirmed"
+  | "exit_rule_confirmed"
+  | "saxo_ticket_confirmed";
+
+export type PositionDraftReviewChecklistItem = {
+  id: PositionDraftReviewChecklistId;
+  label: string;
+  required: boolean;
+  checked: boolean;
+  blockingIfUnchecked: boolean;
+};
+
+export type PositionDraftReviewState = {
+  checklist: PositionDraftReviewChecklistItem[];
+  reviewStatus: "not_reviewed" | "needs_data" | "ready_for_manual_transfer" | "blocked";
+  transferWarnings: string[];
+};
+
+export type PositionDraftCapital = {
+  premiumDebitUSD?: number;
+  premiumCreditUSD?: number;
+  requiredCapitalUSD?: number;
+  maxLossUSD?: number;
+  assignmentCapitalRequiredUSD?: number;
+  stockNotionalUSD?: number;
+  availableCashUSD?: number;
+  buyingPowerUSD?: number;
+  maxLossToleranceUSD?: number;
+  saxoRequiredMarginUSD?: number;
+  saxoMarginAvailableUSD?: number;
+  cashBalanceUSD?: number;
+  marginCashCoverageRatio?: number;
+  marginUsageAfterEntryPct?: number;
+  capitalQuality: "ok" | "watch" | "blocked" | "unknown";
+};
+
+export type PositionDraftExitPlan = {
+  profitTakePrice?: number;
+  stopLossPrice?: number;
+  latestCloseDate?: string;
+  expiryHandling?: string;
+  notes: string[];
+};
+
 export type PositionDraft = {
   id: string;
   strategy: StrategyCandidateKind;
@@ -347,6 +399,9 @@ export type PositionDraft = {
   availableCashUSD?: number;
   warnings: string[];
   missingFields: string[];
+  capital?: PositionDraftCapital;
+  exitPlan?: PositionDraftExitPlan;
+  reviewState?: PositionDraftReviewState;
 };
 
 export type StrategyPrecisionReviewLevel = "pass" | "watch" | "blocked" | "insufficient_data";
@@ -425,6 +480,13 @@ export type PublicScreeningCandidateInput = {
     stockCostBasisUSD?: number;
     maxLossToleranceUSD?: number;
     assignmentCapitalAvailableUSD?: number;
+    saxoRequiredMarginUSD?: number;
+    saxoMarginAvailableUSD?: number;
+    cashBalanceUSD?: number;
+    allowAssignment?: boolean;
+    allowStockCalledAway?: boolean;
+    maxContracts?: number;
+    exitRuleConfirmed?: boolean;
   };
   existingPosition?: {
     stockShares?: number;

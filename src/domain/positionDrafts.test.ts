@@ -8,6 +8,7 @@ import {
   buildLongCallDraft,
   buildPositionDraft,
   buildPositionDraftsForCandidate,
+  updatePositionDraftReviewChecklist,
 } from "./positionDrafts";
 
 describe("position draft builders", () => {
@@ -77,12 +78,13 @@ describe("position draft builders", () => {
       symbol: "MSFT",
       strategySuitability: suitability("cash_secured_put_buy_to_own", "fit"),
       legs: [putSell({ strikePrice: 95, conservativePrice: 2.5 })],
-      capital: { assignmentCapitalAvailableUSD: 10_000 },
+      capital: { assignmentCapitalAvailableUSD: 10_000, allowAssignment: true },
     });
 
     expect(draft.status).toBe("draft_ready");
     expect(draft.requiredCapitalUSD).toBe(9_500);
     expect(draft.maxLossUSD).toBe(9_250);
+    expect(draft.capital?.assignmentCapitalRequiredUSD).toBe(9_500);
   });
 
   it("keeps avoid-assignment put at manual review when capital is otherwise ready", () => {
@@ -90,11 +92,23 @@ describe("position draft builders", () => {
       symbol: "MSFT",
       strategySuitability: suitability("cash_secured_put_avoid_assignment", "fit"),
       legs: [putSell({ strikePrice: 70, conservativePrice: 1.2 })],
-      capital: { assignmentCapitalAvailableUSD: 10_000 },
+      capital: { saxoRequiredMarginUSD: 2_000, saxoMarginAvailableUSD: 3_000, cashBalanceUSD: 5_000, exitRuleConfirmed: false },
     });
 
     expect(draft.status).toBe("manual_review_required");
     expect(draft.warnings.join(" ")).toContain("出口ルール");
+  });
+
+  it("keeps bid/ask missing and last-only legs at not_ready", () => {
+    const draft = buildLongCallDraft({
+      symbol: "MSFT",
+      strategySuitability: suitability("long_call", "fit"),
+      legs: [callBuy({ conservativePrice: undefined, conservativePriceField: undefined, last: 5.1, missingFields: ["option.bidAsk"] })],
+      capital: { availableCashUSD: 1_000, maxLossToleranceUSD: 700 },
+    });
+
+    expect(draft.status).toBe("not_ready");
+    expect(draft.missingFields.join(" ")).toContain("option.bidAsk");
   });
 
   it("keeps covered call not ready when stock shares are insufficient", () => {
@@ -116,11 +130,41 @@ describe("position draft builders", () => {
         { strategy: "long_call", legs: [callBuy({ conservativePrice: 5 })] },
         { strategy: "covered_call", legs: [callSell({ conservativePrice: 2.3 })] },
       ],
-      capital: { availableCashUSD: 1_000, maxLossToleranceUSD: 700, stockShares: 100, stockCostBasisUSD: 90 },
+      capital: { availableCashUSD: 1_000, maxLossToleranceUSD: 700, stockShares: 100, stockCostBasisUSD: 90, allowStockCalledAway: true },
     });
 
     expect(drafts).toHaveLength(2);
     expect(drafts.map((draft) => draft.strategy)).toEqual(["long_call", "covered_call"]);
+  });
+
+  it("keeps draft_ready out of manual transfer until review checklist is checked", () => {
+    const draft = buildLongCallDraft({
+      symbol: "MSFT",
+      strategySuitability: suitability("long_call", "fit"),
+      legs: [callBuy({ conservativePrice: 5 })],
+      capital: { availableCashUSD: 1_000, maxLossToleranceUSD: 700 },
+    });
+
+    expect(draft.status).toBe("draft_ready");
+    expect(draft.reviewState?.reviewStatus).toBe("not_reviewed");
+    expect(draft.reviewState?.checklist.some((item) => item.blockingIfUnchecked && !item.checked)).toBe(true);
+  });
+
+  it("moves to ready_for_manual_transfer only after every blocking checklist item is checked", () => {
+    const draft = buildLongCallDraft({
+      symbol: "MSFT",
+      strategySuitability: suitability("long_call", "fit"),
+      legs: [callBuy({ conservativePrice: 5 })],
+      capital: { availableCashUSD: 1_000, maxLossToleranceUSD: 700 },
+    });
+
+    const checkedDraft = draft.reviewState?.checklist.reduce(
+      (current, item) => updatePositionDraftReviewChecklist(current, item.id, true),
+      draft,
+    );
+
+    expect(checkedDraft?.status).toBe("draft_ready");
+    expect(checkedDraft?.reviewState?.reviewStatus).toBe("ready_for_manual_transfer");
   });
 
   it("makes completeness Level 4 only when a draft_ready PositionDraft exists", () => {
@@ -171,6 +215,9 @@ function candidateWithDraft(status: "draft_ready" | "manual_review_required"): P
         availableCashUSD: 1_000,
         warnings: [],
         missingFields: [],
+        capital: { capitalQuality: "ok", premiumDebitUSD: 520, requiredCapitalUSD: 520, maxLossUSD: 520, availableCashUSD: 1_000 },
+        exitPlan: { notes: [] },
+        reviewState: { checklist: [], reviewStatus: "not_reviewed", transferWarnings: ["これは注文ではありません。"] },
       },
     ],
   };

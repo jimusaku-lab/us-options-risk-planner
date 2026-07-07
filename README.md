@@ -4,11 +4,11 @@
 
 ## 公開版の位置づけ
 
-この公開版はGitHub Pagesで動く静的アプリです。
+この公開版はGitHub Pagesで動く静的アプリです。スクリーニングv1は、友人向け試用フィードバックに出せるリリース候補です。
 
-- 証券会社やローカルAPIへ直接接続しません。
+- 証券会社や外部取得基盤へ直接接続しません。
 - 手入力、CSV/JSON取込、`us_options_screening_package.v1` 取込で使います。
-- チャート分析、戦略適性、オプション候補、資金条件、建玉案レビューを確認できます。
+- チャート分析、戦略適性、オプション候補、資金条件、建玉案レビュー、手動確認ハンドオフを確認できます。
 - 発注、注文変更、注文取消、権利行使操作は実装していません。
 - 戦略適性は売買推奨ではなく、持ち込みデータを分類するための参考表示です。
 
@@ -33,13 +33,13 @@
 配布サンプル:
 
 ```text
-public/samples/us-options-screening-sample-v1.json
+public/samples/us-options-screening-sample-levels-v1.json
 ```
 
 公開URLでは次のパスから取得できます。
 
 ```text
-https://jimusaku-lab.github.io/us-options-risk-planner/samples/us-options-screening-sample-v1.json
+https://jimusaku-lab.github.io/us-options-risk-planner/samples/us-options-screening-sample-levels-v1.json
 ```
 
 使い方:
@@ -48,16 +48,18 @@ https://jimusaku-lab.github.io/us-options-risk-planner/samples/us-options-screen
 2. `候補` を開く。
 3. `サンプルを読み込む` を押す。
 4. Level 1からLevel 4の候補、チャート分析、戦略適性、オプション候補、資金条件、建玉案レビュー前チェックを確認する。
+5. Level 4例の詳細を開き、`手動確認ハンドオフ`、メモコピー、レビューJSON書き出し、根拠メモ反映を確認する。
 
 詳細は以下を参照してください。
 
-- [公開版スクリーニング利用ガイド](docs/public-screening-user-guide-2026-07-05.md)
-- [友人向けクイックスタート](docs/public-screening-friend-quickstart-2026-07-05.md)
-- [共有用メッセージ](docs/public-screening-share-message-2026-07-05.md)
-- [フィードバックテンプレート](docs/public-screening-feedback-template-2026-07-05.md)
+- [公開版スクリーニング利用ガイド](docs/public-screening-user-guide-2026-07-06.md)
+- [友人向けクイックスタート](docs/public-screening-friend-quickstart-2026-07-06.md)
+- [v1リリース候補ノート](docs/public-screening-release-candidate-notes-2026-07-06.md)
+- [試用依頼文](docs/public-screening-share-message-2026-07-06.md)
+- [フィードバックテンプレート](docs/public-screening-feedback-template-2026-07-06.md)
 - [初回フィードバック記録台帳](docs/public-screening-feedback-log-2026-07-05.md)
-- [配布前QAチェックリスト](docs/public-screening-release-checklist-2026-07-05.md)
-- [us_options_screening_package.v1 仕様メモ](docs/public-screening-package-spec-2026-07-05.md)
+- [v1 RC QAチェックリスト](docs/public-screening-release-checklist-2026-07-06.md)
+- [us_options_screening_package.v1 仕様メモ](docs/public-screening-package-spec-2026-07-06.md)
 
 ## 公開URL
 

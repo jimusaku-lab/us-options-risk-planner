@@ -1,114 +1,84 @@
 import { describe, expect, it } from "vitest";
-import { applyScreeningPreset, defaultScreeningFilters, filterAndSortScreeningCandidates } from "@/domain/screeningFilters";
-import { evaluateCandidatePriority } from "@/domain/screeningPriority";
+import { defaultScreeningFilters, filterAndSortScreeningCandidates } from "@/domain/screeningFilters";
+import { buildScreeningPriorityReviewMap } from "@/domain/screeningPriority";
 import type { CandidateSymbol } from "@/types/candidates";
 
-describe("screening filters", () => {
-  it("applies draft-ready preset and excludes capital shortage candidates", () => {
-    const ready = makeCandidate("READY", "level_4_draft_ready", "draft_ready");
-    const blocked = makeCandidate("BLOCKED", "level_4_draft_ready", "not_ready");
-    const reviews = new Map([ready, blocked].map((candidate) => [candidate.id, evaluateCandidatePriority(candidate)]));
-    const filters = applyScreeningPreset(defaultScreeningFilters, "draft_ready");
+describe("screening operations filters", () => {
+  it("filters by target strategy", () => {
+    const call = makeCandidate("CALL", "long_call", "level_2_chart_ready");
+    const covered = makeCandidate("COVERED", "covered_call", "level_2_chart_ready");
+    const reviews = buildScreeningPriorityReviewMap([call, covered]);
 
-    const result = filterAndSortScreeningCandidates([blocked, ready], reviews, filters);
-
-    expect(result.map((candidate) => candidate.symbol)).toEqual(["READY"]);
-  });
-
-  it("shows missing data candidates in the missing-data view", () => {
-    const l2 = makeCandidate("L2", "level_2_chart_ready", undefined);
-    const l4 = makeCandidate("L4", "level_4_draft_ready", "draft_ready");
-    const reviews = new Map([l2, l4].map((candidate) => [candidate.id, evaluateCandidatePriority(candidate)]));
-    const filters = { ...defaultScreeningFilters, view: "missing_data" as const };
-
-    const result = filterAndSortScreeningCandidates([l4, l2], reviews, filters);
-
-    expect(result.map((candidate) => candidate.symbol)).toEqual(["L2"]);
-  });
-
-  it("filters by strategy view", () => {
-    const longCall = makeCandidate("CALL", "level_4_draft_ready", "draft_ready", "long_call");
-    const covered = makeCandidate("COVERED", "level_4_draft_ready", "draft_ready", "covered_call");
-    const reviews = new Map([longCall, covered].map((candidate) => [candidate.id, evaluateCandidatePriority(candidate)]));
-
-    const result = filterAndSortScreeningCandidates([covered, longCall], reviews, {
+    const result = filterAndSortScreeningCandidates([covered, call], reviews, {
       ...defaultScreeningFilters,
-      view: "long_call",
+      targetStrategy: "long_call",
     });
 
     expect(result.map((candidate) => candidate.symbol)).toEqual(["CALL"]);
   });
 
-  it("filters and sorts by saved review checklist readiness", () => {
-    const ready = {
-      ...makeCandidate("READY", "level_4_draft_ready", "draft_ready"),
-      strategyPrecisionReviews: [makeReview()],
-      reviewChecklistStates: [
-        {
-          candidateId: "READY",
-          symbol: "READY",
-          strategy: "long_call" as const,
-          updatedAt: "2026-07-05T01:00:00.000Z",
-          items: [
-            { id: "chart", label: "チャート根拠を確認した", checked: true, required: true, source: "common" as const },
-            { id: "price", label: "証券会社画面の価格を最終確認する", checked: true, required: true, source: "common" as const },
-          ],
-        },
-      ],
-    };
-    const missing = {
-      ...makeCandidate("MISSING", "level_4_draft_ready", "draft_ready"),
-      strategyPrecisionReviews: [makeReview()],
-      reviewChecklistStates: [
-        {
-          candidateId: "MISSING",
-          symbol: "MISSING",
-          strategy: "long_call" as const,
-          updatedAt: "2026-07-05T01:00:00.000Z",
-          items: [
-            { id: "chart", label: "チャート根拠を確認した", checked: false, required: true, source: "common" as const },
-            { id: "price", label: "証券会社画面の価格を最終確認する", checked: true, required: true, source: "common" as const },
-          ],
-        },
-      ],
-    };
-    const reviews = new Map([ready, missing].map((candidate) => [candidate.id, evaluateCandidatePriority(candidate)]));
+  it("filters by priority band, level, chart regime, source, and preset", () => {
+    const target = makeCandidate("TARGET", "long_call", "level_2_chart_ready", {
+      source: "manual_import",
+      preset: "large_liquid_core",
+      chartRegime: "bullish_pullback",
+    });
+    const other = makeCandidate("OTHER", "long_call", "level_4_draft_ready", {
+      source: "manual_import",
+      preset: "manual",
+      chartRegime: "range_neutral",
+    });
+    const reviews = buildScreeningPriorityReviewMap([target, other]);
 
-    expect(filterAndSortScreeningCandidates([missing, ready], reviews, { ...defaultScreeningFilters, reviewStatus: "ready" }).map((candidate) => candidate.symbol)).toEqual(["READY"]);
-    expect(filterAndSortScreeningCandidates([ready, missing], reviews, { ...defaultScreeningFilters, sort: "required_unchecked" }).map((candidate) => candidate.symbol)).toEqual(["READY", "MISSING"]);
+    const result = filterAndSortScreeningCandidates([other, target], reviews, {
+      ...defaultScreeningFilters,
+      priorityBand: "secondary_watch",
+      levels: ["level_2_chart_ready"],
+      chartRegime: "bullish_pullback",
+      source: "manual_import",
+      preset: "large_liquid_core",
+    });
+
+    expect(result.map((candidate) => candidate.symbol)).toEqual(["TARGET"]);
+  });
+
+  it("sorts by market cap and detects missing option data", () => {
+    const small = makeCandidate("SMALL", "long_call", "level_2_chart_ready", { marketCapUSD: 10 });
+    const large = makeCandidate("LARGE", "long_call", "level_2_chart_ready", { marketCapUSD: 1_000_000 });
+    const reviews = buildScreeningPriorityReviewMap([small, large]);
+
+    const result = filterAndSortScreeningCandidates([small, large], reviews, {
+      ...defaultScreeningFilters,
+      sort: "market_cap",
+      missingData: "has_missing",
+      optionPermission: "missing",
+    });
+
+    expect(result.map((candidate) => candidate.symbol)).toEqual(["LARGE", "SMALL"]);
   });
 });
 
-function makeReview() {
-  return {
-    strategy: "long_call" as const,
-    level: "manual_review_required" as const,
-    chartGate: { level: "pass" as const, reasons: [], warnings: [] },
-    expiryReview: { level: "pass" as const, reasons: [], warnings: [] },
-    strikeReview: { level: "pass" as const, reasons: [], warnings: [] },
-    liquidityReview: { level: "pass" as const, reasons: [], warnings: [] },
-    capitalReview: { level: "pass" as const, reasons: [], warnings: [] },
-    manualReviewReasons: [],
-    avoidReasons: [],
-    nextChecks: [],
-    checklist: ["チャート根拠を確認した", "証券会社画面の価格を最終確認する"],
-  };
-}
-
 function makeCandidate(
   symbol: string,
+  strategy: "long_call" | "covered_call",
   level: "level_2_chart_ready" | "level_4_draft_ready",
-  draftStatus?: "draft_ready" | "not_ready",
-  strategy: "long_call" | "covered_call" = "long_call",
+  options: {
+    source?: CandidateSymbol["source"];
+    preset?: string;
+    chartRegime?: "bullish_pullback" | "range_neutral";
+    marketCapUSD?: number;
+  } = {},
 ): CandidateSymbol {
   return {
     id: symbol,
-    source: "manual_import",
-    importedAt: "2026-07-05T00:00:00.000Z",
+    source: options.source ?? "manual_import",
+    importedAt: "2026-07-06T00:00:00.000Z",
+    rawSourceRow: { screeningPreset: options.preset ?? "manual" },
     rank: 1,
     symbol,
     company: symbol,
     priceUSD: 100,
+    marketCapUSD: options.marketCapUSD,
     score: 80,
     suggestedUse: "test",
     screeningCompleteness: {
@@ -123,8 +93,9 @@ function makeCandidate(
     publicScreeningInput: {
       symbol,
       underlyingPrice: 100,
+      rawSourceRow: { screeningPreset: options.preset ?? "manual" },
       chartAnalysis: {
-        regime: "bullish_continuation",
+        regime: options.chartRegime ?? "bullish_pullback",
         confidence: "high",
         primaryTimeframe: "daily",
         timeframes: [],
@@ -132,8 +103,7 @@ function makeCandidate(
         warnings: [],
         missingFields: [],
       },
-      optionCandidates: level === "level_4_draft_ready" ? [{ optionType: "call", expiry: "2026-12-18", strike: 105, bid: 4, ask: 4.3, volume: 100, openInterest: 1000 }] : [],
-      capital: level === "level_4_draft_ready" ? { availableCashUSD: draftStatus === "not_ready" ? 100 : 10_000, maxLossToleranceUSD: 1000 } : undefined,
+      optionCandidates: [],
     },
     strategySuitability: [
       {
@@ -145,21 +115,6 @@ function makeCandidate(
         nextChecks: [],
       },
     ],
-    positionDrafts: draftStatus
-      ? [
-          {
-            id: `${symbol}-draft`,
-            strategy,
-            status: draftStatus,
-            symbol,
-            legs: [],
-            requiredCapitalUSD: 430,
-            maxLossUSD: 430,
-            availableCashUSD: draftStatus === "not_ready" ? 100 : 10_000,
-            warnings: draftStatus === "not_ready" ? ["資金不足"] : [],
-            missingFields: [],
-          },
-        ]
-      : [],
+    positionDrafts: [],
   };
 }

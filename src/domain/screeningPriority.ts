@@ -10,16 +10,39 @@ import type {
   StrategyCandidateKind,
 } from "@/types/screening";
 
-export type ScreeningPriorityBand = "high" | "medium" | "low" | "blocked";
+export type ScreeningTargetStrategy =
+  | "all"
+  | "cash_secured_put_buy_to_own"
+  | "cash_secured_put_avoid_assignment"
+  | "covered_call"
+  | "long_call"
+  | "upside_reversal_combo"
+  | "synthetic_forward"
+  | "wheel_cycle";
+
+export type ScreeningPriorityBand =
+  | "primary_watch"
+  | "secondary_watch"
+  | "manual_review"
+  | "avoid"
+  | "insufficient_data";
 
 export type ScreeningPriorityReview = {
   candidateId: string;
   symbol: string;
-  priorityScore: number;
-  priorityBand: ScreeningPriorityBand;
-  topReasons: string[];
-  penaltyReasons: string[];
-  missingChecks: string[];
+  targetStrategy: ScreeningTargetStrategy;
+  band: ScreeningPriorityBand;
+  score: number;
+  chartScore: number;
+  strategyScore: number;
+  completenessScore: number;
+  stockQualityScore: number;
+  optionReadinessScore: number;
+  capitalReadinessScore: number;
+  reasons: string[];
+  blockers: string[];
+  nextDataNeeded: string[];
+  warnings: string[];
   primaryStrategy?: StrategyCandidateKind;
   primaryStrategyLabel?: string;
   sortKeys: {
@@ -30,46 +53,51 @@ export type ScreeningPriorityReview = {
     capital: number;
     eventRisk: number;
     existingPosition: number;
+    stockQuality: number;
   };
+  priorityScore: number;
+  priorityBand: ScreeningPriorityBand;
+  topReasons: string[];
+  penaltyReasons: string[];
+  missingChecks: string[];
 };
 
 export type ScreeningPriorityOptions = {
   existingSymbols?: Set<string>;
+  targetStrategy?: ScreeningTargetStrategy;
 };
 
-const completenessScore: Record<ScreeningCompletenessLevel, number> = {
-  insufficient: -20,
-  level_1_symbol_price: 8,
-  level_2_chart_ready: 18,
-  level_3_option_ready: 28,
-  level_4_draft_ready: 36,
+const targetStrategies: ScreeningTargetStrategy[] = [
+  "cash_secured_put_buy_to_own",
+  "cash_secured_put_avoid_assignment",
+  "covered_call",
+  "long_call",
+  "upside_reversal_combo",
+  "synthetic_forward",
+  "wheel_cycle",
+];
+
+const completenessScoreByLevel: Record<ScreeningCompletenessLevel, number> = {
+  insufficient: 0,
+  level_1_symbol_price: 4,
+  level_2_chart_ready: 10,
+  level_3_option_ready: 13,
+  level_4_draft_ready: 15,
 };
 
 const chartConfidenceScore: Record<ChartConfidence, number> = {
-  high: 24,
-  medium: 15,
+  high: 14,
+  medium: 9,
   low: 3,
-  insufficient: -24,
-};
-
-const chartRegimeScore: Record<ChartRegime, number> = {
-  bullish_continuation: 22,
-  upside_reversal: 24,
-  bullish_pullback: 16,
-  range_neutral: 3,
-  downtrend_rebound: 2,
-  event_large_move_unknown: -6,
-  bearish_breakdown: -28,
-  downtrend: -30,
-  insufficient_data: -30,
+  insufficient: 0,
 };
 
 const strategyLevelScore: Record<PublicStrategyFitLevel, number> = {
-  fit: 18,
-  watch: 6,
-  manual_review_required: 3,
-  avoid: -28,
-  insufficient_data: -18,
+  fit: 25,
+  watch: 16,
+  manual_review_required: 10,
+  avoid: -24,
+  insufficient_data: -10,
 };
 
 export function buildScreeningPriorityReviews(
@@ -79,261 +107,323 @@ export function buildScreeningPriorityReviews(
   return candidates.map((candidate) => evaluateCandidatePriority(candidate, options));
 }
 
+export function buildStrategyPriorityReviews(
+  candidate: CandidateSymbol,
+  options: ScreeningPriorityOptions = {},
+): ScreeningPriorityReview[] {
+  return targetStrategies.map((targetStrategy) => evaluateCandidatePriority(candidate, { ...options, targetStrategy }));
+}
+
+export function buildScreeningPriorityReviewMap(
+  candidates: CandidateSymbol[],
+  options: ScreeningPriorityOptions = {},
+): Record<string, ScreeningPriorityReview[]> {
+  return Object.fromEntries(candidates.map((candidate) => [candidate.id, buildStrategyPriorityReviews(candidate, options)]));
+}
+
+export function selectPriorityReview(
+  reviews: ScreeningPriorityReview[] | undefined,
+  targetStrategy: ScreeningTargetStrategy = "all",
+): ScreeningPriorityReview | undefined {
+  if (!reviews?.length) return undefined;
+  if (targetStrategy !== "all") return reviews.find((review) => review.targetStrategy === targetStrategy);
+  return [...reviews].sort((a, b) => b.score - a.score)[0];
+}
+
 export function evaluateCandidatePriority(
   candidate: CandidateSymbol,
   options: ScreeningPriorityOptions = {},
 ): ScreeningPriorityReview {
-  const topReasons: string[] = [];
-  const penaltyReasons: string[] = [];
-  const missingChecks: string[] = [];
+  const targetStrategy = options.targetStrategy ?? "all";
+  if (targetStrategy === "all") {
+    const reviews = buildStrategyPriorityReviews(candidate, { ...options, targetStrategy: undefined });
+    const best = selectPriorityReview(reviews, "all");
+    return best ?? evaluateCandidateForTarget(candidate, "long_call", options);
+  }
+  return evaluateCandidateForTarget(candidate, targetStrategy, options);
+}
+
+function evaluateCandidateForTarget(
+  candidate: CandidateSymbol,
+  targetStrategy: ScreeningTargetStrategy,
+  options: ScreeningPriorityOptions,
+): ScreeningPriorityReview {
+  const reasons: string[] = [];
+  const blockers: string[] = [];
+  const nextDataNeeded: string[] = [];
+  const warnings: string[] = [];
   const publicInput = candidate.publicScreeningInput;
   const chart = publicInput?.chartAnalysis;
   const completenessLevel = candidate.screeningCompleteness?.level ?? (candidate.screeningCandidate ? "level_1_symbol_price" : "insufficient");
-  const completeness = completenessScore[completenessLevel] ?? 0;
+  const completenessScore = completenessScoreByLevel[completenessLevel] ?? 0;
 
-  if (completenessLevel === "level_4_draft_ready") topReasons.push("データ充足: 建玉案レビューまで確認可能");
-  else if (completenessLevel === "level_3_option_ready") topReasons.push("データ充足: Bid/Ask付きオプション候補あり");
-  else if (completenessLevel === "level_2_chart_ready") topReasons.push("データ充足: チャート確認可能");
-  else missingChecks.push("チャート、オプション、資金条件の追加確認");
+  if (completenessLevel === "level_4_draft_ready") reasons.push("データ充足: 建玉案レビューまで確認可能");
+  else if (completenessLevel === "level_3_option_ready") reasons.push("データ充足: オプション候補確認可能");
+  else if (completenessLevel === "level_2_chart_ready") reasons.push("データ充足: チャート確認可能");
+  else nextDataNeeded.push("チャート分析");
 
-  const chartScore = chart
-    ? (chartConfidenceScore[chart.confidence] ?? 0) + (chartRegimeScore[chart.regime] ?? 0)
-    : candidate.screeningCandidate?.technicalSnapshot?.trendNotes?.length
-      ? 8
-      : -24;
+  const chartScore = evaluateChartScore(chart?.regime, chart?.confidence, targetStrategy);
   if (chart) {
-    if (["bullish_continuation", "upside_reversal", "bullish_pullback"].includes(chart.regime) && chart.confidence !== "low") {
-      topReasons.push(`チャート: ${chart.regime} / ${chart.confidence}`);
-    }
-    if (chart.confidence === "low" || chart.confidence === "insufficient") penaltyReasons.push(`チャート根拠が弱い: ${chart.confidence}`);
-    if (chart.regime === "downtrend" || chart.regime === "bearish_breakdown") penaltyReasons.push(`チャート局面: ${chart.regime}`);
-    missingChecks.push(...chart.missingFields.map((field) => `チャート: ${field}`));
+    reasons.push(`チャート: ${chart.regime} / ${chart.confidence}`);
+    warnings.push(...chart.warnings.map((warning) => `チャート: ${warning}`));
+    nextDataNeeded.push(...chart.missingFields.map((field) => `チャート: ${field}`));
+    if (chart.confidence === "low" || chart.confidence === "insufficient") blockers.push(`チャート根拠が弱い: ${chart.confidence}`);
+    if (chart.regime === "downtrend" || chart.regime === "bearish_breakdown") blockers.push(`チャート局面: ${chart.regime}`);
   } else {
-    penaltyReasons.push("チャート分析なし");
-    missingChecks.push("チャート分析");
+    nextDataNeeded.push("チャート分析");
   }
 
-  const strategyResults = candidate.strategySuitability ?? publicInput?.strategySuitability ?? [];
-  const legacyStrategyResults = candidate.strategyFitResults ?? [];
-  const bestStrategy = strategyResults.length
-    ? [...strategyResults].sort((a, b) => strategyLevelScore[b.level] - strategyLevelScore[a.level])[0]
-    : undefined;
-  const primaryStrategy = bestStrategy?.strategy ?? legacyStrategyResults[0]?.strategy;
-  const strategy = strategyResults.length
-    ? Math.max(...strategyResults.map((item) => strategyLevelScore[item.level] ?? 0))
-    : legacyStrategyResults.length
-      ? Math.max(...legacyStrategyResults.map((item) => strategyLevelScore[item.fitLevel] ?? 0))
-      : -6;
-  if (bestStrategy) {
-    if (bestStrategy.level === "fit") topReasons.push(`戦略: ${strategyLabel(bestStrategy.strategy)} 候補`);
-    if (bestStrategy.level === "watch") missingChecks.push(`戦略: ${strategyLabel(bestStrategy.strategy)} は監視条件`);
-    if (bestStrategy.level === "manual_review_required") missingChecks.push(`戦略: ${strategyLabel(bestStrategy.strategy)} は手動確認`);
-    if (bestStrategy.level === "avoid" || bestStrategy.level === "insufficient_data") penaltyReasons.push(`戦略: ${strategyLabel(bestStrategy.strategy)} ${fitLevelLabel(bestStrategy.level)}`);
-    missingChecks.push(...bestStrategy.missingFields.map((field) => `戦略: ${field}`));
-    missingChecks.push(...(bestStrategy.manualReviewReasons ?? []));
-  } else if (legacyStrategyResults.length === 0) {
-    missingChecks.push("戦略適性");
+  const strategyResult = findStrategyResult(candidate, targetStrategy);
+  const strategyScore = strategyResult ? strategyLevelScore[strategyResult.level] ?? 0 : inferStrategyScore(candidate, targetStrategy);
+  if (strategyResult) {
+    reasons.push(`戦略: ${targetStrategyLabel(targetStrategy)} ${fitLevelLabel(strategyResult.level)}`);
+    warnings.push(...strategyResult.warnings.map((warning) => `戦略: ${warning}`));
+    nextDataNeeded.push(...strategyResult.missingFields.map((field) => `戦略: ${field}`));
+    nextDataNeeded.push(...(strategyResult.nextChecks ?? []));
+    nextDataNeeded.push(...(strategyResult.manualReviewReasons ?? []));
+    if (strategyResult.level === "avoid") blockers.push(`戦略判定: ${targetStrategyLabel(targetStrategy)} は候補外`);
+    if (strategyResult.level === "insufficient_data") nextDataNeeded.push(`戦略判定: ${targetStrategyLabel(targetStrategy)} の追加データ`);
+  } else {
+    nextDataNeeded.push(`戦略判定: ${targetStrategyLabel(targetStrategy)}`);
   }
 
-  const liquidity = evaluateLiquidity(candidate, publicInput?.optionCandidates ?? []);
-  topReasons.push(...liquidity.topReasons);
-  penaltyReasons.push(...liquidity.penaltyReasons);
-  missingChecks.push(...liquidity.missingChecks);
+  const stockQuality = evaluateStockQuality(candidate);
+  reasons.push(...stockQuality.reasons);
+  nextDataNeeded.push(...stockQuality.nextDataNeeded);
 
-  const capital = evaluateCapital(candidate, candidate.positionDrafts ?? publicInput?.positionDrafts ?? []);
-  topReasons.push(...capital.topReasons);
-  penaltyReasons.push(...capital.penaltyReasons);
-  missingChecks.push(...capital.missingChecks);
+  const option = evaluateOptionReadiness(candidate, publicInput?.optionCandidates ?? []);
+  reasons.push(...option.reasons);
+  blockers.push(...option.blockers);
+  nextDataNeeded.push(...option.nextDataNeeded);
+  warnings.push(...option.warnings);
+
+  const capital = evaluateCapitalReadiness(candidate, candidate.positionDrafts ?? publicInput?.positionDrafts ?? [], targetStrategy);
+  reasons.push(...capital.reasons);
+  blockers.push(...capital.blockers);
+  nextDataNeeded.push(...capital.nextDataNeeded);
+  warnings.push(...capital.warnings);
 
   const eventRisk = evaluateEventRisk(candidate);
-  penaltyReasons.push(...eventRisk.penaltyReasons);
-  missingChecks.push(...eventRisk.missingChecks);
+  blockers.push(...eventRisk.blockers);
+  nextDataNeeded.push(...eventRisk.nextDataNeeded);
 
-  const hasExistingPosition = options.existingSymbols?.has(candidate.symbol.trim().toUpperCase()) ?? false;
-  const existingPosition = hasExistingPosition || publicInput?.existingPosition?.stockShares ? 5 : 0;
-  if (existingPosition > 0) topReasons.push("既存建玉/保有株との関連確認対象");
+  const existingPositionScore = options.existingSymbols?.has(candidate.symbol.trim().toUpperCase()) || publicInput?.existingPosition?.stockShares ? 3 : 0;
+  if (existingPositionScore > 0) reasons.push("既存建玉/保有株との関連確認対象");
 
-  const sortKeys = {
-    completeness,
-    chart: chartScore,
-    strategy,
-    liquidity: liquidity.score,
-    capital: capital.score,
-    eventRisk: eventRisk.score,
-    existingPosition,
-  };
   const rawScore =
-    sortKeys.completeness +
-    sortKeys.chart * 1.8 +
-    sortKeys.strategy +
-    sortKeys.liquidity +
-    sortKeys.capital +
-    sortKeys.eventRisk +
-    sortKeys.existingPosition;
-  const hardBlocked =
-    completenessLevel === "insufficient" ||
-    chartScore <= -35 ||
-    capital.hardStop ||
-    liquidity.hardStop ||
-    strategy <= -24;
-  const normalizedScore = Math.round(rawScore / 1.6);
-  const weakChartCap = chart && (chart.confidence === "low" || chart.regime === "range_neutral") ? 74 : 100;
-  const priorityScore = Math.max(0, Math.min(weakChartCap, normalizedScore));
-  const priorityBand: ScreeningPriorityBand = hardBlocked
-    ? "blocked"
-    : priorityScore >= 78
-      ? "high"
-      : priorityScore >= 48
-        ? "medium"
-        : "low";
-
+    chartScore +
+    Math.max(0, strategyScore) +
+    completenessScore +
+    stockQuality.score +
+    option.score +
+    capital.score +
+    existingPositionScore +
+    eventRisk.score;
+  const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+  const band = resolvePriorityBand({
+    score,
+    chartScore,
+    strategyScore,
+    completenessLevel,
+    blockers,
+    nextDataNeeded,
+    targetStrategy,
+    optionHasBidAsk: option.hasBidAsk,
+  });
+  const primaryStrategy = mapTargetToPrimaryStrategy(targetStrategy, strategyResult?.strategy);
   const review: ScreeningPriorityReview = {
     candidateId: candidate.id,
     symbol: candidate.symbol,
-    priorityScore: priorityBand === "blocked" ? Math.min(priorityScore, 35) : priorityScore,
-    priorityBand,
-    topReasons: unique(topReasons).slice(0, 5),
-    penaltyReasons: unique(penaltyReasons).slice(0, 6),
-    missingChecks: unique(missingChecks).slice(0, 7),
+    targetStrategy,
+    band,
+    score: band === "avoid" || band === "insufficient_data" ? Math.min(score, 45) : score,
+    chartScore,
+    strategyScore: Math.max(0, strategyScore),
+    completenessScore,
+    stockQualityScore: stockQuality.score,
+    optionReadinessScore: option.score,
+    capitalReadinessScore: capital.score,
+    reasons: unique(reasons).slice(0, 6),
+    blockers: unique(blockers).slice(0, 7),
+    nextDataNeeded: unique(nextDataNeeded).slice(0, 8),
+    warnings: unique(warnings).slice(0, 6),
     primaryStrategy,
-    primaryStrategyLabel: primaryStrategy ? strategyLabel(primaryStrategy) : undefined,
-    sortKeys,
+    primaryStrategyLabel: primaryStrategy ? strategyLabel(primaryStrategy) : targetStrategyLabel(targetStrategy),
+    sortKeys: {
+      completeness: completenessScore,
+      chart: chartScore,
+      strategy: Math.max(0, strategyScore),
+      liquidity: option.score,
+      capital: capital.score,
+      eventRisk: eventRisk.score,
+      existingPosition: existingPositionScore,
+      stockQuality: stockQuality.score,
+    },
+    priorityScore: 0,
+    priorityBand: band,
+    topReasons: [],
+    penaltyReasons: [],
+    missingChecks: [],
   };
-  if (review.topReasons.length === 0) review.topReasons.push("確認材料を追加すると優先度を判定しやすくなります");
-  if (review.priorityBand === "blocked" && review.penaltyReasons.length === 0) review.penaltyReasons.push("建玉案レビューへ進む条件が不足しています");
+  review.priorityScore = review.score;
+  review.topReasons = review.reasons;
+  review.penaltyReasons = [...review.blockers, ...review.warnings];
+  review.missingChecks = review.nextDataNeeded;
+  if (review.reasons.length === 0) review.reasons.push("確認材料を追加すると確認順を判定しやすくなります");
   return review;
 }
 
-function evaluateLiquidity(candidate: CandidateSymbol, options: PublicOptionCandidateInput[]) {
-  const topReasons: string[] = [];
-  const penaltyReasons: string[] = [];
-  const missingChecks: string[] = [];
-  const quality = candidate.screeningCandidate?.optionChainQuality;
-  const hasBidAsk = options.some((option) => isFiniteNumber(option.bid) && isFiniteNumber(option.ask));
-  const lastOnly = options.some((option) => !isFiniteNumber(option.bid) && !isFiniteNumber(option.ask) && isFiniteNumber(option.last));
-  const spreads = options
-    .map((option) => calculateSpreadRate(option))
-    .filter(isFiniteNumber);
-  const minSpread = spreads.length ? Math.min(...spreads) : quality?.bidAskSpreadRate;
-  const hasVolumeOi = options.some((option) => (option.volume ?? 0) >= 50 && (option.openInterest ?? 0) >= 300);
-  let score = 0;
-
-  if (hasBidAsk) {
-    score += 16;
-    topReasons.push("流動性: Bid/Askあり");
-  } else if (quality?.hasOptionChain) {
-    score -= 10;
-    missingChecks.push("オプションBid/Ask");
-  } else if (options.length > 0 || quality?.hasOptionChain === false) {
-    score -= 18;
-    missingChecks.push("利用可能なオプションチェーン");
-  }
-  if (lastOnly) {
-    score -= 22;
-    penaltyReasons.push("流動性: Lastのみで保守価格なし");
-    if (!hasBidAsk) missingChecks.push("オプションBid/Ask");
-  }
-  if (isFiniteNumber(minSpread)) {
-    if (minSpread <= 0.12) {
-      score += 8;
-      topReasons.push(`流動性: spread ${(minSpread * 100).toFixed(1)}%`);
-    } else if (minSpread >= 0.25) {
-      score -= 14;
-      penaltyReasons.push(`流動性: spread ${(minSpread * 100).toFixed(1)}%`);
-    } else {
-      missingChecks.push(`流動性: spread ${(minSpread * 100).toFixed(1)}%`);
-    }
-  }
-  if (hasVolumeOi) {
-    score += 6;
-  } else if (options.length > 0) {
-    score -= 6;
-    missingChecks.push("Volume / Open Interest");
-  }
-  const qualityWarnings = quality?.qualityWarnings ?? [];
-  if (qualityWarnings.length > 0) {
-    score -= Math.min(18, qualityWarnings.length * 6);
-    penaltyReasons.push(...qualityWarnings.map((warning) => `流動性: ${warning}`));
-  }
-  return {
-    score,
-    topReasons,
-    penaltyReasons,
-    missingChecks,
-    hardStop: lastOnly && !hasBidAsk,
-  };
+function evaluateChartScore(regime: ChartRegime | undefined, confidence: ChartConfidence | undefined, target: ScreeningTargetStrategy): number {
+  if (!regime || !confidence || regime === "insufficient_data" || confidence === "insufficient") return 0;
+  let base = chartConfidenceScore[confidence] ?? 0;
+  const bullishTargets: ScreeningTargetStrategy[] = ["long_call", "upside_reversal_combo", "synthetic_forward", "wheel_cycle"];
+  const incomeTargets: ScreeningTargetStrategy[] = ["cash_secured_put_buy_to_own", "cash_secured_put_avoid_assignment", "covered_call", "wheel_cycle"];
+  if (regime === "upside_reversal") base += bullishTargets.includes(target) ? 21 : 13;
+  else if (regime === "bullish_continuation") base += bullishTargets.includes(target) ? 18 : 12;
+  else if (regime === "bullish_pullback") base += incomeTargets.includes(target) ? 18 : 14;
+  else if (regime === "range_neutral") base += incomeTargets.includes(target) ? 11 : 4;
+  else if (regime === "downtrend_rebound") base += target === "upside_reversal_combo" || target === "long_call" ? 10 : 3;
+  else if (regime === "event_large_move_unknown") base += target === "long_call" ? 5 : 1;
+  else base -= 18;
+  return Math.max(0, Math.min(35, base));
 }
 
-function evaluateCapital(candidate: CandidateSymbol, drafts: PositionDraft[]) {
-  const topReasons: string[] = [];
-  const penaltyReasons: string[] = [];
-  const missingChecks: string[] = [];
-  const ready = drafts.some((draft) => draft.status === "draft_ready");
-  const manual = drafts.some((draft) => draft.status === "manual_review_required");
-  const notReady = drafts.some((draft) => draft.status === "not_ready");
+function findStrategyResult(candidate: CandidateSymbol, target: ScreeningTargetStrategy) {
+  const strategies = candidate.strategySuitability ?? candidate.publicScreeningInput?.strategySuitability ?? [];
+  const mapped = targetToStrategyKinds(target);
+  return strategies.find((item) => mapped.includes(item.strategy));
+}
+
+function inferStrategyScore(candidate: CandidateSymbol, target: ScreeningTargetStrategy): number {
+  if (target === "upside_reversal_combo" && candidate.technicalTimingPatterns?.some((item) => item.fitLevel === "fit" || item.fitLevel === "watch")) return 14;
+  if (target === "synthetic_forward" && candidate.syntheticForwardCandidates?.some((item) => item.fitLevel === "fit" || item.fitLevel === "watch")) return 12;
+  if (target === "wheel_cycle" && candidate.strategySuitability?.some((item) => item.strategy === "covered_call" || item.strategy === "cash_secured_put_buy_to_own")) return 10;
+  return 0;
+}
+
+function evaluateStockQuality(candidate: CandidateSymbol) {
+  const reasons: string[] = [];
+  const nextDataNeeded: string[] = [];
   let score = 0;
+  if ((candidate.marketCapUSD ?? 0) >= 10_000_000_000) {
+    score += 4;
+    reasons.push("株式品質: 大型株");
+  } else if (candidate.marketCapUSD === undefined) {
+    nextDataNeeded.push("時価総額");
+  }
+  if ((candidate.volume ?? 0) >= 1_000_000) {
+    score += 3;
+    reasons.push("株式品質: 出来高あり");
+  } else if (candidate.volume === undefined) {
+    nextDataNeeded.push("出来高");
+  }
+  if ((candidate.relativeVolume ?? 0) >= 1.2) score += 2;
+  if (candidate.per !== undefined) score += 1;
+  return { score: Math.min(10, score), reasons, nextDataNeeded };
+}
 
-  if (ready) {
-    score += 16;
-    topReasons.push("資金: 建玉案レビュー可");
-  } else if (manual) {
-    score += 2;
-    missingChecks.push("資金: 手動確認");
-  } else if (candidate.screeningCompleteness?.level === "level_4_draft_ready") {
-    score -= 12;
-    missingChecks.push("建玉案ステータス");
+function evaluateOptionReadiness(candidate: CandidateSymbol, options: PublicOptionCandidateInput[]) {
+  const reasons: string[] = [];
+  const blockers: string[] = [];
+  const nextDataNeeded: string[] = [];
+  const warnings: string[] = [];
+  const quality = candidate.screeningCandidate?.optionChainQuality;
+  const hasBidAsk = options.some((option) => isFiniteNumber(option.bid) && isFiniteNumber(option.ask));
+  const hasVolumeOi = options.some((option) => (option.volume ?? 0) >= 50 && (option.openInterest ?? 0) >= 300);
+  const lastOnly = options.some((option) => !isFiniteNumber(option.bid) && !isFiniteNumber(option.ask) && isFiniteNumber(option.last));
+  let score = 0;
+  if (hasBidAsk) {
+    score += 5;
+    reasons.push("オプション: Bid/Askあり");
   } else {
-    score -= 6;
-    missingChecks.push("資金条件");
+    nextDataNeeded.push("option bid/ask");
   }
+  if (hasVolumeOi) {
+    score += 3;
+    reasons.push("オプション: Volume/Open Interest確認可");
+  } else {
+    nextDataNeeded.push("open interest");
+    nextDataNeeded.push("volume");
+  }
+  if (options.some((option) => isFiniteNumber(option.iv) || isFiniteNumber(option.delta))) score += 2;
+  else nextDataNeeded.push("IV/Greeks");
+  if (lastOnly) blockers.push("Lastのみで保守価格なし");
+  warnings.push(...(quality?.qualityWarnings ?? []));
+  if (quality?.hasOptionChain === false) nextDataNeeded.push("option chain");
+  return { score: Math.max(0, Math.min(10, score)), reasons, blockers, nextDataNeeded, warnings, hasBidAsk };
+}
 
-  for (const draft of drafts) {
+function evaluateCapitalReadiness(candidate: CandidateSymbol, drafts: PositionDraft[], target: ScreeningTargetStrategy) {
+  const reasons: string[] = [];
+  const blockers: string[] = [];
+  const nextDataNeeded: string[] = [];
+  const warnings: string[] = [];
+  const relevantDrafts = drafts.filter((draft) => target === "all" || targetToStrategyKinds(target).includes(draft.strategy));
+  const draftPool = relevantDrafts.length ? relevantDrafts : drafts;
+  let score = 0;
+  if (draftPool.some((draft) => draft.status === "draft_ready")) {
+    score += 5;
+    reasons.push("資金: 建玉案レビュー可");
+  } else if (draftPool.some((draft) => draft.status === "manual_review_required")) {
+    score += 2;
+    nextDataNeeded.push("capital manual check");
+  } else {
+    nextDataNeeded.push("capital");
+  }
+  for (const draft of draftPool) {
     const shortage = isFiniteNumber(draft.requiredCapitalUSD) && isFiniteNumber(draft.availableCashUSD) && draft.availableCashUSD < draft.requiredCapitalUSD;
-    const lossOverTolerance = draft.warnings.some((warning) => warning.includes("最大損失") || warning.includes("不足"));
-    if (draft.status === "not_ready" || shortage || lossOverTolerance) {
-      score -= shortage ? 34 : 22;
-      penaltyReasons.push(shortage ? `資金不足: 必要 ${formatUSD(draft.requiredCapitalUSD)} / 利用可能 ${formatUSD(draft.availableCashUSD)}` : `建玉案未準備: ${strategyLabel(draft.strategy)}`);
-    }
-    missingChecks.push(...draft.missingFields.map((field) => `建玉案: ${field}`));
-    penaltyReasons.push(...draft.warnings.filter((warning) => warning.includes("不足") || warning.includes("超え")));
+    if (shortage) blockers.push(`資金不足: 必要 ${formatUSD(draft.requiredCapitalUSD)} / 利用可能 ${formatUSD(draft.availableCashUSD)}`);
+    warnings.push(...draft.warnings);
+    nextDataNeeded.push(...draft.missingFields.map((field) => `建玉案: ${field}`));
   }
-
-  return {
-    score,
-    topReasons,
-    penaltyReasons: unique(penaltyReasons),
-    missingChecks: unique(missingChecks),
-    hardStop: notReady || penaltyReasons.some((reason) => reason.includes("資金不足")),
-  };
+  if (candidate.publicScreeningInput?.capital === undefined) nextDataNeeded.push("available cash");
+  return { score: Math.max(0, Math.min(5, score)), reasons, blockers, nextDataNeeded, warnings };
 }
 
 function evaluateEventRisk(candidate: CandidateSymbol) {
-  const penaltyReasons: string[] = [];
-  const missingChecks: string[] = [];
+  const blockers: string[] = [];
+  const nextDataNeeded: string[] = [];
   let score = 0;
   const event = candidate.publicScreeningInput?.event;
-  if (candidate.earningsWarning) {
-    score -= 12;
-    penaltyReasons.push(`イベント: ${candidate.earningsWarning}`);
-  }
-  if (event?.earningsDate || event?.importantEventDate) {
-    score -= 8;
-    penaltyReasons.push(`イベント日確認: ${event.earningsDate ?? event.importantEventDate}`);
-  } else {
-    missingChecks.push("決算日/重要イベント");
-  }
-  if (isFiniteNumber(event?.expectedMovePct) && event.expectedMovePct >= 8) {
-    score -= 8;
-    penaltyReasons.push(`イベント変動想定: ${event.expectedMovePct.toFixed(1)}%`);
-  }
-  return { score, penaltyReasons, missingChecks };
+  if (candidate.earningsWarning) blockers.push(`イベント: ${candidate.earningsWarning}`);
+  if (event?.earningsDate || event?.importantEventDate) blockers.push(`イベント日確認: ${event.earningsDate ?? event.importantEventDate}`);
+  else nextDataNeeded.push("earnings date");
+  if (event?.expectedMovePct !== undefined && event.expectedMovePct >= 8) blockers.push(`イベント変動想定: ${event.expectedMovePct.toFixed(1)}%`);
+  if (blockers.length === 0) score += 2;
+  return { score, blockers, nextDataNeeded };
+}
+
+function resolvePriorityBand(input: {
+  score: number;
+  chartScore: number;
+  strategyScore: number;
+  completenessLevel: ScreeningCompletenessLevel;
+  blockers: string[];
+  nextDataNeeded: string[];
+  targetStrategy: ScreeningTargetStrategy;
+  optionHasBidAsk: boolean;
+}): ScreeningPriorityBand {
+  if (input.completenessLevel === "insufficient" || input.chartScore <= 0) return "insufficient_data";
+  if (input.strategyScore < 0 || input.blockers.some((item) => /候補外|bearish|downtrend|Lastのみ|資金不足|チャート局面/.test(item))) return "avoid";
+  if (input.score >= 70) return "primary_watch";
+  if (input.score >= 48) return "secondary_watch";
+  if (input.nextDataNeeded.length > 0 || !input.optionHasBidAsk) return "manual_review";
+  return "secondary_watch";
+}
+
+export function priorityBandLabel(band: ScreeningPriorityBand): string {
+  if (band === "primary_watch") return "確認優先";
+  if (band === "secondary_watch") return "次点";
+  if (band === "manual_review") return "手動確認";
+  if (band === "avoid") return "候補外";
+  return "データ不足";
 }
 
 export function strategyLabel(strategy: StrategyCandidateKind): string {
   const labels: Record<StrategyCandidateKind, string> = {
     long_call: "コール買い",
     cash_secured_put_buy_to_own: "買いたいP売り",
-    cash_secured_put_avoid_assignment: "反対売買前提P売り",
+    cash_secured_put_avoid_assignment: "買わないプット売り",
     covered_call: "カバードコール",
     wheel: "Wheel",
     short_strangle: "ショートストラングル",
@@ -348,19 +438,18 @@ export function strategyLabel(strategy: StrategyCandidateKind): string {
   return labels[strategy] ?? strategy;
 }
 
-function fitLevelLabel(level: PublicStrategyFitLevel): string {
-  if (level === "fit") return "候補";
-  if (level === "watch") return "監視";
-  if (level === "manual_review_required") return "手動確認";
-  if (level === "avoid") return "候補外";
-  return "データ不足";
-}
-
-export function priorityBandLabel(band: ScreeningPriorityBand): string {
-  if (band === "high") return "高";
-  if (band === "medium") return "中";
-  if (band === "low") return "低";
-  return "保留";
+export function targetStrategyLabel(strategy: ScreeningTargetStrategy): string {
+  const labels: Record<ScreeningTargetStrategy, string> = {
+    all: "すべて",
+    cash_secured_put_buy_to_own: "P売り・買ってよい",
+    cash_secured_put_avoid_assignment: "買わないプット売り",
+    covered_call: "カバードコール",
+    long_call: "コール買い",
+    upside_reversal_combo: "上昇転換コンボ",
+    synthetic_forward: "シンセティック",
+    wheel_cycle: "ホイール",
+  };
+  return labels[strategy];
 }
 
 export function getBestDraft(candidate: CandidateSymbol): PositionDraft | undefined {
@@ -386,6 +475,27 @@ export function calculateSpreadRate(option?: PublicOptionCandidateInput): number
   const mid = isFiniteNumber(option.mid) && option.mid > 0 ? option.mid : (option.bid + option.ask) / 2;
   if (mid <= 0) return undefined;
   return (option.ask - option.bid) / mid;
+}
+
+function targetToStrategyKinds(target: ScreeningTargetStrategy): StrategyCandidateKind[] {
+  if (target === "upside_reversal_combo") return ["combo"];
+  if (target === "wheel_cycle") return ["wheel", "cash_secured_put_buy_to_own", "covered_call"];
+  if (target === "synthetic_forward") return ["synthetic_forward"];
+  if (target === "all") return [];
+  return [target];
+}
+
+function mapTargetToPrimaryStrategy(target: ScreeningTargetStrategy, fallback?: StrategyCandidateKind): StrategyCandidateKind | undefined {
+  if (fallback) return fallback;
+  return targetToStrategyKinds(target)[0];
+}
+
+function fitLevelLabel(level: PublicStrategyFitLevel): string {
+  if (level === "fit") return "候補";
+  if (level === "watch") return "監視";
+  if (level === "manual_review_required") return "手動確認";
+  if (level === "avoid") return "候補外";
+  return "データ不足";
 }
 
 function draftRank(draft: PositionDraft): number {

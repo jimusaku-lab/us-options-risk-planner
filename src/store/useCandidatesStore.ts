@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { CandidateImportSummary, CandidateReviewChecklistState, CandidateSymbol } from "@/types/candidates";
 import type { EntryRationaleJournal } from "@/types/domain";
+import { updatePositionDraftReviewChecklist } from "@/domain/positionDrafts";
+import type { PositionDraft, PositionDraftReviewChecklistId } from "@/types/screening";
 
 const CANDIDATES_KEY = "us-options-candidate-symbols-v1";
 
@@ -30,6 +32,7 @@ type CandidatesStore = {
   markCandidateWatchOnly: (id: string, watchOnly: boolean) => void;
   updateCandidateJournal: (id: string, journal: EntryRationaleJournal) => void;
   updateCandidateChecklist: (id: string, checklist: CandidateReviewChecklistState) => void;
+  updateCandidatePositionDraftReview: (id: string, draftId: string, itemId: PositionDraftReviewChecklistId, checked: boolean) => void;
 };
 
 const initialCandidates = loadJson<CandidateSymbol[]>(CANDIDATES_KEY, []);
@@ -92,6 +95,21 @@ export const useCandidatesStore = create<CandidatesStore>((set) => ({
             }
           : candidate,
       );
+      saveJson(CANDIDATES_KEY, candidates);
+      return { candidates };
+    }),
+  updateCandidatePositionDraftReview: (id, draftId, itemId, checked) =>
+    set((state) => {
+      const candidates = state.candidates.map((candidate) => {
+        if (candidate.id !== id) return candidate;
+        const updateDrafts = (drafts: PositionDraft[] = []) =>
+          drafts.map((draft) => (draft.id === draftId ? updatePositionDraftReviewChecklist(draft, itemId, checked) : draft));
+        const positionDrafts = updateDrafts(candidate.positionDrafts);
+        const publicScreeningInput = candidate.publicScreeningInput
+          ? { ...candidate.publicScreeningInput, positionDrafts: updateDrafts(candidate.publicScreeningInput.positionDrafts) }
+          : candidate.publicScreeningInput;
+        return { ...candidate, positionDrafts, publicScreeningInput };
+      });
       saveJson(CANDIDATES_KEY, candidates);
       return { candidates };
     }),

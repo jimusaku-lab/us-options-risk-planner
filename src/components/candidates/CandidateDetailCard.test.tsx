@@ -329,6 +329,14 @@ function buildCandidate(): CandidateSymbol {
         availableCashUSD: 2_000,
         warnings: ["建玉案レビューのみ"],
         missingFields: [],
+        reviewState: {
+          reviewStatus: "not_reviewed",
+          checklist: [
+            { id: "chart_confirmed", label: "チャート根拠を確認した", checked: false, required: true, blockingIfUnchecked: true },
+            { id: "saxo_ticket_confirmed", label: "証券会社画面の価格を最終確認する", checked: false, required: true, blockingIfUnchecked: true },
+          ],
+          transferWarnings: ["証券会社画面で最終確認するまで入力候補にしません。"],
+        },
         legs: [
           {
             id: "call-1-leg",
@@ -500,9 +508,14 @@ describe("CandidateDetailCard", () => {
     render(<CandidateDetailCard candidate={buildCandidate()} />);
 
     expect(screen.getByText("候補詳細")).toBeInTheDocument();
+    expect(screen.getByText("総合判定")).toBeInTheDocument();
+    expect(screen.getAllByText("チャート根拠").length).toBeGreaterThan(0);
+    expect(screen.getByText("第一候補")).toBeInTheDocument();
+    expect(screen.getByText("不足データ・次アクション")).toBeInTheDocument();
+    expect(screen.queryByText("戦略別ランキングレビュー")).not.toBeInTheDocument();
     expect(screen.getByText("MACD is bullish")).toBeInTheDocument();
     expect(screen.getByText("earnings date not confirmed")).toBeInTheDocument();
-    expect(screen.getAllByText("optionContracts.delta").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Delta不足").length).toBeGreaterThan(0);
     expect(screen.getByText("利確ルール")).toBeInTheDocument();
     expect(screen.getByText("Bid/Ask spread")).toBeInTheDocument();
     expect(screen.getAllByText("Bid/Ask spread is wide").length).toBeGreaterThan(0);
@@ -510,11 +523,11 @@ describe("CandidateDetailCard", () => {
     expect(screen.getByText("signal order is valid")).toBeInTheDocument();
     expect(screen.getByText("synthetic delta is high")).toBeInTheDocument();
     expect(screen.getByText("assignment capital shortage")).toBeInTheDocument();
-    expect(screen.getByText("assignmentCapitalRequired")).toBeInTheDocument();
+    expect(screen.getAllByText("割当必要資金").length).toBeGreaterThan(0);
     expect(screen.getByText("データ充足")).toBeInTheDocument();
-    expect(screen.getByText("level_4_draft_ready")).toBeInTheDocument();
+    expect(screen.getByText("L4 建玉案レビュー可")).toBeInTheDocument();
     expect(screen.getByText("チャート分析")).toBeInTheDocument();
-    expect(screen.getByText("chart regime is bullish")).toBeInTheDocument();
+    expect(screen.getAllByText("chart regime is bullish").length).toBeGreaterThan(0);
     expect(screen.getByText("戦略適性")).toBeInTheDocument();
     expect(screen.getAllByText("手動確認").length).toBeGreaterThan(0);
     expect(screen.getByText("review before draft")).toBeInTheDocument();
@@ -535,10 +548,14 @@ describe("CandidateDetailCard", () => {
     expect(screen.getByText("建玉案レビュー")).toBeInTheDocument();
     expect(screen.queryByText("draft_ready")).not.toBeInTheDocument();
     expect(screen.getAllByText("建玉案レビュー可").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("requiredCapitalUSD").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("必要資金").length).toBeGreaterThan(0);
+    expect(screen.getByText("手動確認ハンドオフ")).toBeInTheDocument();
+    expect(screen.getByText("Saxo TraderGO等で確認するためのメモ")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "手動確認メモをコピー" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "レビューJSONを書き出す" })).toBeInTheDocument();
     expect(screen.getByText("上級戦略レビュー")).toBeInTheDocument();
-    expect(screen.getByText("Short Strangle Advanced Review")).toBeInTheDocument();
-    expect(screen.getByText("naked_call_risk: 100株カバーが確認できません。")).toBeInTheDocument();
+    expect(screen.getByText("ショートストラングル（上級確認）")).toBeInTheDocument();
+    expect(screen.getByText("裸コールリスク: 100株カバーが確認できません。")).toBeInTheDocument();
     expect(screen.getByText("裸コール化しないことを確認してください。")).toBeInTheDocument();
     expect(screen.getByText("$153.70")).toBeInTheDocument();
 
@@ -547,6 +564,45 @@ describe("CandidateDetailCard", () => {
     expect(screen.queryByText("123456789")).not.toBeInTheDocument();
     expect(screen.queryByText("/Users/motomichi/private/input.json")).not.toBeInTheDocument();
     expect(screen.queryByText("secret-api-key")).not.toBeInTheDocument();
+  });
+
+  it("keeps priority scores collapsed as internal strategy comparison", () => {
+    render(
+      <CandidateDetailCard
+        candidate={buildCandidate()}
+        priorityReviews={[
+          {
+            candidateId: "candidate-NVDA",
+            symbol: "NVDA",
+            targetStrategy: "long_call",
+            band: "manual_review",
+            score: 33,
+            chartScore: 20,
+            strategyScore: 10,
+            completenessScore: 3,
+            stockQualityScore: 0,
+            optionReadinessScore: 0,
+            capitalReadinessScore: 0,
+            reasons: ["チャート確認"],
+            blockers: ["資金確認待ち"],
+            nextDataNeeded: ["option bid/ask"],
+            warnings: [],
+            primaryStrategy: "long_call",
+            primaryStrategyLabel: "コール買い",
+            sortKeys: { completeness: 3, chart: 20, strategy: 10, liquidity: 0, capital: 0, eventRisk: 0, existingPosition: 0, stockQuality: 0 },
+            priorityScore: 33,
+            priorityBand: "manual_review",
+            topReasons: ["チャート確認"],
+            penaltyReasons: ["資金確認待ち"],
+            missingChecks: ["option bid/ask"],
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("戦略別ランキングレビュー")).not.toBeInTheDocument();
+    expect(screen.getByText("全戦略比較（内部スコア詳細）")).toBeInTheDocument();
+    expect(screen.getByText(/内部スコアは確認順の補助/)).toBeInTheDocument();
   });
 
   it("saves checklist changes and reflects review details to the journal only when requested", () => {
@@ -582,7 +638,7 @@ describe("CandidateDetailCard", () => {
       />,
     );
 
-    fireEvent.click(screen.getByLabelText(/チャート根拠を確認した/));
+    fireEvent.click(screen.getAllByLabelText(/チャート根拠を確認した/)[0]);
     expect(onChecklistChange).toHaveBeenCalledTimes(1);
     expect(onChecklistChange.mock.calls[0][0].items.some((item: { label: string; checked: boolean }) => item.label === "チャート根拠を確認した" && item.checked)).toBe(true);
     expect(onJournalChange).not.toHaveBeenCalled();
@@ -591,6 +647,51 @@ describe("CandidateDetailCard", () => {
     expect(onJournalChange).toHaveBeenCalledTimes(1);
     expect(onJournalChange.mock.calls[0][0].entryReason).toContain("候補レビュー: NVDA / コール買い");
     expect(JSON.stringify(onJournalChange.mock.calls[0][0])).not.toContain("secret-token");
+  });
+
+  it("updates draft review checklist and reflects safe handoff details without overwriting entry reason", () => {
+    const onDraftReviewChecklistChange = vi.fn();
+    const onJournalChange = vi.fn();
+    const candidate = buildCandidate();
+
+    render(
+      <CandidateDetailCard
+        candidate={candidate}
+        onDraftReviewChecklistChange={onDraftReviewChecklistChange}
+        onJournalChange={onJournalChange}
+        getDefaultJournal={() => ({
+          id: "journal-default",
+          candidateId: candidate.id,
+          symbol: candidate.symbol,
+          underlyingName: candidate.company,
+          strategy: "custom",
+          accountCode: "UNKNOWN",
+          status: "candidate",
+          createdAt: "2026-07-05T00:00:00.000Z",
+          updatedAt: "2026-07-05T00:00:00.000Z",
+          entryReason: "ユーザーが書いた理由",
+          technicalTags: [],
+          technicalMemo: "既存メモ",
+          expectedScenario: "",
+          profitTakingPlan: "",
+          stopLossPlan: "",
+          invalidationCondition: "",
+          chartEvidence: [],
+          review: { outcome: "not_reviewed" },
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByLabelText(/チャート根拠を確認した/).at(-1)!);
+    expect(onDraftReviewChecklistChange).toHaveBeenCalledWith("draft-long-call", "chart_confirmed", true);
+
+    fireEvent.click(screen.getByRole("button", { name: "根拠メモへ反映" }));
+    expect(onJournalChange).toHaveBeenCalledTimes(1);
+    expect(onJournalChange.mock.calls[0][0].entryReason).toBe("ユーザーが書いた理由");
+    expect(onJournalChange.mock.calls[0][0].technicalMemo).toContain("レビュー要約: NVDA");
+    expect(onJournalChange.mock.calls[0][0].technicalMemo).toContain("Saxo TraderGO");
+    expect(JSON.stringify(onJournalChange.mock.calls[0][0])).not.toContain("secret-token");
+    expect(JSON.stringify(onJournalChange.mock.calls[0][0])).not.toContain("/Users/motomichi/private/input.json");
   });
 
   it("does not crash for legacy candidates without screeningCandidate", () => {

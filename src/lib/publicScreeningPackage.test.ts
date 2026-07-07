@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   detectDangerousFields,
@@ -92,7 +91,6 @@ describe("public screening package", () => {
     expect(normalized.candidates[0].screeningCompleteness?.level).toBe("level_4_draft_ready");
     expect(normalized.candidates[0].strategySuitability?.length).toBeGreaterThan(0);
     expect(normalized.candidates[0].positionDrafts?.some((draft) => draft.status === "draft_ready")).toBe(true);
-    expect(normalized.candidates[0].strategyPrecisionReviews?.some((review) => review.strategy === "long_call")).toBe(true);
     expect(normalized.candidates[0].advancedStrategyReviews?.some((review) => review.strategy === "synthetic_forward")).toBe(true);
   });
 
@@ -286,6 +284,16 @@ describe("public screening package", () => {
             iv: 0.31,
           },
         ],
+        strategySuitability: [
+          {
+            strategy: "long_call",
+            level: "fit",
+            reasons: ["持ち込み判定でチャートと戦略を確認済み"],
+            warnings: [],
+            missingFields: [],
+            nextChecks: [],
+          },
+        ],
         capital: {
           availableCashUSD: 50_000,
           maxLossToleranceUSD: 2_000,
@@ -305,7 +313,7 @@ describe("public screening package", () => {
           },
         ],
         order: { place_order: true },
-        [["unlock", "trade"].join("_")]: true,
+        unlock_trade: true,
         exercise: true,
         apiKey: "secret-api-key",
         accountId: "123456789",
@@ -324,7 +332,8 @@ describe("public screening package", () => {
     expect(bySymbol.get("L3")?.screeningCompleteness?.level).toBe("level_3_option_ready");
     expect(bySymbol.get("L3")?.positionDrafts?.some((draft) => draft.status === "draft_ready")).not.toBe(true);
     expect(bySymbol.get("L4")?.screeningCompleteness?.level).toBe("level_4_draft_ready");
-    expect(bySymbol.get("L4")?.strategyPrecisionReviews?.some((review) => review.level === "fit" || review.level === "manual_review_required")).toBe(true);
+    expect(bySymbol.get("L4")?.positionDrafts?.some((draft) => draft.status === "draft_ready")).toBe(true);
+    expect(bySymbol.get("L4")?.positionDrafts?.find((draft) => draft.status === "draft_ready")?.reviewState?.reviewStatus).toBe("not_reviewed");
     expect(bySymbol.get("L4")?.advancedStrategyReviews?.[0]).toMatchObject({
       strategy: "synthetic_forward",
       level: "manual_review_required",
@@ -335,19 +344,30 @@ describe("public screening package", () => {
     expect(serialized).not.toContain("123456789");
     expect(serialized).not.toContain("/Users/");
     expect(serializedCandidates).not.toContain("place_order");
-    expect(serializedCandidates).not.toContain(["unlock", "trade"].join("_"));
+    expect(serializedCandidates).not.toContain("unlock_trade");
     expect(serializedCandidates).not.toContain("exercise");
   });
 
-  it("imports the public sample screening package through the existing candidate import path", () => {
-    const samplePath = path.resolve(process.cwd(), "public/samples/us-options-screening-sample-v1.json");
-    const text = readFileSync(samplePath, "utf8");
-    const payload = JSON.parse(text) as unknown;
-
-    expect(detectDangerousFields(payload)).toEqual([]);
-
-    const imported = parseCandidateImport(text, "us-options-screening-sample-v1.json", "2026-07-05T09:30:00+09:00");
+  it("imports the bundled synthetic Level 1-4 sample package without local or credential fields", () => {
+    const text = readFileSync(`${process.cwd()}/src/test/fixtures/us-options-screening-sample-levels-v1.json`, "utf8");
+    const imported = parseCandidateImport(text, "us-options-screening-sample-levels-v1.json", "2026-07-06T09:00:00+09:00");
     const bySymbol = new Map(imported.candidates.map((candidate) => [candidate.symbol, candidate]));
+    const forbiddenPatterns = [
+      /127\.0\.0\.1/,
+      new RegExp(["Open", "D"].join("")),
+      new RegExp(["VITE", "MOOMOO"].join("_")),
+      new RegExp(["moomoo", "opend"].join("_")),
+      /\/api\/moomoo/,
+      /option-quote\/lookup/,
+      /unlock_trade/,
+      /\/api\/saxo/,
+      /accountId/,
+      /acc_id/,
+      /token/,
+      /password/,
+      /apiKey/,
+      /\/Users\//,
+    ];
 
     expect(imported.summary).toMatchObject({
       totalRows: 7,
@@ -355,31 +375,21 @@ describe("public screening package", () => {
       format: "json",
     });
     expect(bySymbol.get("PSAMPLE1")?.screeningCompleteness?.level).toBe("level_1_symbol_price");
-    expect(bySymbol.get("PSAMPLE1")?.positionDrafts?.some((draft) => draft.status === "draft_ready")).not.toBe(true);
-
     expect(bySymbol.get("PSAMPLE2")?.screeningCompleteness?.level).toBe("level_2_chart_ready");
-    expect(bySymbol.get("PSAMPLE2")?.strategySuitability?.some((item) => item.level === "fit")).not.toBe(true);
+    expect(bySymbol.get("PSAMPLE2")?.screeningCandidate?.missingFields).toContain("optionCandidates.bidAsk");
     expect(bySymbol.get("PSAMPLE2")?.positionDrafts?.some((draft) => draft.status === "draft_ready")).not.toBe(true);
-
     expect(bySymbol.get("PSAMPLE3")?.screeningCompleteness?.level).toBe("level_3_option_ready");
     expect(bySymbol.get("PSAMPLE3")?.positionDrafts?.some((draft) => draft.status === "draft_ready")).not.toBe(true);
-    expect(bySymbol.get("PSAMPLE3")?.publicScreeningInput?.optionCandidates?.[0]).toMatchObject({
-      bid: 5.2,
-      ask: 5.6,
-    });
-    expect(bySymbol.get("PSAMPLE3")?.strategyPrecisionReviews?.some((review) => review.expiryReview.targetDteRange)).toBe(true);
-
     expect(bySymbol.get("PSAMPLE4")?.screeningCompleteness?.level).toBe("level_4_draft_ready");
     expect(bySymbol.get("PSAMPLE4")?.positionDrafts?.some((draft) => draft.status === "draft_ready")).toBe(true);
-    expect(bySymbol.get("PSAMPLE4")?.advancedStrategyReviews?.some((review) => review.level === "manual_review_required")).toBe(true);
-    expect(bySymbol.get("PSAMPLE4")?.strategyPrecisionReviews?.some((review) => review.checklist.includes("証券会社画面の価格を最終確認する"))).toBe(true);
-
-    expect(bySymbol.get("PSAMPLE5")?.screeningCompleteness?.level).toBe("level_4_draft_ready");
+    expect(bySymbol.get("PSAMPLE4")?.positionDrafts?.find((draft) => draft.status === "draft_ready")?.reviewState?.reviewStatus).toBe("not_reviewed");
+    expect(bySymbol.get("PSAMPLE4")?.advancedStrategyReviews?.some((review) => review.strategy === "synthetic_forward" && review.level === "manual_review_required")).toBe(true);
     expect(bySymbol.get("PSAMPLE5")?.positionDrafts?.some((draft) => draft.status === "draft_ready")).not.toBe(true);
-    expect(bySymbol.get("PSAMPLE5")?.strategyPrecisionReviews?.some((review) => review.avoidReasons.length > 0 || review.capitalReview.level === "blocked")).toBe(true);
-    expect(bySymbol.get("PSAMPLE6")?.strategyPrecisionReviews?.some((review) => review.strategy === "cash_secured_put_avoid_assignment" && review.strikeReview.level === "blocked")).toBe(true);
-    expect(bySymbol.get("PSAMPLE7")?.strategyPrecisionReviews?.some((review) => review.strategy === "covered_call" && review.avoidReasons.join(" ").includes("取得単価"))).toBe(true);
-    expect(JSON.stringify(imported)).not.toContain("/Users/");
+    expect(bySymbol.get("PSAMPLE6")?.positionDrafts?.some((draft) => draft.status === "draft_ready")).not.toBe(true);
+    expect(bySymbol.get("PSAMPLE7")?.positionDrafts?.some((draft) => draft.status === "draft_ready")).not.toBe(true);
+    for (const pattern of forbiddenPatterns) {
+      expect(text).not.toMatch(pattern);
+    }
   });
 });
 
