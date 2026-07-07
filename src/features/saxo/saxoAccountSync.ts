@@ -331,14 +331,40 @@ export type SaxoAccountDiffRow = {
   status: "changed" | "same" | "missing";
 };
 
-export const SAXO_READONLY_ENDPOINTS = [] as const;
+export const SAXO_READONLY_ENDPOINTS = [
+  "GET /api/saxo/status",
+  "GET /api/saxo/config/status",
+  "POST /api/saxo/config/local",
+  "GET /api/saxo/auth/start",
+  "GET /api/saxo/auth/callback",
+  "POST /api/saxo/logout",
+  "POST /api/saxo/persistence/enable",
+  "POST /api/saxo/persistence/disable",
+  "GET /api/saxo/session/capabilities",
+  "GET /api/saxo/client",
+  "GET /api/saxo/accounts",
+  "GET /api/saxo/accounts/:accountKey/balance",
+  "GET /api/saxo/accounts/:accountKey/margin",
+  "GET /api/saxo/accounts/snapshot",
+  "GET /api/saxo/positions",
+  "GET /api/saxo/accounts/:accountKey/positions",
+  "GET /api/saxo/positions/snapshot",
+  "GET /api/saxo/orders",
+  "GET /api/saxo/accounts/:accountKey/orders",
+  "GET /api/saxo/orders/snapshot",
+  "GET /api/saxo/history/discovery",
+  "GET /api/saxo/closed-positions",
+  "GET /api/saxo/trades",
+  "GET /api/saxo/options/premium-candidate",
+] as const;
 
 export const SAXO_FORBIDDEN_ORDER_ROUTE_PATTERNS = [
   /\/trade\/v\d+\/orders?/i,
+  /\/api\/saxo\/positions?\/.*\/orders?/i,
 ] as const;
 
 export function isForbiddenSaxoOrderRoute(path: string, method = "GET"): boolean {
-  if (/\/orders?/i.test(path) && method !== "GET") return true;
+  if (/\/api\/saxo\/orders?/i.test(path) && method !== "GET") return true;
   return SAXO_FORBIDDEN_ORDER_ROUTE_PATTERNS.some((pattern) => pattern.test(path));
 }
 
@@ -1317,8 +1343,8 @@ export function createSaxoSetupGuidance(status: SaxoApiStatus | null, apiErrorMe
     return {
       code: "local_api_down",
       tone: "danger",
-      title: "Saxo自動接続は利用できません",
-      detail: apiErrorMessage ?? "公開版では証券会社画面で確認した価格・履歴・残高を手入力してください。",
+      title: "SaxoローカルAPIが起動していません",
+      detail: apiErrorMessage ?? "別ターミナルでローカルAPI補助ツールを起動してから、状態更新を押してください。",
       command: "SAXO_CLIENT_ID=... SAXO_ENVIRONMENT=sim npm run dev:all",
     };
   }
