@@ -293,6 +293,10 @@ describe("Saxo read-only account sync", () => {
       { id: "parent", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", price: 5.85 },
     ])).toMatchObject({ orderId: "5425367936", price: 5.85 });
     expect(findSaxoSyntheticForwardPairs([{ ...put, strike: 211 }, call])).toHaveLength(0);
+    expect(findSaxoSyntheticForwardPairs([
+      { ...call, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "NVDA/18Z26C210:XCBF" },
+      { ...put, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "NVDA/18Z26P210:XCBF" },
+    ])).toMatchObject([{ expiry: "2026-12-18", strike: 210, ticker: "NVDA" }]);
   });
 
   it("links an executed Saxo covered call to the existing planned covered call even when strike and premium differ", () => {

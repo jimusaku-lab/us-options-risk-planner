@@ -1336,21 +1336,23 @@ function normalizePosition(raw, accountsByKey, fetchedAt, index) {
   const assetType = firstString(raw, ["AssetType", "InstrumentType", "ProductType"]);
   const quantity = firstNumber(raw, ["Amount", "Quantity", "NetPosition", "PositionAmount", "HoldingAmount"]);
   const symbol = inferSymbol(raw);
-  const optionType = inferOptionType(raw);
+  const instrumentCode = firstString(raw, ["InstrumentCode", "Identifier", "Symbol", "Description"]);
+  const inferredContract = parseSaxoOptionContract(instrumentCode ?? symbol ?? "");
+  const rawOptionType = inferOptionType(raw);
+  const optionType = rawOptionType === "unknown" ? inferredContract?.optionType ?? rawOptionType : rawOptionType;
   const kind = inferPositionKind(assetType, optionType);
   const currentPrice = firstNumber(raw, ["CurrentPrice", "MarketPrice", "Price", "LastTraded", "LastPrice"]);
   const premiumOpenPrice = firstNumber(raw, ["OpenPrice", "AverageOpenPrice", "PriceOpen", "TradePrice"]);
   const currentOptionPrice = kind === "option" ? currentPrice : undefined;
   const currentStockPrice = kind === "stock" ? currentPrice : undefined;
   const averageOpenPrice = kind === "stock" ? premiumOpenPrice : undefined;
-  const strike = firstNumber(raw, ["Strike", "StrikePrice", "ExercisePrice"]);
-  const expiry = normalizeSaxoDate(firstString(raw, ["ExpiryDate", "Expiry", "ExpirationDate", "MaturityDate"]));
+  const strike = firstNumber(raw, ["Strike", "StrikePrice", "ExercisePrice"]) ?? inferredContract?.strike;
+  const expiry = normalizeSaxoDate(firstString(raw, ["ExpiryDate", "Expiry", "ExpirationDate", "MaturityDate"])) ?? inferredContract?.expiry;
   const contractSize = firstNumber(raw, ["ContractSize", "LotSize", "Multiplier"]);
   const marketValue = firstNumber(raw, ["MarketValue", "Value", "MarketValueInBaseCurrency"]);
   const unrealizedPnl = firstNumber(raw, ["ProfitLossOnTrade", "UnrealizedProfitLoss", "ProfitLoss", "Pnl", "P/L"]);
   const currency = firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency", "DisplayCurrency"]);
   const positionId = firstString(raw, ["PositionId", "PositionID", "Id", "PositionKey"]);
-  const instrumentCode = firstString(raw, ["InstrumentCode", "Identifier", "Symbol", "Description"]);
   const uic = firstNumber(raw, ["Uic", "UIC"]);
   const missingFields = [];
   for (const [field, value] of Object.entries({

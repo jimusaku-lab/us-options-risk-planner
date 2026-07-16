@@ -182,17 +182,35 @@ export type SaxoSyntheticForwardPair = {
 };
 
 export function findSaxoSyntheticForwardPairs(positions: SaxoApiPositionSnapshot[]): SaxoSyntheticForwardPair[] {
-  const calls = positions.filter((position) => position.kind === "option" && position.accountAssignment !== "unassigned" && position.accountAssignment !== "ignored" && position.optionType === "call" && position.side === "long" && (position.quantity ?? 0) > 0);
-  const puts = positions.filter((position) => position.kind === "option" && position.accountAssignment !== "unassigned" && position.accountAssignment !== "ignored" && position.optionType === "put" && position.side === "short" && (position.quantity ?? 0) < 0);
+  const calls = positions.filter((position) => isSaxoSyntheticForwardOption(position) && getSaxoSyntheticForwardOptionDetails(position)?.optionType === "call" && resolveSaxoSyntheticForwardSide(position) === "long" && (position.quantity ?? 0) > 0);
+  const puts = positions.filter((position) => isSaxoSyntheticForwardOption(position) && getSaxoSyntheticForwardOptionDetails(position)?.optionType === "put" && resolveSaxoSyntheticForwardSide(position) === "short" && (position.quantity ?? 0) < 0);
   const pairedPutIds = new Set<string>();
   return calls.flatMap((callPosition) => {
     const callTicker = resolveSaxoPositionSymbol(callPosition)?.toUpperCase();
-    if (!callTicker || !callPosition.expiry || callPosition.strike === undefined || callPosition.quantity === undefined) return [];
-    const putPosition = puts.find((candidate) => !pairedPutIds.has(candidate.id) && candidate.accountKey === callPosition.accountKey && candidate.accountAssignment === callPosition.accountAssignment && resolveSaxoPositionSymbol(candidate)?.toUpperCase() === callTicker && candidate.expiry === callPosition.expiry && Math.abs((candidate.strike ?? Number.NaN) - callPosition.strike!) < 0.001 && Math.abs(Math.abs(candidate.quantity ?? 0) - Math.abs(callPosition.quantity ?? 0)) < 0.0001);
+    const callContract = getSaxoSyntheticForwardOptionDetails(callPosition);
+    if (!callTicker || !callContract?.expiry || callContract.strike === undefined || callPosition.quantity === undefined) return [];
+    const putPosition = puts.find((candidate) => !pairedPutIds.has(candidate.id) && candidate.accountKey === callPosition.accountKey && candidate.accountAssignment === callPosition.accountAssignment && resolveSaxoPositionSymbol(candidate)?.toUpperCase() === callTicker && getSaxoSyntheticForwardOptionDetails(candidate)?.expiry === callContract.expiry && Math.abs((getSaxoSyntheticForwardOptionDetails(candidate)?.strike ?? Number.NaN) - callContract.strike) < 0.001 && Math.abs(Math.abs(candidate.quantity ?? 0) - Math.abs(callPosition.quantity ?? 0)) < 0.0001);
     if (!putPosition) return [];
     pairedPutIds.add(putPosition.id);
-    return [{ id: `synthetic:${callPosition.accountKey}:${callTicker}:${callPosition.expiry}:${callPosition.strike}:${Math.abs(callPosition.quantity ?? 0)}`, callPosition, putPosition, ticker: callTicker, accountCode: callPosition.accountAssignment as SaxoAccountCode, accountKey: callPosition.accountKey, expiry: callPosition.expiry!, strike: callPosition.strike!, quantity: Math.abs(callPosition.quantity!) }];
+    return [{ id: `synthetic:${callPosition.accountKey}:${callTicker}:${callContract.expiry}:${callContract.strike}:${Math.abs(callPosition.quantity ?? 0)}`, callPosition, putPosition, ticker: callTicker, accountCode: callPosition.accountAssignment as SaxoAccountCode, accountKey: callPosition.accountKey, expiry: callContract.expiry, strike: callContract.strike, quantity: Math.abs(callPosition.quantity!) }];
   });
+}
+
+function isSaxoSyntheticForwardOption(position: SaxoApiPositionSnapshot): boolean {
+  return position.accountAssignment !== "unassigned" && position.accountAssignment !== "ignored" && (position.kind === "option" || position.assetType?.toLowerCase().includes("option") === true || Boolean(getSaxoSyntheticForwardOptionDetails(position)));
+}
+
+function resolveSaxoSyntheticForwardSide(position: SaxoApiPositionSnapshot): SaxoPositionSide {
+  if (position.side !== "unknown") return position.side;
+  return (position.quantity ?? 0) < 0 ? "short" : (position.quantity ?? 0) > 0 ? "long" : "unknown";
+}
+
+function getSaxoSyntheticForwardOptionDetails(position: SaxoApiPositionSnapshot): { optionType: "call" | "put"; strike: number; expiry?: string } | undefined {
+  const contract = parseSaxoOptionContract(position.instrumentCode ?? "") ?? parseSaxoOptionContract(position.symbol ?? "");
+  const optionType = position.optionType === "call" || position.optionType === "put" ? position.optionType : contract?.optionType;
+  const strike = position.strike ?? contract?.strike;
+  const expiry = position.expiry ?? contract?.expiry;
+  return optionType && strike !== undefined && Number.isFinite(strike) ? { optionType, strike, expiry } : undefined;
 }
 
 /** Select the broker's composite ticket record without deriving a net fill from either leg. */
