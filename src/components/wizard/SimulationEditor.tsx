@@ -9,6 +9,7 @@ import { calculateOptionEntryExecutionSummary, createOptionEntryExecutionDraft }
 import {
   calculateOptionCloseExecutionResults,
   createOptionCloseExecutionDraft,
+  deriveSaxoHistoryRealizedPnlAutofill,
   hasConfirmedBuybackCloseExecution,
   hasConfirmedExpiredCloseExecution,
   hasUnconfirmedCloseExecutionDraft,
@@ -443,7 +444,17 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const updateOptionCloseExecution = (id: string, patch: Partial<OptionCloseExecution>) => {
     update({
       optionCloseExecutions: optionCloseExecutions.map((execution) =>
-        execution.id === id ? { ...execution, ...patch } : execution,
+        {
+          if (execution.id !== id) return execution;
+          const nextExecution = { ...execution, ...patch };
+          if (nextExecution.realizedPnlSource !== "saxo_derived" || Object.prototype.hasOwnProperty.call(patch, "realizedPnlUSD")) {
+            return nextExecution;
+          }
+          const autofill = deriveSaxoHistoryRealizedPnlAutofill(simulation, nextExecution);
+          return autofill.available
+            ? { ...nextExecution, realizedPnlUSD: autofill.realizedPnlUSD, realizedPnlDerivation: autofill.derivation, realizedPnlAutofillMissingFields: undefined }
+            : { ...nextExecution, realizedPnlUSD: undefined, realizedPnlDerivation: undefined, realizedPnlAutofillMissingFields: autofill.missingFields };
+        },
       ),
     });
   };
@@ -2114,11 +2125,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               const isExpiredExecution = execution.closeKind === "expired";
               const isNCloseExecution = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
               const closeFxRate = execution.fxRateJPY ?? execution.brokerExchangeRateJPY ?? simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
-              const closeUsdPnl =
-                execution.realizedPnlUSD ??
-                (selectedLeg
-                  ? selectedLeg.premiumUSD * 100 * execution.contracts - (execution.closePriceUSD ?? 0) * 100 * execution.contracts - (execution.commissionUSD ?? 0)
-                  : 0);
+              const closeUsdPnl = execution.realizedPnlUSD ?? result?.realizedPnlUSD ?? 0;
               const closeReferenceJpy = closeUsdPnl * closeFxRate;
               const closeDetailCostTotal =
                 Math.abs(execution.brokerFeeJPY ?? 0) +
@@ -2266,8 +2273,24 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                         label="USD実現損益"
                         value={execution.realizedPnlUSD ?? Number.NaN}
                         suffix="USD"
-                        onChange={(realizedPnlUSD) => updateOptionCloseExecution(execution.id, { realizedPnlUSD })}
+                        onChange={(realizedPnlUSD) => updateOptionCloseExecution(execution.id, { realizedPnlUSD, realizedPnlSource: "user_override" })}
                       />
+                      <div className="rounded-md border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950">
+                        {execution.realizedPnlSource === "saxo_derived" && execution.realizedPnlDerivation ? (
+                          <>
+                            <div className="font-bold">Saxo履歴から自動計算。内容を確認し、必要なら修正できます。</div>
+                            <div className="mt-1 text-xs leading-5">
+                              建玉 {formatUSD(execution.realizedPnlDerivation.entryPremiumUSD)} - 決済 {formatUSD(execution.realizedPnlDerivation.closePriceUSD * 100 * execution.realizedPnlDerivation.contracts)} - 建玉時手数料 {formatUSD(execution.realizedPnlDerivation.openCommissionUSD)} - 決済時手数料 {formatUSD(execution.realizedPnlDerivation.closeCommissionUSD)}
+                            </div>
+                          </>
+                        ) : execution.realizedPnlSource === "user_override" ? (
+                          <div className="font-bold">手入力値を維持しています。</div>
+                        ) : isSaxoHistoryCloseDraft ? (
+                          <div className="font-bold">Saxo履歴からの自動計算に必要な項目を確認してください。{execution.realizedPnlAutofillMissingFields?.length ? ` 不足: ${execution.realizedPnlAutofillMissingFields.join("、")}` : ""}</div>
+                        ) : (
+                          <div className="font-bold">実現損益を入力してください。</div>
+                        )}
+                      </div>
                       <NumberInput
                         label="参考為替"
                         value={closeFxRate}

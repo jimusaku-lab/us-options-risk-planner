@@ -51,6 +51,7 @@ import {
   type SaxoPositionReconciliationRow,
 } from "@/features/saxo/saxoAccountSync";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
+import { summarizeSaxoHistoryCompletion } from "@/features/saxo/saxoHistoryCompletion";
 import type { AccountState, OptionLeg, SaxoAccountCode, StockTransferEvent, TradeSimulation } from "@/types/domain";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 
@@ -2929,6 +2930,7 @@ function HistoryDiscoveryPreview({
   onCreateDraftAndOpen: (item: SaxoHistoryDiscoveryItem) => boolean;
   onCreateDrafts: (items: SaxoHistoryDiscoveryItem[]) => void;
 }) {
+  const [showCompletedHistory, setShowCompletedHistory] = useState(false);
   const historyItems = endpoints.flatMap((endpoint) => endpoint.items ?? []);
   const actionableHistoryItems = historyItems.filter((item) => resolveHistoryTarget(item) !== "unknown");
   const isActualReflection = (item: SaxoHistoryDiscoveryItem) => {
@@ -2945,19 +2947,28 @@ function HistoryDiscoveryPreview({
     return isUserCreatableHistoryItem({ item, target, state, simulations, historyItems });
   });
   const recoveryItems = actionableHistoryItems.filter((item) => reflectionStates[item.id]?.status === "broken");
-  const actionRequiredHistoryCount = creatableItems.length + recoveryItems.length;
-  const completedOrOutOfScopeCount = Math.max(0, historyItems.length - creatableItems.length - recoveryItems.length);
+  const completionSummary = summarizeSaxoHistoryCompletion(
+    historyItems.map((item) => {
+      const target = resolveHistoryTarget(item);
+      const state = reflectionStates[item.id] ?? { status: "none" as const };
+      return {
+        state: state.status,
+        creatable: isUserCreatableHistoryItem({ item, target, state, simulations, historyItems }),
+      };
+    }),
+  );
+  const actionRequiredHistoryCount = completionSummary.actionRequiredCount;
+  const completedOrOutOfScopeCount = completionSummary.completedOrOutOfScopeCount;
   const hasCreatableItems = creatableItems.length > 0;
-  const reflectedHistoryCount = actionableHistoryItems.filter(isActualReflection).length;
-  const entryReflectedCount = historyItems.filter((item) => resolveHistoryTarget(item) === "entry" && isActualReflection(item)).length;
-  const closeReflectedCount = historyItems.filter((item) => resolveHistoryTarget(item) === "close" && isActualReflection(item)).length;
+  const isPendingConfirmation = (item: SaxoHistoryDiscoveryItem) => reflectionStates[item.id]?.status === "candidate";
+  const entryReflectedCount = historyItems.filter((item) => resolveHistoryTarget(item) === "entry" && isPendingConfirmation(item)).length;
+  const closeReflectedCount = historyItems.filter((item) => resolveHistoryTarget(item) === "close" && isPendingConfirmation(item)).length;
   const assignmentReflectedCount = historyItems.filter(isPendingAssignmentReflection).length;
   const stockSettlementReflectedItems = historyItems.filter(
-    (item) => resolveHistoryTarget(item) === "stock_settlement" && isActualReflection(item),
+    (item) => resolveHistoryTarget(item) === "stock_settlement" && isPendingConfirmation(item),
   );
   const stockSettlementReflectedCount = stockSettlementReflectedItems.length;
   const stockSettlementCandidateCount = historyItems.filter((item) => resolveHistoryTarget(item) === "stock_settlement").length;
-  const assignmentCompletedCount = historyItems.filter((item) => resolveHistoryTarget(item) === "assignment" && isCompletedAssignmentReflection(reflectionStates[item.id])).length;
   const assignmentImportantCount = historyItems.filter(
     (item) => {
       const state = reflectionStates[item.id] ?? { status: "none" as const };
@@ -2969,7 +2980,7 @@ function HistoryDiscoveryPreview({
       );
     },
   ).length;
-  const firstReflectedCloseItem = historyItems.find((item) => resolveHistoryTarget(item) === "close" && isActualReflection(item));
+  const firstReflectedCloseItem = historyItems.find((item) => resolveHistoryTarget(item) === "close" && isPendingConfirmation(item));
   const firstReflectedAssignmentItem = historyItems.find(isPendingAssignmentReflection);
   const firstReflectedStockSettlementItem = stockSettlementReflectedItems[0];
   const brokenCount = recoveryItems.length;
@@ -2981,13 +2992,15 @@ function HistoryDiscoveryPreview({
       ? "対象外または確認不要"
       : brokenCount > 0
         ? "監査用の復旧候補あり"
+      : completionSummary.isComplete
+        ? "完了済み"
       : historyItems.length > 0 && !hasCreatableItems
         ? "反映候補作成済み"
         : "取得済み";
   const statusClass =
     statusLabel === "未取得"
       ? "bg-slate-100 text-slate-700"
-      : statusLabel === "反映候補作成済み" || statusLabel === "対象外または確認不要"
+      : statusLabel === "完了済み" || statusLabel === "反映候補作成済み" || statusLabel === "対象外または確認不要"
         ? "bg-teal-100 text-teal-800"
         : statusLabel === "監査用の復旧候補あり"
           ? "bg-amber-100 text-amber-800"
@@ -3008,7 +3021,7 @@ function HistoryDiscoveryPreview({
       {fetchedAt && historyItems.length > 0 ? (
         <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-700 sm:grid-cols-3">
           <div className="rounded bg-slate-50 px-3 py-2">今ユーザーが処理する履歴候補: {actionRequiredHistoryCount}件</div>
-          <div className="rounded bg-amber-50 px-3 py-2 text-amber-900">監査用の復旧候補: {recoveryItems.length}件</div>
+          {recoveryItems.length > 0 ? <div className="rounded bg-amber-50 px-3 py-2 text-amber-900">監査用の復旧候補: {recoveryItems.length}件</div> : null}
           <div className="rounded bg-teal-50 px-3 py-2 text-teal-900">確認済みまたは対象外: {completedOrOutOfScopeCount}件</div>
         </div>
       ) : null}
@@ -3027,8 +3040,8 @@ function HistoryDiscoveryPreview({
               履歴候補を取得
             </button>
           </div>
-        ) : historyItems.length > 0 && hasCreatableItems ? (
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        ) : historyItems.length > 0 && actionRequiredHistoryCount > 0 ? (
+          <div className="grid gap-3">
             <div className="text-sm leading-6 text-slate-700">
               {assignmentImportantCount > 0 ? (
                 <div className="mb-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-red-950">
@@ -3037,47 +3050,21 @@ function HistoryDiscoveryPreview({
                 </div>
               ) : null}
               <p>
-                履歴候補があります。新規建玉候補が残っている場合は先に建玉入力へ下書き反映し、その後で履歴候補から約定確認・決済実績を補完してください。
+                {hasCreatableItems
+                  ? "履歴候補があります。新規建玉候補が残っている場合は先に建玉入力へ下書き反映し、その後で履歴候補から約定確認・決済実績を補完してください。"
+                  : "作成済みの履歴候補に確認待ちがあります。対応する建玉開始・決済実績・株式記録を開いて正式保存を確認してください。"}
                 {brokenCount > 0 ? ` 監査用の復旧候補が${brokenCount}件あります。通常の未入力候補とは分けて確認します。` : ""}
                 {stockSettlementCandidateCount > 0 ? ` Stock履歴のうちN口座売却は6-B株式譲渡候補として確認します。` : ""}
                 {unknownCount > 0 ? ` 対象外または確認不要の履歴候補が${unknownCount}件あります。` : ""}
                 {ignoredCount > 0 ? ` 無視済みの履歴候補が${ignoredCount}件あります。` : ""}
               </p>
             </div>
-            <button
-              type="button"
-              className="rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white"
-              onClick={() => onCreateDrafts(creatableItems)}
-            >
-              不足している反映候補をまとめて作成
-            </button>
-          </div>
-        ) : historyItems.length > 0 && actionableHistoryItems.length > 0 ? (
-          <div className="grid gap-3">
-            <p className="text-sm leading-6 text-slate-700">
-              {brokenCount > 0
-                ? "監査用の復旧候補があります。通常の未入力候補とは分けて表示しています。必要な場合だけ各行から再作成してください。"
-                : "今回の取得で追加処理はありません。必要な場合だけ、照合済みの建玉や反映済み履歴を任意確認してください。"}
-            </p>
-            {!hasCreatableItems ? (
-              <div className="rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-bold text-teal-900">
-                追加で作成が必要な履歴候補はありません。
-              </div>
-            ) : null}
-            <div className="grid gap-2 text-xs font-semibold text-slate-700 sm:grid-cols-2">
-              <div className="rounded bg-white px-3 py-2">反映済み: {reflectedHistoryCount}件</div>
-              <div className="rounded bg-white px-3 py-2">対象外または確認不要: {unknownCount}件</div>
-              <div className="rounded bg-white px-3 py-2 sm:col-span-2">追加で作成が必要: {creatableItems.length}件</div>
-              <div className="rounded bg-white px-3 py-2">建玉開始の確認待ち: {entryReflectedCount}件</div>
-              <div className="rounded bg-white px-3 py-2">決済実績の確認待ち: {closeReflectedCount}件</div>
-              <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認待ち: {assignmentReflectedCount}件</div>
-              <div className="rounded bg-white px-3 py-2 sm:col-span-2">株式譲渡の確認待ち: {stockSettlementReflectedCount}件</div>
-              {assignmentCompletedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認済み: {assignmentCompletedCount}件</div> : null}
-              {brokenCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">監査用の復旧候補: {brokenCount}件（候補実体が見つかりません。必要な場合だけ行ごとに再作成します）</div> : null}
-              {ignoredCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">無視済み: {ignoredCount}件（復旧対象から除外）</div> : null}
-              {unknownCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">対象外または確認不要: {unknownCount}件（Stock履歴など。通常の3-A/7には自動反映しません）</div> : null}
-            </div>
             <div className="flex flex-wrap gap-2">
+              {creatableItems.length > 0 ? (
+                <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white" onClick={() => onCreateDrafts(creatableItems)}>
+                  不足している反映候補をまとめて作成
+                </button>
+              ) : null}
               {entryReflectedCount > 0 ? (
                 <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white" onClick={onGoEntry}>
                   建玉開始確認へ移動（{entryReflectedCount}件）
@@ -3098,17 +3085,22 @@ function HistoryDiscoveryPreview({
                   6-B 株式譲渡記録へ移動（{stockSettlementReflectedCount}件）
                 </button>
               ) : null}
-              <button type="button" className="rounded-md border border-slate-300 px-3 py-2 text-sm font-bold text-slate-800" onClick={onClosePanel}>
-                閉じる
-              </button>
+            </div>
+            <div className="grid gap-2 text-xs font-semibold text-slate-700 sm:grid-cols-2">
+              {creatableItems.length > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">追加で作成が必要: {creatableItems.length}件</div> : null}
+              {entryReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2">建玉開始の確認待ち: {entryReflectedCount}件</div> : null}
+              {closeReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2">決済実績の確認待ち: {closeReflectedCount}件</div> : null}
+              {assignmentReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認待ち: {assignmentReflectedCount}件</div> : null}
+              {stockSettlementReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">株式譲渡の確認待ち: {stockSettlementReflectedCount}件</div> : null}
+              {brokenCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">監査用の復旧候補: {brokenCount}件（候補実体が見つかりません。必要な場合だけ行ごとに再作成します）</div> : null}
             </div>
           </div>
         ) : historyItems.length > 0 ? (
           <div className="rounded-md border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">
-            <div className="font-bold">追加で作成が必要な履歴候補はありません。</div>
-            <div className="mt-1">
-              取得済みの履歴は、通常の3-A建玉開始確認・7決済実績へ流さない対象外または確認不要の候補です。Stock履歴のうちN口座売却は6-B株式譲渡候補として確認します。
-            </div>
+            <div className="font-bold">今回の取得で追加処理はありません。反映済み履歴は監査用に保存されています。</div>
+            <button type="button" className="mt-2 rounded-md border border-teal-300 bg-white px-3 py-1.5 text-xs font-bold text-teal-900" onClick={() => setShowCompletedHistory((value) => !value)}>
+              {showCompletedHistory ? "完了済み履歴を隠す" : `完了済み履歴を表示（${historyItems.length}件）`}
+            </button>
           </div>
         ) : (
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -3121,6 +3113,7 @@ function HistoryDiscoveryPreview({
           </div>
         )}
       </div>
+      {!completionSummary.isComplete || showCompletedHistory ? (
       <div className="mt-3 grid gap-2">
         {endpoints.length === 0 ? (
           <p className="text-sm text-slate-500">Saxo接続後に履歴候補を取得してください。</p>
@@ -3192,6 +3185,7 @@ function HistoryDiscoveryPreview({
           })
         )}
       </div>
+      ) : null}
       {historyDraft ? (
         <div className="mt-3 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950">
           <div className="flex flex-wrap items-center justify-between gap-2">

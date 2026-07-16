@@ -25,6 +25,17 @@ export type OptionCloseExecutionResult = {
   basis: "saxo_broker_statement" | "estimated";
 };
 
+export type SaxoHistoryRealizedPnlAutofill =
+  | {
+      available: true;
+      realizedPnlUSD: number;
+      derivation: NonNullable<OptionCloseExecution["realizedPnlDerivation"]>;
+    }
+  | {
+      available: false;
+      missingFields: string[];
+    };
+
 export function getOptionCloseExecutions(simulation: TradeSimulation): OptionCloseExecution[] {
   return simulation.optionCloseExecutions ?? [];
 }
@@ -185,6 +196,83 @@ function asCost(value: number | undefined): number {
   return Math.abs(value);
 }
 
+function calculateDirectionalRealizedPnlUSD({
+  leg,
+  entryPremiumUSD,
+  closeCostUSD,
+  openCommissionUSD,
+  closeCommissionUSD,
+}: {
+  leg: OptionLeg;
+  entryPremiumUSD: number;
+  closeCostUSD: number;
+  openCommissionUSD: number;
+  closeCommissionUSD: number;
+}): number {
+  const premiumDifference = leg.side === "sell"
+    ? entryPremiumUSD - closeCostUSD
+    : closeCostUSD - entryPremiumUSD;
+  return premiumDifference - openCommissionUSD - closeCommissionUSD;
+}
+
+/**
+ * Produces the deterministic N/USD close P/L used by the draft, validation
+ * display, and performance calculation. Partial or multi-leg allocations are
+ * intentionally left for manual confirmation.
+ */
+export function deriveSaxoHistoryRealizedPnlAutofill(
+  simulation: TradeSimulation,
+  execution: OptionCloseExecution,
+): SaxoHistoryRealizedPnlAutofill {
+  const missingFields: string[] = [];
+  const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
+  if (!leg) missingFields.push("対象脚");
+  if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT") missingFields.push("N/USD口座");
+  if ((execution.closeKind ?? "buyback") !== "buyback") missingFields.push("買戻し決済");
+  if (!Number.isFinite(execution.contracts) || execution.contracts <= 0) missingFields.push("約定数量");
+  if (leg && execution.contracts !== leg.quantity) missingFields.push("一部決済または数量配賦");
+  if (execution.closePriceUSD === undefined || !Number.isFinite(execution.closePriceUSD)) missingFields.push("決済価格USD");
+  if (execution.commissionUSD === undefined || !Number.isFinite(execution.commissionUSD)) missingFields.push("決済時手数料USD");
+  const entryExecution = leg ? simulation.optionEntryExecutions?.find((item) => item.legId === leg.id) : undefined;
+  if (!entryExecution) {
+    missingFields.push("建玉時約定");
+  } else {
+    if (!Number.isFinite(entryExecution.fillPriceUSD)) missingFields.push("建玉時プレミアムUSD");
+    if (!Number.isFinite(entryExecution.contracts) || entryExecution.contracts !== execution.contracts) missingFields.push("建玉時数量");
+    if (entryExecution.commissionUSD === undefined || !Number.isFinite(entryExecution.commissionUSD)) missingFields.push("建玉時手数料USD");
+  }
+  if (missingFields.length > 0 || !leg || !entryExecution || execution.closePriceUSD === undefined || execution.commissionUSD === undefined) {
+    return { available: false, missingFields: Array.from(new Set(missingFields)) };
+  }
+
+  const contracts = execution.contracts;
+  const entryPremiumUSD = entryExecution.fillPriceUSD * CONTRACT_SIZE * contracts;
+  const closeCostUSD = execution.closePriceUSD * CONTRACT_SIZE * contracts;
+  const openCommissionUSD = Math.abs(entryExecution.commissionUSD ?? 0);
+  const closeCommissionUSD = Math.abs(execution.commissionUSD);
+  const realizedPnlUSD = calculateDirectionalRealizedPnlUSD({
+    leg,
+    entryPremiumUSD,
+    closeCostUSD,
+    openCommissionUSD,
+    closeCommissionUSD,
+  });
+  return {
+    available: true,
+    realizedPnlUSD,
+    derivation: {
+      sourceTradeId: execution.sourceTradeId,
+      targetPositionId: execution.targetPositionId,
+      entryPremiumUSD,
+      closePriceUSD: execution.closePriceUSD,
+      contracts,
+      openCommissionUSD,
+      closeCommissionUSD,
+      calculatedRealizedPnlUSD: realizedPnlUSD,
+    },
+  };
+}
+
 export function calculateOptionCloseExecutionResult(
   simulation: TradeSimulation,
   execution: OptionCloseExecution,
@@ -222,7 +310,13 @@ export function calculateOptionCloseExecutionResult(
       : !isN
         ? asCost(execution.commissionJPY) + asCost(execution.brokerFeeJPY) + asCost(execution.brokerExchangeFeeJPY) + asCost(execution.brokerExchangeTradeFeeJPY) + asCost(execution.brokerTaxIncludedFeeJPY)
         : 0;
-  const calculatedRealizedPnlUSD = entryPremiumUSD - closeCostUSD - openCommissionUSD - closeCommissionUSD;
+  const calculatedRealizedPnlUSD = calculateDirectionalRealizedPnlUSD({
+    leg,
+    entryPremiumUSD,
+    closeCostUSD,
+    openCommissionUSD,
+    closeCommissionUSD,
+  });
   const realizedPnlUSD = isN && execution.realizedPnlUSD !== undefined ? execution.realizedPnlUSD : calculatedRealizedPnlUSD;
   const fxRateJPY =
     (execution.brokerExchangeRateJPY ?? execution.fxRateJPY) && (execution.brokerExchangeRateJPY ?? execution.fxRateJPY)! > 0

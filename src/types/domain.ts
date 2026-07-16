@@ -339,6 +339,18 @@ export type OptionCloseExecution = {
   brokerExchangeTradeFeeJPY?: number;
   brokerTaxIncludedFeeJPY?: number;
   realizedPnlUSD?: number;
+  realizedPnlSource?: "saxo_derived" | "user_override";
+  realizedPnlAutofillMissingFields?: string[];
+  realizedPnlDerivation?: {
+    sourceTradeId?: string;
+    targetPositionId?: string;
+    entryPremiumUSD: number;
+    closePriceUSD: number;
+    contracts: number;
+    openCommissionUSD: number;
+    closeCommissionUSD: number;
+    calculatedRealizedPnlUSD: number;
+  };
   inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";
   source: "manual" | "broker_statement" | "saxo_api_estimate" | "saxo_history";
   sourceCandidateId?: string;

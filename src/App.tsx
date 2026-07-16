@@ -6,7 +6,11 @@ import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssig
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
 import { resolveEffectiveCoveredCallSimulation } from "@/domain/coveredCallCoverage";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
-import { createOptionCloseExecutionDraft, sanitizeSaxoHistoryCloseExecutions } from "@/domain/optionCloseExecutions";
+import {
+  createOptionCloseExecutionDraft,
+  deriveSaxoHistoryRealizedPnlAutofill,
+  sanitizeSaxoHistoryCloseExecutions,
+} from "@/domain/optionCloseExecutions";
 import { createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
 import { getWorkflowTargetAnchorId } from "@/domain/workflowTasks";
 import { calculatePayoffSeries } from "@/domain/payoff";
@@ -1012,7 +1016,7 @@ export default function App() {
           closePriceUSD: item.price,
           closeKind: "buyback",
         });
-        const nextExecution: OptionCloseExecution = {
+        const baseExecution: OptionCloseExecution = {
           ...draft,
           closeDate: item.tradeDate ?? draft.closeDate,
           contracts: item.quantity !== undefined ? Math.max(1, Math.abs(item.quantity)) : draft.contracts,
@@ -1026,7 +1030,6 @@ export default function App() {
           brokerExchangeFeeJPY: !isN ? item.exchangeFee : undefined,
           brokerExchangeRateJPY: !isN ? item.exchangeRate : undefined,
           brokerTaxIncludedFeeJPY: !isN ? item.taxIncludedFee : undefined,
-          realizedPnlUSD: isN ? item.profitLoss : undefined,
           commissionUSD: isN ? Math.abs(item.transactionCost ?? draft.commissionUSD ?? DEFAULT_BROKER_COMMISSION_USD) : draft.commissionUSD,
           fxRateJPY: item.exchangeRate ?? draft.fxRateJPY,
           source: "saxo_history" as const,
@@ -1039,6 +1042,14 @@ export default function App() {
             resolvedTarget.accountConfirmationWarning,
           ].filter(Boolean).join(""),
           confirmed: false,
+        };
+        const autofill = isN ? deriveSaxoHistoryRealizedPnlAutofill(target, baseExecution) : undefined;
+        const nextExecution: OptionCloseExecution = {
+          ...baseExecution,
+          realizedPnlUSD: autofill?.available ? autofill.realizedPnlUSD : undefined,
+          realizedPnlSource: autofill?.available ? "saxo_derived" : undefined,
+          realizedPnlDerivation: autofill?.available ? autofill.derivation : undefined,
+          realizedPnlAutofillMissingFields: autofill && !autofill.available ? autofill.missingFields : undefined,
         };
         upsertSimulation({
           ...target,
