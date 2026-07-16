@@ -7,6 +7,7 @@ import {
   createSaxoPositionDraftSummary,
   findEntryHistoryMatches,
   findSaxoAssignmentStockAcquisitionItem,
+  findSaxoSyntheticForwardPairing,
   findSaxoSyntheticForwardPairs,
   findSaxoSyntheticForwardParentHistory,
   findOrderCandidatesForLeg,
@@ -272,6 +273,8 @@ describe("Saxo read-only account sync", () => {
       accountAssignment: "N" as const,
       accountCode: "N" as const,
       symbol: "NVDA",
+      underlyingSymbol: "NVDA",
+      underlyingIdentity: "uic:12345:stock",
       assetType: "StockOption",
       kind: "option" as const,
       quantity: 1,
@@ -297,6 +300,12 @@ describe("Saxo read-only account sync", () => {
       { ...call, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "NVDA/18Z26C210:XCBF" },
       { ...put, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "NVDA/18Z26P210:XCBF" },
     ])).toMatchObject([{ expiry: "2026-12-18", strike: 210, ticker: "NVDA" }]);
+    const held = findSaxoSyntheticForwardPairing([
+      { ...call, underlyingIdentity: undefined, underlyingSymbol: undefined, symbol: "" },
+      { ...put, underlyingIdentity: undefined, underlyingSymbol: undefined, symbol: "" },
+    ]);
+    expect(held.pairs).toHaveLength(0);
+    expect(held.holds).toMatchObject([{ reason: "原資産識別子をSaxoから取得できませんでした。" }]);
   });
 
   it("links an executed Saxo covered call to the existing planned covered call even when strike and premium differ", () => {

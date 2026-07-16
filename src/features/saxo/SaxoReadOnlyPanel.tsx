@@ -23,7 +23,7 @@ import {
   applyOrderAccountMappings,
   createSaxoPositionDraftSummary,
   findEntryHistoryMatches,
-  findSaxoSyntheticForwardPairs,
+  findSaxoSyntheticForwardPairing,
   findSaxoAssignmentStockAcquisitionItem,
   getSaxoHistoryCandidateKeys,
   getConfirmedMappingForAccount,
@@ -51,6 +51,7 @@ import {
   type SaxoHistoryDiscoveryItem,
   type SaxoPositionReconciliationRow,
   type SaxoSyntheticForwardPair,
+  type SaxoSyntheticForwardHold,
 } from "@/features/saxo/saxoAccountSync";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { summarizeSaxoHistoryCompletion } from "@/features/saxo/saxoHistoryCompletion";
@@ -298,7 +299,7 @@ export function SaxoReadOnlyPanel({
     () => reconcileSaxoPositions(simulations, mappedPositions),
     [mappedPositions, simulations],
   );
-  const syntheticForwardPairs = useMemo(() => findSaxoSyntheticForwardPairs(mappedPositions), [mappedPositions]);
+  const syntheticForwardPairing = useMemo(() => findSaxoSyntheticForwardPairing(mappedPositions), [mappedPositions]);
   const historyReflectionStates = useMemo(
     () => createHistoryReflectionStates(historyEndpoints, simulations, reflectedHistoryIds, ignoredHistoryIds, stockTransfers),
     [historyEndpoints, ignoredHistoryIds, simulations, reflectedHistoryIds, stockTransfers],
@@ -1268,7 +1269,8 @@ export function SaxoReadOnlyPanel({
               <PositionsPreview
                 rows={positionsFetchedAt ? positionRows : []}
                 positions={mappedPositions}
-                syntheticForwardPairs={syntheticForwardPairs}
+                syntheticForwardPairs={syntheticForwardPairing.pairs}
+                syntheticForwardHolds={syntheticForwardPairing.holds}
                 fetchedAt={positionsFetchedAt}
                 isLoading={isLoading}
                 expandedPositionId={expandedPositionId}
@@ -2353,6 +2355,7 @@ function PositionsPreview({
   rows,
   positions,
   syntheticForwardPairs,
+  syntheticForwardHolds,
   fetchedAt,
   isLoading,
   expandedPositionId,
@@ -2385,6 +2388,7 @@ function PositionsPreview({
   rows: SaxoPositionReconciliationRow[];
   positions: SaxoApiPositionSnapshot[];
   syntheticForwardPairs: SaxoSyntheticForwardPair[];
+  syntheticForwardHolds: SaxoSyntheticForwardHold[];
   fetchedAt: string;
   isLoading: boolean;
   expandedPositionId: string;
@@ -2426,14 +2430,17 @@ function PositionsPreview({
     (row) => row.position && getRecordedStockTransferForPosition(row.position, simulations, stockTransfers),
   );
   const regularRows = rows.filter((row) => !isNAccountStockPosition(row.position));
-  const syntheticPositionIds = new Set(syntheticForwardPairs.flatMap((pair) => [pair.callPosition.id, pair.putPosition.id]));
+  const syntheticPositionIds = new Set([
+    ...syntheticForwardPairs.flatMap((pair) => [pair.callPosition.id, pair.putPosition.id]),
+    ...syntheticForwardHolds.flatMap((hold) => [hold.callPosition.id, hold.putPosition.id]),
+  ]);
   const standaloneRegularRows = regularRows.filter((row) => !row.position || !syntheticPositionIds.has(row.position.id));
   const linkedRegularRows = standaloneRegularRows.filter((row) => row.position && resolveLinkedSimulation(row).status === "linked");
   const actionRequiredRegularRows = standaloneRegularRows.filter((row) => {
     if (!row.position) return false;
     return resolveLinkedSimulation(row).status !== "linked";
   });
-  const actionRequiredRows = actionRequiredRegularRows.length + syntheticForwardPairs.length + pendingStockTransferRows.length;
+  const actionRequiredRows = actionRequiredRegularRows.length + syntheticForwardPairs.length + syntheticForwardHolds.length + pendingStockTransferRows.length;
   const confirmedCurrentHoldingRows = linkedRegularRows.length + recordedStockTransferRows.length;
   const draft = draftPosition ? createSaxoPositionDraftSummary(draftPosition, simulations) : null;
   return (
@@ -2466,6 +2473,8 @@ function PositionsPreview({
             : "今回追加で反映が必要なSaxo建玉はありません。"}
           {syntheticForwardPairs.length > 0
             ? " C買い/P売りのペアは、個別には反映せず「2脚をシンセティックとして下書き反映」から3-Aへ進んでください。"
+            : syntheticForwardHolds.length > 0
+              ? " C買い/P売りの候補は原資産照合を保留しています。単脚の下書き反映はできません。Saxo接続を確認して再取得してください。"
             : actionRequiredRegularRows.length > 0
               ? " 次に押す主操作は、各候補の「建玉入力へ下書き反映」です。下書き作成後に3-Aで正式保存してください。"
               : ""}
@@ -2488,7 +2497,7 @@ function PositionsPreview({
         </p>
       ) : null}
       <div className="mt-3 overflow-x-auto">
-          {standaloneRegularRows.length === 0 && syntheticForwardPairs.length === 0 ? (
+          {standaloneRegularRows.length === 0 && syntheticForwardPairs.length === 0 && syntheticForwardHolds.length === 0 ? (
           <p className="text-sm text-slate-500">
             {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : "通常のオプション建玉候補はありません。N口座の現物株確認は下の専用カードで確認してください。"}
           </p>
@@ -2508,6 +2517,9 @@ function PositionsPreview({
             <tbody>
               {syntheticForwardPairs.map((pair) => (
                 <SyntheticForwardPairRow key={pair.id} pair={pair} drafted={draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id)} onCreateDraft={onCreateSyntheticForwardDraft} />
+              ))}
+              {syntheticForwardHolds.map((hold) => (
+                <SyntheticForwardHoldRow key={hold.id} hold={hold} />
               ))}
               {standaloneRegularRows.map((row) => (
                 <PositionRow
@@ -3446,7 +3458,7 @@ function getHistoryCandidateAnchorId(
   return target === "close" ? "option-close-executions" : "option-entry-executions";
 }
 
-function SyntheticForwardPairRow({
+export function SyntheticForwardPairRow({
   pair,
   drafted,
   onCreateDraft,
@@ -3486,6 +3498,26 @@ function SyntheticForwardPairRow({
           {drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
         </button>
       </td>
+    </tr>
+  );
+}
+
+export function SyntheticForwardHoldRow({ hold }: { hold: SaxoSyntheticForwardHold }) {
+  return (
+    <tr className="border-b border-amber-100 bg-amber-50 align-top">
+      <td className="py-2 pr-3">
+        <div className="font-bold text-slate-950">Synthetic Forward候補 / 原資産照合保留</div>
+        <div className="mt-0.5 text-xs text-slate-600">C{hold.strike} 買い + P{hold.strike} 売り / {hold.expiry}</div>
+      </td>
+      <td className="py-2 pr-3 text-xs font-semibold text-slate-700">{hold.accountCode}口座</td>
+      <td className="numeric-input py-2 pr-3 text-right">各{formatMaybeValue(hold.quantity)}枚</td>
+      <td className="numeric-input py-2 pr-3 text-right">対象外</td>
+      <td className="numeric-input py-2 pr-3 text-right">対象外</td>
+      <td className="py-2 pr-3">
+        <span className="rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-900">統合保留</span>
+        <p className="mt-1 max-w-[290px] text-xs leading-5 text-amber-900">{hold.reason}</p>
+      </td>
+      <td className="py-2 text-xs font-semibold text-amber-900">個別反映・今回無視は不可</td>
     </tr>
   );
 }

@@ -143,6 +143,11 @@ export type SaxoApiPositionSnapshot = {
   accountCode?: SaxoAccountCode;
   symbol?: string;
   underlyingName?: string;
+  underlyingSymbol?: string;
+  underlyingIdentity?: string;
+  underlyingIdentitySource?: string;
+  underlyingUic?: number;
+  underlyingAssetType?: string;
   assetType?: string;
   kind: SaxoPositionKind;
   quantity?: number;
@@ -174,6 +179,7 @@ export type SaxoSyntheticForwardPair = {
   callPosition: SaxoApiPositionSnapshot;
   putPosition: SaxoApiPositionSnapshot;
   ticker: string;
+  underlyingIdentity: string;
   accountCode: SaxoAccountCode;
   accountKey: string;
   expiry: string;
@@ -181,19 +187,77 @@ export type SaxoSyntheticForwardPair = {
   quantity: number;
 };
 
+export type SaxoSyntheticForwardHold = {
+  id: string;
+  callPosition: SaxoApiPositionSnapshot;
+  putPosition: SaxoApiPositionSnapshot;
+  accountCode: SaxoAccountCode;
+  expiry: string;
+  strike: number;
+  quantity: number;
+  reason: string;
+};
+
+export type SaxoSyntheticForwardPairing = {
+  pairs: SaxoSyntheticForwardPair[];
+  holds: SaxoSyntheticForwardHold[];
+};
+
 export function findSaxoSyntheticForwardPairs(positions: SaxoApiPositionSnapshot[]): SaxoSyntheticForwardPair[] {
+  return findSaxoSyntheticForwardPairing(positions).pairs;
+}
+
+export function findSaxoSyntheticForwardPairing(positions: SaxoApiPositionSnapshot[]): SaxoSyntheticForwardPairing {
   const calls = positions.filter((position) => isSaxoSyntheticForwardOption(position) && getSaxoSyntheticForwardOptionDetails(position)?.optionType === "call" && resolveSaxoSyntheticForwardSide(position) === "long" && (position.quantity ?? 0) > 0);
   const puts = positions.filter((position) => isSaxoSyntheticForwardOption(position) && getSaxoSyntheticForwardOptionDetails(position)?.optionType === "put" && resolveSaxoSyntheticForwardSide(position) === "short" && (position.quantity ?? 0) < 0);
   const pairedPutIds = new Set<string>();
-  return calls.flatMap((callPosition) => {
-    const callTicker = resolveSaxoPositionSymbol(callPosition)?.toUpperCase();
+  const heldPutIds = new Set<string>();
+  const pairs: SaxoSyntheticForwardPair[] = [];
+  const holds: SaxoSyntheticForwardHold[] = [];
+  for (const callPosition of calls) {
     const callContract = getSaxoSyntheticForwardOptionDetails(callPosition);
-    if (!callTicker || !callContract?.expiry || callContract.strike === undefined || callPosition.quantity === undefined) return [];
-    const putPosition = puts.find((candidate) => !pairedPutIds.has(candidate.id) && candidate.accountKey === callPosition.accountKey && candidate.accountAssignment === callPosition.accountAssignment && resolveSaxoPositionSymbol(candidate)?.toUpperCase() === callTicker && getSaxoSyntheticForwardOptionDetails(candidate)?.expiry === callContract.expiry && Math.abs((getSaxoSyntheticForwardOptionDetails(candidate)?.strike ?? Number.NaN) - callContract.strike) < 0.001 && Math.abs(Math.abs(candidate.quantity ?? 0) - Math.abs(callPosition.quantity ?? 0)) < 0.0001);
-    if (!putPosition) return [];
-    pairedPutIds.add(putPosition.id);
-    return [{ id: `synthetic:${callPosition.accountKey}:${callTicker}:${callContract.expiry}:${callContract.strike}:${Math.abs(callPosition.quantity ?? 0)}`, callPosition, putPosition, ticker: callTicker, accountCode: callPosition.accountAssignment as SaxoAccountCode, accountKey: callPosition.accountKey, expiry: callContract.expiry, strike: callContract.strike, quantity: Math.abs(callPosition.quantity!) }];
-  });
+    if (!callContract?.expiry || callContract.strike === undefined || callPosition.quantity === undefined) continue;
+    const matchingPut = puts.find((candidate) =>
+      !pairedPutIds.has(candidate.id) && !heldPutIds.has(candidate.id) &&
+      candidate.accountKey === callPosition.accountKey &&
+      candidate.accountAssignment === callPosition.accountAssignment &&
+      getSaxoSyntheticForwardOptionDetails(candidate)?.expiry === callContract.expiry &&
+      Math.abs((getSaxoSyntheticForwardOptionDetails(candidate)?.strike ?? Number.NaN) - callContract.strike) < 0.001 &&
+      Math.abs(Math.abs(candidate.quantity ?? 0) - Math.abs(callPosition.quantity ?? 0)) < 0.0001,
+    );
+    if (!matchingPut) continue;
+    const callIdentity = callPosition.underlyingIdentity;
+    const putIdentity = matchingPut.underlyingIdentity;
+    if (!callIdentity || !putIdentity || callIdentity !== putIdentity) {
+      heldPutIds.add(matchingPut.id);
+      holds.push({
+        id: `synthetic-hold:${callPosition.id}:${matchingPut.id}`,
+        callPosition,
+        putPosition: matchingPut,
+        accountCode: callPosition.accountAssignment as SaxoAccountCode,
+        expiry: callContract.expiry,
+        strike: callContract.strike,
+        quantity: Math.abs(callPosition.quantity),
+        reason: !callIdentity || !putIdentity ? "原資産識別子をSaxoから取得できませんでした。" : "二脚のSaxo原資産識別子が一致しません。",
+      });
+      continue;
+    }
+    const ticker = callPosition.underlyingSymbol ?? matchingPut.underlyingSymbol ?? resolveSaxoPositionSymbol(callPosition) ?? resolveSaxoPositionSymbol(matchingPut) ?? "原資産識別子あり";
+    pairedPutIds.add(matchingPut.id);
+    pairs.push({
+      id: `synthetic:${callPosition.accountKey}:${callIdentity}:${callContract.expiry}:${callContract.strike}:${Math.abs(callPosition.quantity ?? 0)}`,
+      callPosition,
+      putPosition: matchingPut,
+      ticker,
+      underlyingIdentity: callIdentity,
+      accountCode: callPosition.accountAssignment as SaxoAccountCode,
+      accountKey: callPosition.accountKey,
+      expiry: callContract.expiry,
+      strike: callContract.strike,
+      quantity: Math.abs(callPosition.quantity!),
+    });
+  }
+  return { pairs, holds };
 }
 
 function isSaxoSyntheticForwardOption(position: SaxoApiPositionSnapshot): boolean {
@@ -723,7 +787,7 @@ export function resolveSaxoPositionSymbol(position: SaxoApiPositionSnapshot, sim
   const direct = normalizeSymbol(directText);
   if (direct && /^[A-Z][A-Z0-9.]{0,9}$/.test(direct)) return direct;
 
-  const textCandidates = [position.instrumentCode, position.underlyingName, position.displayName].filter(
+  const textCandidates = [position.underlyingSymbol, position.instrumentCode, position.underlyingName, position.displayName].filter(
     (value): value is string => Boolean(value?.trim()),
   );
   for (const candidate of textCandidates) {

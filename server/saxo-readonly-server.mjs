@@ -22,6 +22,7 @@ const PUBLIC_GITHUB_PAGES_ORIGIN = "https://jimusaku-lab.github.io";
 const EXPECTED_REDIRECT_URI = `http://localhost:${PORT}/api/saxo/auth/callback`;
 const KEYCHAIN_SERVICE = "us-options-risk-planner-saxo-readonly";
 const KEYCHAIN_STORAGE_LABEL = "macOS Keychain";
+const IS_TEST_PROCESS = process.env.SAXO_READONLY_SERVER_TEST === "1";
 
 const pendingPkceByState = new Map();
 let tokenState = null;
@@ -38,7 +39,7 @@ let tokenPersistenceStatus = {
   message: process.platform === "darwin" ? "Keychain確認前です。" : "macOS以外ではKeychain接続保持は無効です。",
 };
 
-await restoreTokenStateFromKeychain();
+if (!IS_TEST_PROCESS) await restoreTokenStateFromKeychain();
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -51,9 +52,11 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`Saxo read-only local API listening on http://${HOST}:${PORT}`);
-});
+if (!IS_TEST_PROCESS) {
+  server.listen(PORT, HOST, () => {
+    console.log(`Saxo read-only local API listening on http://${HOST}:${PORT}`);
+  });
+}
 
 async function handleRequest(request, response) {
   const requestUrl = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
@@ -512,7 +515,10 @@ async function getPositions(accountKey) {
   return {
     environment: getEnvironment(),
     fetchedAt,
-    positions: rawPositions.map((raw, index) => normalizePosition(raw, accountsByKey, fetchedAt, index)),
+    positions: await enrichPositionUnderlyingIdentities(
+      rawPositions.map((raw, index) => normalizePosition(raw, accountsByKey, fetchedAt, index)),
+      clientKey,
+    ),
     raw: payload,
   };
 }
@@ -1330,7 +1336,7 @@ function normalizeAccountSnapshot(account, balance, margin) {
   };
 }
 
-function normalizePosition(raw, accountsByKey, fetchedAt, index) {
+export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
   const accountKey = firstString(raw, ["AccountKey", "AccountId", "AccountNumber"]) ?? "";
   const account = accountsByKey.get(accountKey);
   const assetType = firstString(raw, ["AssetType", "InstrumentType", "ProductType"]);
@@ -1354,6 +1360,11 @@ function normalizePosition(raw, accountsByKey, fetchedAt, index) {
   const currency = firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency", "DisplayCurrency"]);
   const positionId = firstString(raw, ["PositionId", "PositionID", "Id", "PositionKey"]);
   const uic = firstNumber(raw, ["Uic", "UIC"]);
+  const underlyingUicMatch = firstNumberMatch(raw, ["UnderlyingUic", "UnderlyingUIC", "UnderlyingInstrumentUic"]);
+  const underlyingSymbolMatch = firstStringMatch(raw, ["UnderlyingSymbol", "UnderlyingAssetSymbol", "UnderlyingTicker"]);
+  const underlyingAssetTypeMatch = firstStringMatch(raw, ["UnderlyingAssetType"]);
+  const underlyingSymbol = normalizeUnderlyingSymbol(underlyingSymbolMatch?.value);
+  const underlyingUic = underlyingUicMatch?.value;
   const missingFields = [];
   for (const [field, value] of Object.entries({
     accountKey,
@@ -1379,6 +1390,15 @@ function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     accountAssignment: "unassigned",
     symbol,
     underlyingName: firstString(raw, ["Description", "UnderlyingAssetDescription", "InstrumentName"]),
+    underlyingSymbol,
+    underlyingIdentity: createCanonicalUnderlyingIdentity({ underlyingUic, underlyingSymbol, underlyingAssetType: underlyingAssetTypeMatch?.value }),
+    underlyingIdentitySource: underlyingUic
+      ? underlyingUicMatch?.matchedName
+      : underlyingSymbol
+        ? underlyingSymbolMatch?.matchedName
+        : undefined,
+    underlyingUic,
+    underlyingAssetType: underlyingAssetTypeMatch?.value,
     assetType,
     kind,
     quantity,
@@ -1404,6 +1424,66 @@ function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     fetchedAt,
     raw,
   };
+}
+
+export async function enrichPositionUnderlyingIdentities(positions, clientKey, fetchDetails = getSaxoInstrumentDetails) {
+  const optionDetails = new Map();
+  const underlyingDetails = new Map();
+  return Promise.all(positions.map(async (position) => {
+    if (position.underlyingIdentity || position.kind !== "option" || !Number.isFinite(position.uic) || !position.assetType) return position;
+    const optionKey = `${position.uic}:${position.assetType}:${position.accountKey}`;
+    let optionDetail = optionDetails.get(optionKey);
+    if (!optionDetail) {
+      optionDetail = await fetchDetails({ uic: position.uic, assetType: position.assetType, accountKey: position.accountKey, clientKey }).catch(() => undefined);
+      optionDetails.set(optionKey, optionDetail);
+    }
+    const reference = resolveUnderlyingReference(optionDetail);
+    if (!reference?.uic) return position;
+    const underlyingKey = `${reference.uic}:${reference.assetType ?? "Stock"}:${position.accountKey}`;
+    let underlyingDetail = underlyingDetails.get(underlyingKey);
+    if (!underlyingDetail) {
+      underlyingDetail = await fetchDetails({ uic: reference.uic, assetType: reference.assetType ?? "Stock", accountKey: position.accountKey, clientKey }).catch(() => undefined);
+      underlyingDetails.set(underlyingKey, underlyingDetail);
+    }
+    const underlyingSymbol = normalizeUnderlyingSymbol(firstString(underlyingDetail, ["Symbol", "DisplayAndFormat.Symbol"]) ?? firstString(optionDetail, ["UnderlyingSymbol"]));
+    const underlyingAssetType = reference.assetType ?? firstString(optionDetail, ["UnderlyingAssetType"]);
+    return {
+      ...position,
+      underlyingUic: reference.uic,
+      underlyingAssetType,
+      underlyingSymbol,
+      underlyingIdentity: createCanonicalUnderlyingIdentity({ underlyingUic: reference.uic, underlyingSymbol, underlyingAssetType }),
+      underlyingIdentitySource: `ref/v1/instruments/details/${position.uic}/${position.assetType}:RelatedInstruments`,
+    };
+  }));
+}
+
+async function getSaxoInstrumentDetails({ uic, assetType, accountKey, clientKey }) {
+  return saxoGet(`ref/v1/instruments/details/${encodeURIComponent(uic)}/${encodeURIComponent(assetType)}`, {
+    ...(accountKey ? { AccountKey: accountKey } : {}),
+    ...(clientKey ? { ClientKey: clientKey } : {}),
+  });
+}
+
+function resolveUnderlyingReference(details) {
+  if (!details || typeof details !== "object") return undefined;
+  const directUic = firstNumber(details, ["UnderlyingUic", "UnderlyingUIC"]);
+  if (directUic) return { uic: directUic, assetType: firstString(details, ["UnderlyingAssetType"]) };
+  const related = Array.isArray(details.RelatedInstruments) ? details.RelatedInstruments : [];
+  const stockRelation = related.find((item) => String(item?.AssetType ?? "").toLowerCase() === "stock") ?? related[0];
+  const uic = firstNumber(stockRelation, ["Uic", "UIC"]);
+  return uic ? { uic, assetType: firstString(stockRelation, ["AssetType"]) } : undefined;
+}
+
+function createCanonicalUnderlyingIdentity({ underlyingUic, underlyingSymbol, underlyingAssetType }) {
+  if (Number.isFinite(underlyingUic) && underlyingUic > 0) return `uic:${underlyingUic}:${String(underlyingAssetType ?? "unknown").toLowerCase()}`;
+  return underlyingSymbol ? `symbol:${underlyingSymbol}` : undefined;
+}
+
+function normalizeUnderlyingSymbol(value) {
+  if (!value) return undefined;
+  const token = String(value).trim().toUpperCase().match(/^([A-Z][A-Z0-9.]{0,9})(?:[:/\s_-]|$)/)?.[1];
+  return token || undefined;
 }
 
 function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
@@ -1769,6 +1849,23 @@ function firstString(source, names) {
   for (const value of Object.values(source)) {
     if (value && typeof value === "object") {
       const nested = firstString(value, names);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+}
+
+function firstStringMatch(source, names, prefix = "") {
+  if (!source || typeof source !== "object") return undefined;
+  for (const name of names) {
+    const value = source[name];
+    const path = prefix ? `${prefix}.${name}` : name;
+    if (typeof value === "string" && value.trim() !== "") return { value, matchedName: path };
+    if (typeof value === "number" && Number.isFinite(value)) return { value: String(value), matchedName: path };
+  }
+  for (const [key, value] of Object.entries(source)) {
+    if (value && typeof value === "object") {
+      const nested = firstStringMatch(value, names, prefix ? `${prefix}.${key}` : key);
       if (nested !== undefined) return nested;
     }
   }
