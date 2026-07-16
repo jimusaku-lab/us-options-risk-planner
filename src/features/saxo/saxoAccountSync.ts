@@ -751,7 +751,7 @@ export function getSaxoHistoryCandidateTargetForSimulations(
   const optionType = resolveSaxoHistoryOptionType(item);
   if (item.buySell === "buy" && optionType === "call") {
     const entryMatches = findSaxoHistoryOptionLegMatches(simulations, item, "entry")
-      .filter(({ simulation, leg }) => simulation.strategyType === "long_call" && leg.type === "call" && leg.side === "buy");
+      .filter(({ simulation, leg }) => ["long_call", "synthetic_forward", "combo"].includes(simulation.strategyType) && leg.type === "call" && leg.side === "buy");
     if (entryMatches.length > 0) return "entry";
 
     const closeMatches = findSaxoHistoryOptionLegMatches(simulations, item, "close")
@@ -759,6 +759,12 @@ export function getSaxoHistoryCandidateTargetForSimulations(
     if (closeMatches.length > 0) return "close";
 
     return "unknown";
+  }
+
+  if (item.buySell === "sell" && optionType === "call") {
+    const closeMatches = findSaxoHistoryOptionLegMatches(simulations, item, "close")
+      .filter(({ leg }) => leg.type === "call" && leg.side === "buy");
+    if (closeMatches.length > 0) return "close";
   }
 
   return baseTarget;
@@ -889,16 +895,24 @@ export function getSaxoHistoryOptionLegMatchDiagnostics(
 ): SaxoHistoryOptionLegMatchDiagnostics {
   const accountMismatches: string[] = [];
   const nonAccountMismatches: string[] = [];
-  const resolvedHistoryTarget = getSaxoHistoryCandidateTarget(item);
+  const inferredHistoryTarget = getSaxoHistoryCandidateTarget(item);
+  // A C-buy leg is ambiguous without Saxo OpenClose. The parent-level resolver has
+  // already selected its leg direction, so retain that direction for diagnostics.
+  const resolvedHistoryTarget =
+    target === "entry" && leg.side === "buy" && item.buySell === "buy"
+      ? "entry"
+      : target === "close" && leg.side === "buy" && item.buySell === "sell"
+        ? "close"
+        : inferredHistoryTarget;
   if (target === "unknown") nonAccountMismatches.push("履歴候補の移動先を判定できません。");
   if (item.accountCode && simulation.accountCode && item.accountCode !== simulation.accountCode) {
     accountMismatches.push(`P/N口座が不一致です（履歴: ${item.accountCode} / 建玉: ${simulation.accountCode}）。`);
   }
   if (
     item.accountKey &&
-    simulation.fixtureMeta?.saxoAccountKey &&
-    item.accountKey !== simulation.fixtureMeta.saxoAccountKey &&
-    item.accountKey !== maskSaxoIdentifier(simulation.fixtureMeta.saxoAccountKey)
+    (leg.saxoAccountKey ?? simulation.fixtureMeta?.saxoAccountKey) &&
+    item.accountKey !== (leg.saxoAccountKey ?? simulation.fixtureMeta?.saxoAccountKey) &&
+    item.accountKey !== maskSaxoIdentifier(leg.saxoAccountKey ?? simulation.fixtureMeta?.saxoAccountKey ?? "")
   ) {
     accountMismatches.push("Saxo accountKeyが不一致です。");
   }
@@ -964,7 +978,7 @@ export function getSaxoHistoryOptionLegMatchDiagnostics(
     app: {
       simulationId: simulation.id,
       accountCode: simulation.accountCode,
-      accountKey: simulation.fixtureMeta?.saxoAccountKey,
+      accountKey: leg.saxoAccountKey ?? simulation.fixtureMeta?.saxoAccountKey,
       ticker: simulation.ticker,
       legId: leg.id,
       optionType: leg.type,

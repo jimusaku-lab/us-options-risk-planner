@@ -6,6 +6,8 @@ export type StrategyType =
   | "short_strangle"
   | "long_call"
   | "long_put"
+  | "synthetic_forward"
+  | "combo"
   | "custom";
 
 export type DenominatorMode =
@@ -208,6 +210,11 @@ export type OptionLeg = {
   unrealizedPnlJPY?: number;
   theta?: number;
   brokerSymbol?: string;
+  /** Saxo identifiers belong to each option leg. Older single-leg records keep using fixtureMeta. */
+  saxoAccountKey?: string;
+  saxoPositionId?: string;
+  saxoUic?: number;
+  saxoHistoryCandidateIds?: string[];
   valueSnapshots?: OptionValueSnapshot[];
 };
 

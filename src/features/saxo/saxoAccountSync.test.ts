@@ -807,6 +807,26 @@ describe("Saxo read-only account sync", () => {
     expect(isSaxoHistoryMatchingOptionLeg(longCallSimulation, longCallSimulation.optionLegs[0], history, "entry")).toBe(true);
   });
 
+  it("routes synthetic-forward C-buy and P-sell history to their individual legs", () => {
+    const simulation = createOpenCoveredCallSimulation({
+      id: "sim-synthetic",
+      strategyType: "synthetic_forward",
+      optionLegs: [
+        { id: "synthetic-call", type: "call", side: "buy", strikeUSD: 205, premiumUSD: 8, quantity: 1, expiryDate: "2026-09-18" },
+        { id: "synthetic-put", type: "put", side: "sell", strikeUSD: 205, premiumUSD: 7, quantity: 1, expiryDate: "2026-09-18" },
+      ],
+    });
+    const callEntry: SaxoHistoryDiscoveryItem = { id: "synthetic-call-entry", kind: "trade", accountCode: "N", symbol: "NVDA/18U26C205:XCBF", assetType: "StockOption", buySell: "buy", openClose: "unknown", quantity: 1, price: 8, tradeDate: "2026-07-16" };
+    const callClose: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-call-close", buySell: "sell", price: 9, tradeDate: "2026-07-17" };
+    const putEntry: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-put-entry", symbol: "NVDA/18U26P205:XCBF", buySell: "sell", price: 7 };
+
+    expect(getSaxoHistoryCandidateTargetForSimulations(callEntry, [simulation])).toBe("entry");
+    expect(isSaxoHistoryMatchingOptionLeg(simulation, simulation.optionLegs[0], callEntry, "entry")).toBe(true);
+    expect(getSaxoHistoryCandidateTargetForSimulations(callClose, [simulation])).toBe("close");
+    expect(isSaxoHistoryMatchingOptionLeg(simulation, simulation.optionLegs[0], callClose, "close")).toBe(true);
+    expect(isSaxoHistoryMatchingOptionLeg(simulation, simulation.optionLegs[1], putEntry, "entry")).toBe(true);
+  });
+
   it("keeps context-matched short call buybacks routed to close", () => {
     const simulation = createOpenCoveredCallSimulation();
     const history: SaxoHistoryDiscoveryItem = {

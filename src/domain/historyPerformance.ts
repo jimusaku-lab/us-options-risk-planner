@@ -7,6 +7,7 @@ import {
   type OptionCloseExecutionResult,
 } from "./optionCloseExecutions";
 import { calculateTaxResult, taxProfiles } from "./tax";
+import { shouldIncludeCompositeCloseResultsInPerformance } from "./compositeOptionPosition";
 
 export type HistoryPerformanceResult = {
   simulation: TradeSimulation;
@@ -63,7 +64,9 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
       ? assignedShortPutLeg.strikeUSD * assignedPutDenominatorShares * assignedPutDenominatorFx
       : undefined;
   const premiumJPY = calculateNetInitialPremiumJPY(sanitized);
-  const optionCloseExecutionResults = calculateOptionCloseExecutionResults(sanitized);
+  const optionCloseExecutionResults = shouldIncludeCompositeCloseResultsInPerformance(sanitized)
+    ? calculateOptionCloseExecutionResults(sanitized)
+    : [];
   const hasCloseExecutionResults = optionCloseExecutionResults.length > 0;
   const requiresExecutionRecord = sanitized.status === "closed" || sanitized.status === "expired";
   const realizedOptionProfitJPY = optionCloseExecutionResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);

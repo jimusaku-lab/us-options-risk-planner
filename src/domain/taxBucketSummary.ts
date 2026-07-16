@@ -7,6 +7,7 @@ import {
   hasConfirmedExpiredCloseExecution,
 } from "./optionCloseExecutions";
 import { calculateStockSettlementTaxResult, calculateTaxResult, taxProfiles } from "./tax";
+import { shouldIncludeCompositeCloseResultsInPerformance } from "./compositeOptionPosition";
 
 const endedStatuses = new Set(["closed", "assigned", "expired"]);
 
@@ -20,15 +21,18 @@ export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBu
     .filter((simulation) => endedStatuses.has(simulation.status))
     .reduce<TaxBucketSummary>(
       (summary, simulation) => {
-        const closeExecutionResults = calculateOptionCloseExecutionResults(simulation).filter((result) => result.execution.confirmed);
+        const closeExecutionResults = shouldIncludeCompositeCloseResultsInPerformance(simulation)
+          ? calculateOptionCloseExecutionResults(simulation).filter((result) => result.execution.confirmed)
+          : [];
         const hasCloseExecutions = closeExecutionResults.length > 0;
         const requiresExecutionRecord = simulation.status === "closed" || simulation.status === "expired";
         const hasRequiredExecution =
-          simulation.status === "closed"
+          shouldIncludeCompositeCloseResultsInPerformance(simulation) &&
+          (simulation.status === "closed"
             ? hasConfirmedBuybackCloseExecution(simulation)
             : simulation.status === "expired"
               ? hasConfirmedExpiredCloseExecution(simulation)
-              : hasCloseExecutions;
+              : hasCloseExecutions);
         const missingExecutionRecord = requiresExecutionRecord && !hasRequiredExecution;
         const premiumJPY = calculateNetInitialPremiumJPY(simulation);
         const primary = getPrimaryDenominator(calculateDenominators(simulation, premiumJPY));

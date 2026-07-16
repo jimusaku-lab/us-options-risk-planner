@@ -6,6 +6,7 @@ import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, type WorkspaceMode } from "@/s
 import { calculateDte, getShortOptionLegs } from "@/domain/calculations";
 import { calculateProfitTakeBuybackPriceUSD, getDefaultExitOrderPlanForLeg, getExitOrderPlanForLeg, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
 import { calculateOptionEntryExecutionSummary, createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
+import { getCompositeOptionLifecycle, isCompositeOptionStrategy, validateCompositeOptionPosition } from "@/domain/compositeOptionPosition";
 import {
   calculateOptionCloseExecutionResults,
   createOptionCloseExecutionDraft,
@@ -51,16 +52,16 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const [isJournalOpen, setIsJournalOpen] = useState(false);
   const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
   const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
-  const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call"].includes(
+  const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call", "synthetic_forward", "combo"].includes(
     simulation.strategyType,
   );
-  const needsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put"].includes(
+  const needsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "synthetic_forward", "combo"].includes(
     simulation.strategyType,
   );
   const needsStock = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
     simulation.strategyType,
   );
-  const needsBrokerMarginInput = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "custom"].includes(
+  const needsBrokerMarginInput = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "synthetic_forward", "combo", "custom"].includes(
     simulation.strategyType,
   );
   const defaultEventDate = formatLocalDate();
@@ -155,16 +156,17 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     (stockAcquisitionComplete ? onStockAcquisitionCompleteClose ?? onCloseEditor : onCloseEditor)?.();
   };
   const updateStrategy = (strategyType: StrategyType) => {
-    const nextNeedsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call"].includes(
+    const nextNeedsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call", "synthetic_forward", "combo"].includes(
       strategyType,
     );
-    const nextNeedsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put"].includes(
+    const nextNeedsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "synthetic_forward", "combo"].includes(
       strategyType,
     );
     const nextNeedsStock = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
       strategyType,
     );
-    const callSide: OptionLeg["side"] = strategyType === "long_call" ? "buy" : "sell";
+    const isComposite = strategyType === "synthetic_forward" || strategyType === "combo";
+    const callSide: OptionLeg["side"] = strategyType === "long_call" || isComposite ? "buy" : "sell";
     const putSide: OptionLeg["side"] = strategyType === "long_put" ? "buy" : "sell";
     const nextLegs = [
       ...(nextNeedsCall
@@ -218,7 +220,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           }
         : null,
       brokerMarginJPY: nextNeedsPut ? simulation.brokerMarginJPY : 0,
-      denominatorMode: strategyType === "short_put" ? "cash_secured" : simulation.denominatorMode,
+      denominatorMode: strategyType === "short_put" || isComposite ? "cash_secured" : simulation.denominatorMode,
     });
   };
   const updateLeg = (id: string, patch: Partial<TradeSimulation["optionLegs"][number]>) => {
@@ -247,6 +249,10 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const recoveredEntryOptionLegs = recoverEntryOptionLegsFromSaxoDraft(simulation, optionEntryExecutions, saxoHistoryCandidates);
   const entryOptionLegs = simulation.optionLegs.length > 0 ? simulation.optionLegs : recoveredEntryOptionLegs;
   const shortExitLegs = getShortOptionLegs(simulation);
+  const isComposite = isCompositeOptionStrategy(simulation);
+  const compositeValidation = validateCompositeOptionPosition(simulation);
+  const compositeLifecycle = getCompositeOptionLifecycle(simulation);
+  const executionLegs = isComposite ? entryOptionLegs : shortExitLegs;
   const optionEntrySummary = calculateOptionEntryExecutionSummary(simulation);
   const showOptionEntryExecutions = ["planned", "open"].includes(simulation.status) || optionEntryExecutions.length > 0;
   const optionCloseExecutions = simulation.optionCloseExecutions ?? [];
@@ -364,7 +370,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     if (simulation.status !== "open" || !["closed", "assigned", "expired"].includes(nextStatus)) return {};
     if (nextStatus === "closed") {
       const existingLegIds = new Set(optionCloseExecutions.filter((execution) => (execution.closeKind ?? "buyback") === "buyback").map((execution) => execution.legId));
-      const drafts = shortExitLegs
+      const drafts = executionLegs
         .filter((leg) => !existingLegIds.has(leg.id))
         .map((leg) =>
           createOptionCloseExecutionDraft({
@@ -379,7 +385,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     }
     if (nextStatus === "expired") {
       const existingLegIds = new Set(optionCloseExecutions.filter((execution) => execution.closeKind === "expired").map((execution) => execution.legId));
-      const drafts = shortExitLegs
+      const drafts = executionLegs
         .filter((leg) => !existingLegIds.has(leg.id))
         .map((leg) =>
           createOptionCloseExecutionDraft({
@@ -842,6 +848,8 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               ["short_strangle", "ショートストラングル"],
               ["long_call", "コール買い"],
               ["long_put", "プット買い"],
+              ["synthetic_forward", "シンセティックフォワード（C買い + P売り・同一行使価格）"],
+              ["combo", "コンボ（C買い + P売り・別行使価格可）"],
               ["wheel", "ホイール戦略"],
             ]}
           />
@@ -1007,6 +1015,15 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
           <h3 className="text-sm font-bold text-slate-950">3. オプション脚</h3>
           <div className="mt-3 grid gap-3">
+          {isComposite && callLeg && putLeg ? (
+            <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
+              <div className="font-bold">親建玉: C買い {callLeg.quantity}枚 / P売り {putLeg.quantity}枚</div>
+              <p className="mt-1">Saxo照合・途中決済・成績は脚別に管理します。P売りの割当資金はネットプレミアムと相殺しません。</p>
+              <NumberInput label="二脚の枚数" value={callLeg.quantity} suffix="枚" min={1} onChange={(quantity) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, quantity })) })} />
+              {!compositeValidation.valid ? <p className="mt-2 font-semibold text-red-700">{compositeValidation.reasons.join(" ")}</p> : null}
+              {compositeLifecycle ? <p className="mt-2 text-xs font-semibold">状態: {compositeLifecycle.label}</p> : null}
+            </div>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-2">
             <TextInput
               label="建玉日"
@@ -1144,11 +1161,11 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              {shortExitLegs.length > 0 ? (
+              {entryOptionLegs.length > 0 ? (
                 <button
                   className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
                   type="button"
-                  onClick={() => addOptionEntryExecution(shortExitLegs[0])}
+                  onClick={() => addOptionEntryExecution(entryOptionLegs.find((leg) => !optionEntryExecutions.some((execution) => execution.legId === leg.id)) ?? entryOptionLegs[0])}
                 >
                   約定確認を追加
                 </button>
@@ -2029,10 +2046,10 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               >
                 最初の確認待ちを開く
               </button>
-            ) : shortExitLegs.length > 0 && !missingSaxoHistoryCloseCandidate ? (
+            ) : executionLegs.length > 0 && !missingSaxoHistoryCloseCandidate ? (
               <button
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                onClick={() => addOptionCloseExecution(shortExitLegs[0])}
+                onClick={() => addOptionCloseExecution(executionLegs.find((leg) => !optionCloseExecutions.some((execution) => execution.legId === leg.id)) ?? executionLegs[0])}
               >
                 決済実績を追加
               </button>
@@ -2085,7 +2102,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               決済実績は確認済みです。必要に応じて内容を見直せます。
             </div>
           ) : null}
-          {simulation.status === "open" && hasConfirmedBuybackClose ? (
+          {simulation.status === "open" && (isComposite ? compositeLifecycle?.closeComplete : hasConfirmedBuybackClose) ? (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
               <span className="font-semibold">確認済みの決済実績があります。建玉状態を決済済みに変更できます。</span>
               <button
@@ -2097,7 +2114,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               </button>
             </div>
           ) : null}
-          {simulation.status === "open" && !hasConfirmedBuybackClose && hasConfirmedExpiredClose ? (
+          {simulation.status === "open" && !(isComposite ? compositeLifecycle?.closeComplete : hasConfirmedBuybackClose) && hasConfirmedExpiredClose ? (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-950">
               <span className="font-semibold">確認済みの満期終了記録があります。建玉状態を満期終了に変更できます。</span>
               <button
@@ -2109,7 +2126,8 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               </button>
             </div>
           ) : null}
-          {simulation.status === "open" && !hasConfirmedBuybackClose && !hasConfirmedExpiredClose && hasUnconfirmedCloseDraft ? (
+          {isComposite && compositeLifecycle?.state === "partial_close" ? <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">一脚の決済実績を確認済みです。もう一脚の決済実績を確認するまで、親建玉は一部決済・要確認として扱います。</div> : null}
+          {simulation.status === "open" && !(isComposite ? compositeLifecycle?.closeComplete : hasConfirmedBuybackClose) && !hasConfirmedExpiredClose && hasUnconfirmedCloseDraft ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">
               決済実績の下書きがあります。Saxo注文履歴を見て入力内容を確認し、「決済実績を確認済みにする」を押してください。
             </div>
@@ -2121,7 +2139,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               const closeValidation = validateSaxoHistoryCloseExecution(simulation, execution);
               const isInvalidSaxoHistoryCloseDraft = execution.source === "saxo_history" && !execution.confirmed && !closeValidation.valid;
               const visibleResult = isInvalidSaxoHistoryCloseDraft ? undefined : result;
-              const selectedLeg = shortExitLegs.find((leg) => leg.id === execution.legId) ?? shortExitLegs[0];
+              const selectedLeg = executionLegs.find((leg) => leg.id === execution.legId) ?? executionLegs[0];
               const isExpiredExecution = execution.closeKind === "expired";
               const isNCloseExecution = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
               const closeFxRate = execution.fxRateJPY ?? execution.brokerExchangeRateJPY ?? simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
@@ -2232,13 +2250,13 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                         label="対象脚"
                         value={execution.legId}
                         onChange={(legId) => {
-                          const leg = shortExitLegs.find((item) => item.id === legId);
+                          const leg = executionLegs.find((item) => item.id === legId);
                           updateOptionCloseExecution(execution.id, {
                             legId,
                             contracts: leg?.quantity ?? execution.contracts,
                           });
                         }}
-                        options={shortExitLegs.map((leg) => [leg.id, getOptionLegLabel(leg)])}
+                        options={executionLegs.map((leg) => [leg.id, getOptionLegLabel(leg)])}
                       />
                       <TextInput
                         label="決済日"
@@ -2353,18 +2371,18 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                       <details className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
                         <summary className="cursor-pointer font-bold text-slate-700">照合用の詳細を開く</summary>
                         <div className="mt-3 grid gap-3 xl:grid-cols-4">
-                          {shortExitLegs.length > 1 ? (
+                          {executionLegs.length > 1 ? (
                             <Select
                               label="対象脚"
                               value={execution.legId}
                               onChange={(legId) => {
-                                const leg = shortExitLegs.find((item) => item.id === legId);
+                                const leg = executionLegs.find((item) => item.id === legId);
                                 updateOptionCloseExecution(execution.id, {
                                   legId,
                                   contracts: leg?.quantity ?? execution.contracts,
                                 });
                               }}
-                              options={shortExitLegs.map((leg) => [leg.id, getOptionLegLabel(leg)])}
+                              options={executionLegs.map((leg) => [leg.id, getOptionLegLabel(leg)])}
                             />
                           ) : null}
                           <NumberInput

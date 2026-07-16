@@ -4,6 +4,7 @@ import { Fragment } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
+import { getCompositeAssignmentFunding, getCompositeOptionLifecycle, isCompositeOptionStrategy } from "@/domain/compositeOptionPosition";
 import { resolveEffectiveCoveredCallSimulation } from "@/domain/coveredCallCoverage";
 import { getJournalStatusLabel, getJournalStatusTone } from "@/domain/entryRationaleJournal";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
@@ -174,6 +175,8 @@ export function Dashboard({
                 { wheelCycles, stockTransfers },
               );
               const isHistoryRow = endedStatuses.has(simulation.status);
+              const compositeLifecycle = getCompositeOptionLifecycle(simulation);
+              const compositeFunding = getCompositeAssignmentFunding(simulation, accountInputs[simulation.accountCode]);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
               const longOptionDisplay = !isHistoryRow ? premiumDisplay.longOptionOrderDisplay : undefined;
@@ -294,7 +297,7 @@ export function Dashboard({
                   </td>
                   <td className="py-3 pr-3">
                     <span className={`rounded px-2 py-1 text-xs font-bold ${statusClassName[simulation.status]}`}>
-                      {getStatusLabel(simulation.status)}
+                      {compositeLifecycle?.label ?? getStatusLabel(simulation.status)}
                     </span>
                   </td>
                   <td className="py-3 pr-3">
@@ -302,7 +305,11 @@ export function Dashboard({
                       {getAccountEnvironmentLabel(simulation.accountEnvironment)}
                     </span>
                   </td>
-                  <td className="py-3 pr-3 text-slate-700">{getStrategyLabel(simulation.strategyType)}</td>
+                  <td className="py-3 pr-3 text-slate-700">
+                    <div>{getStrategyLabel(simulation.strategyType)}</div>
+                    {isCompositeOptionStrategy(simulation) ? <div className="mt-1 text-xs font-semibold text-indigo-700">C買い {callLeg?.quantity ?? 0} / P売り {putLeg?.quantity ?? 0}</div> : null}
+                    {compositeFunding ? <div className={`mt-1 text-xs ${compositeFunding.status === "sufficient" ? "text-emerald-700" : "text-amber-700"}`}>P割当資金 {formatUSD(compositeFunding.requiredUSD)}: {compositeFunding.status === "sufficient" ? "充足" : compositeFunding.status === "insufficient" ? "不足" : "未確認"}</div> : null}
+                  </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">{strikeLabel}</td>
                   <td className="py-3 pr-3 text-slate-700">{simulation.expiryDate}</td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">

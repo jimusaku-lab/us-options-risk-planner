@@ -1,5 +1,6 @@
 import type { AccountEnvironment, TradeSimulation } from "@/types/domain";
 import { calculateOptionCloseExecutionResults } from "./optionCloseExecutions";
+import { shouldIncludeCompositeCloseResultsInPerformance } from "./compositeOptionPosition";
 import { calculateStockSettlementTaxResult } from "./tax";
 import { calculateNetInitialPremiumJPY, getShortCallLegs, getShortPutLegs } from "./calculations";
 
@@ -550,7 +551,7 @@ export function calculateYearlyPerformanceSummary(
 
     if (!endedStatuses.has(simulation.status)) return;
 
-    calculateOptionCloseExecutionResults(simulation)
+    (shouldIncludeCompositeCloseResultsInPerformance(simulation) ? calculateOptionCloseExecutionResults(simulation) : [])
       .filter((result) => result.execution.confirmed)
       .forEach((result) => {
         if (isNAccount(simulation.accountEnvironment)) {
