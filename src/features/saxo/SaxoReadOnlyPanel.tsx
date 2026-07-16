@@ -23,6 +23,7 @@ import {
   applyOrderAccountMappings,
   createSaxoPositionDraftSummary,
   findEntryHistoryMatches,
+  findSaxoSyntheticForwardPairs,
   findSaxoAssignmentStockAcquisitionItem,
   getSaxoHistoryCandidateKeys,
   getConfirmedMappingForAccount,
@@ -49,6 +50,7 @@ import {
   type SaxoHistoryDiscoveryEndpoint,
   type SaxoHistoryDiscoveryItem,
   type SaxoPositionReconciliationRow,
+  type SaxoSyntheticForwardPair,
 } from "@/features/saxo/saxoAccountSync";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { summarizeSaxoHistoryCompletion } from "@/features/saxo/saxoHistoryCompletion";
@@ -123,6 +125,7 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft,
   onCreateAssignmentDraft,
   onCreatePositionDraft,
+  onCreateSyntheticForwardDraft,
   onLinkPositionToExisting,
   onCreateStockTransferFromPosition,
   stockTransfers = [],
@@ -142,6 +145,7 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
+  onCreateSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
   onLinkPositionToExisting?: (position: SaxoApiPositionSnapshot, simulation: TradeSimulation, historyItems?: SaxoHistoryDiscoveryItem[]) => boolean | void;
   onCreateStockTransferFromPosition?: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
   stockTransfers?: StockTransferEvent[];
@@ -294,6 +298,7 @@ export function SaxoReadOnlyPanel({
     () => reconcileSaxoPositions(simulations, mappedPositions),
     [mappedPositions, simulations],
   );
+  const syntheticForwardPairs = useMemo(() => findSaxoSyntheticForwardPairs(mappedPositions), [mappedPositions]);
   const historyReflectionStates = useMemo(
     () => createHistoryReflectionStates(historyEndpoints, simulations, reflectedHistoryIds, ignoredHistoryIds, stockTransfers),
     [historyEndpoints, ignoredHistoryIds, simulations, reflectedHistoryIds, stockTransfers],
@@ -1263,6 +1268,7 @@ export function SaxoReadOnlyPanel({
               <PositionsPreview
                 rows={positionsFetchedAt ? positionRows : []}
                 positions={mappedPositions}
+                syntheticForwardPairs={syntheticForwardPairs}
                 fetchedAt={positionsFetchedAt}
                 isLoading={isLoading}
                 expandedPositionId={expandedPositionId}
@@ -1412,6 +1418,15 @@ export function SaxoReadOnlyPanel({
                       ? draftMessage
                       : "Saxo建玉から取込下書きを作成しました。正式な建玉保存はまだ行っていません。",
                   );
+                }}
+                onCreateSyntheticForwardDraft={(pair) => {
+                  if (draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id)) {
+                    setMessage("このSynthetic Forward候補はすでに統合下書きへ反映済みです。二脚を個別には反映できません。");
+                    return;
+                  }
+                  setDraftedPositionIds((current) => Array.from(new Set([...current, pair.callPosition.id, pair.putPosition.id])));
+                  onCreateSyntheticForwardDraft?.(pair, historyEndpoints.flatMap((endpoint) => endpoint.items ?? []));
+                  setMessage("C買い/P売りを一件のSynthetic Forward下書きへ統合しました。3-Aで約定実績を確認してください。");
                 }}
                 onCreateDraftFromBroken={(position) => {
                   const missingItems = getMissingPositionDraftRequirements(position);
@@ -2337,6 +2352,7 @@ function SnapshotPreview({
 function PositionsPreview({
   rows,
   positions,
+  syntheticForwardPairs,
   fetchedAt,
   isLoading,
   expandedPositionId,
@@ -2357,6 +2373,7 @@ function PositionsPreview({
   onRepairLink,
   onOpenLinked,
   onCreateDraft,
+  onCreateSyntheticForwardDraft,
   onCreateDraftFromBroken,
   onRecreateDraftFromStaleFlag,
   onDiscardDraft,
@@ -2367,6 +2384,7 @@ function PositionsPreview({
 }: {
   rows: SaxoPositionReconciliationRow[];
   positions: SaxoApiPositionSnapshot[];
+  syntheticForwardPairs: SaxoSyntheticForwardPair[];
   fetchedAt: string;
   isLoading: boolean;
   expandedPositionId: string;
@@ -2387,6 +2405,7 @@ function PositionsPreview({
   onRepairLink: (row: SaxoPositionReconciliationRow) => void;
   onOpenLinked: (row: SaxoPositionReconciliationRow, anchorId?: string) => void;
   onCreateDraft: (position: SaxoApiPositionSnapshot) => void;
+  onCreateSyntheticForwardDraft: (pair: SaxoSyntheticForwardPair) => void;
   onCreateDraftFromBroken: (position: SaxoApiPositionSnapshot) => void;
   onRecreateDraftFromStaleFlag: (position: SaxoApiPositionSnapshot) => void;
   onDiscardDraft: (position: SaxoApiPositionSnapshot) => void;
@@ -2407,12 +2426,14 @@ function PositionsPreview({
     (row) => row.position && getRecordedStockTransferForPosition(row.position, simulations, stockTransfers),
   );
   const regularRows = rows.filter((row) => !isNAccountStockPosition(row.position));
-  const linkedRegularRows = regularRows.filter((row) => row.position && resolveLinkedSimulation(row).status === "linked");
-  const actionRequiredRegularRows = regularRows.filter((row) => {
+  const syntheticPositionIds = new Set(syntheticForwardPairs.flatMap((pair) => [pair.callPosition.id, pair.putPosition.id]));
+  const standaloneRegularRows = regularRows.filter((row) => !row.position || !syntheticPositionIds.has(row.position.id));
+  const linkedRegularRows = standaloneRegularRows.filter((row) => row.position && resolveLinkedSimulation(row).status === "linked");
+  const actionRequiredRegularRows = standaloneRegularRows.filter((row) => {
     if (!row.position) return false;
     return resolveLinkedSimulation(row).status !== "linked";
   });
-  const actionRequiredRows = actionRequiredRegularRows.length + pendingStockTransferRows.length;
+  const actionRequiredRows = actionRequiredRegularRows.length + syntheticForwardPairs.length + pendingStockTransferRows.length;
   const confirmedCurrentHoldingRows = linkedRegularRows.length + recordedStockTransferRows.length;
   const draft = draftPosition ? createSaxoPositionDraftSummary(draftPosition, simulations) : null;
   return (
@@ -2435,7 +2456,7 @@ function PositionsPreview({
       {positions.length > 0 ? (
         <p
           className={`mt-2 rounded-md border px-3 py-2 text-xs leading-5 ${
-            actionRequiredRegularRows.length > 0
+            actionRequiredRows > 0
               ? "border-teal-300 bg-teal-50 text-teal-950"
               : "border-slate-200 bg-slate-50 text-slate-700"
           }`}
@@ -2443,9 +2464,11 @@ function PositionsPreview({
           {actionRequiredRows > 0
             ? `今回処理が必要なのは、Saxoで約定済みまたは未反映の建玉${actionRequiredRows}件です。`
             : "今回追加で反映が必要なSaxo建玉はありません。"}
-          {actionRequiredRegularRows.length > 0
-            ? " 次に押す主操作は、各候補の「建玉入力へ下書き反映」です。下書き作成後に3-Aで正式保存してください。"
-            : ""}
+          {syntheticForwardPairs.length > 0
+            ? " C買い/P売りのペアは、個別には反映せず「2脚をシンセティックとして下書き反映」から3-Aへ進んでください。"
+            : actionRequiredRegularRows.length > 0
+              ? " 次に押す主操作は、各候補の「建玉入力へ下書き反映」です。下書き作成後に3-Aで正式保存してください。"
+              : ""}
           {confirmedCurrentHoldingRows > 0
             ? " 照合済みの現在保有は、新しく反映する必要はありません。"
             : ""}
@@ -2465,7 +2488,7 @@ function PositionsPreview({
         </p>
       ) : null}
       <div className="mt-3 overflow-x-auto">
-        {regularRows.length === 0 ? (
+          {standaloneRegularRows.length === 0 && syntheticForwardPairs.length === 0 ? (
           <p className="text-sm text-slate-500">
             {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : "通常のオプション建玉候補はありません。N口座の現物株確認は下の専用カードで確認してください。"}
           </p>
@@ -2483,7 +2506,10 @@ function PositionsPreview({
               </tr>
             </thead>
             <tbody>
-              {regularRows.map((row) => (
+              {syntheticForwardPairs.map((pair) => (
+                <SyntheticForwardPairRow key={pair.id} pair={pair} drafted={draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id)} onCreateDraft={onCreateSyntheticForwardDraft} />
+              ))}
+              {standaloneRegularRows.map((row) => (
                 <PositionRow
                   key={row.id}
                   row={row}
@@ -3418,6 +3444,50 @@ function getHistoryCandidateAnchorId(
   if (target === "assignment") return "stock-acquisition-record";
   if (target === "stock_settlement") return "stock-settlement-record";
   return target === "close" ? "option-close-executions" : "option-entry-executions";
+}
+
+function SyntheticForwardPairRow({
+  pair,
+  drafted,
+  onCreateDraft,
+}: {
+  pair: SaxoSyntheticForwardPair;
+  drafted: boolean;
+  onCreateDraft: (pair: SaxoSyntheticForwardPair) => void;
+}) {
+  return (
+    <tr className="border-b border-teal-100 bg-teal-50 align-top">
+      <td className="py-2 pr-3">
+        <div className="font-bold text-slate-950">
+          {pair.ticker} Synthetic Forward / {pair.expiry}
+        </div>
+        <div className="mt-0.5 text-xs text-slate-600">
+          C{pair.strike} 買い + P{pair.strike} 売り / Saxo現在建玉の二脚ペア
+        </div>
+      </td>
+      <td className="py-2 pr-3 text-xs font-semibold text-slate-700">{pair.accountCode}口座</td>
+      <td className="numeric-input py-2 pr-3 text-right">各{formatMaybeValue(pair.quantity)}枚</td>
+      <td className="numeric-input py-2 pr-3 text-right">親注文で確認</td>
+      <td className="numeric-input py-2 pr-3 text-right">二脚合算なし</td>
+      <td className="py-2 pr-3">
+        <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">二脚統合候補</span>
+        <p className="mt-1 max-w-[290px] text-xs leading-5 text-teal-900">
+          個別の「建玉入力へ下書き反映」と「今回は無視」は利用しません。親SyntheticUnderlying注文のネット約定価格を3-Aで確認します。
+        </p>
+      </td>
+      <td className="py-2">
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={() => onCreateDraft(pair)}
+          disabled={drafted}
+        >
+          <FilePlus2 size={13} />
+          {drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
+        </button>
+      </td>
+    </tr>
+  );
 }
 
 function PositionRow({

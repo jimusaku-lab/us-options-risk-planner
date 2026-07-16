@@ -169,6 +169,49 @@ export type SaxoApiPositionSnapshot = {
   raw?: unknown;
 };
 
+export type SaxoSyntheticForwardPair = {
+  id: string;
+  callPosition: SaxoApiPositionSnapshot;
+  putPosition: SaxoApiPositionSnapshot;
+  ticker: string;
+  accountCode: SaxoAccountCode;
+  accountKey: string;
+  expiry: string;
+  strike: number;
+  quantity: number;
+};
+
+export function findSaxoSyntheticForwardPairs(positions: SaxoApiPositionSnapshot[]): SaxoSyntheticForwardPair[] {
+  const calls = positions.filter((position) => position.kind === "option" && position.accountAssignment !== "unassigned" && position.accountAssignment !== "ignored" && position.optionType === "call" && position.side === "long" && (position.quantity ?? 0) > 0);
+  const puts = positions.filter((position) => position.kind === "option" && position.accountAssignment !== "unassigned" && position.accountAssignment !== "ignored" && position.optionType === "put" && position.side === "short" && (position.quantity ?? 0) < 0);
+  const pairedPutIds = new Set<string>();
+  return calls.flatMap((callPosition) => {
+    const callTicker = resolveSaxoPositionSymbol(callPosition)?.toUpperCase();
+    if (!callTicker || !callPosition.expiry || callPosition.strike === undefined || callPosition.quantity === undefined) return [];
+    const putPosition = puts.find((candidate) => !pairedPutIds.has(candidate.id) && candidate.accountKey === callPosition.accountKey && candidate.accountAssignment === callPosition.accountAssignment && resolveSaxoPositionSymbol(candidate)?.toUpperCase() === callTicker && candidate.expiry === callPosition.expiry && Math.abs((candidate.strike ?? Number.NaN) - callPosition.strike!) < 0.001 && Math.abs(Math.abs(candidate.quantity ?? 0) - Math.abs(callPosition.quantity ?? 0)) < 0.0001);
+    if (!putPosition) return [];
+    pairedPutIds.add(putPosition.id);
+    return [{ id: `synthetic:${callPosition.accountKey}:${callTicker}:${callPosition.expiry}:${callPosition.strike}:${Math.abs(callPosition.quantity ?? 0)}`, callPosition, putPosition, ticker: callTicker, accountCode: callPosition.accountAssignment as SaxoAccountCode, accountKey: callPosition.accountKey, expiry: callPosition.expiry!, strike: callPosition.strike!, quantity: Math.abs(callPosition.quantity!) }];
+  });
+}
+
+/** Select the broker's composite ticket record without deriving a net fill from either leg. */
+export function findSaxoSyntheticForwardParentHistory(
+  pair: SaxoSyntheticForwardPair,
+  historyItems: SaxoHistoryDiscoveryItem[],
+): SaxoHistoryDiscoveryItem | undefined {
+  return historyItems
+    .filter((item) => item.accountKey === pair.accountKey || item.accountKey === maskSaxoIdentifier(pair.accountKey))
+    .filter((item) => !item.accountCode || item.accountCode === pair.accountCode)
+    .filter((item) => (item.assetType ?? "").toLowerCase().includes("syntheticunderlying"))
+    .filter((item) => (resolveSaxoHistoryUnderlyingSymbol(item) ?? "").toUpperCase() === pair.ticker)
+    .sort((left, right) => {
+      const leftScore = Number(Boolean(left.orderId)) + Number(left.price !== undefined);
+      const rightScore = Number(Boolean(right.orderId)) + Number(right.price !== undefined);
+      return rightScore - leftScore;
+    })[0];
+}
+
 export type SaxoPositionReconciliationRow = {
   id: string;
   status: SaxoPositionMatchStatus;
@@ -217,6 +260,8 @@ export type SaxoHistoryDiscoveryEndpoint = {
 
 export type SaxoHistoryDiscoveryItem = {
   id: string;
+  orderId?: string;
+  ticketId?: string;
   kind: "closed_position" | "trade" | string;
   sourceIdMasked?: string;
   accountKey?: string;

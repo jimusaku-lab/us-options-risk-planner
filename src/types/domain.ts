@@ -321,6 +321,20 @@ export type BrokerSettlement = {
   netCashflowJPY?: number;
 };
 
+/** Parent-level values from a Saxo TraderGO synthetic-forward combo ticket. */
+export type SyntheticForwardTicket = {
+  ticketId?: string;
+  orderId?: string;
+  netOrderPriceUSD?: number;
+  estimatedTotalCommissionUSD?: number;
+  netFillPriceUSD?: number;
+  actualTotalCommissionUSD?: number;
+  requiredMarginUSD?: number;
+  marginAvailableUSD?: number;
+  marginAsOf?: string;
+  assignmentAccepted?: boolean;
+};
+
 export type OptionCloseExecution = {
   id: string;
   legId: string;
@@ -411,6 +425,7 @@ export type TradeSimulation = {
   accountCurrency: Currency;
   referenceFxRateJPY?: number;
   brokerSettlement?: BrokerSettlement;
+  syntheticForwardTicket?: SyntheticForwardTicket;
   stockPosition: StockPosition | null;
   optionLegs: OptionLeg[];
   brokerMarginJPY: number;

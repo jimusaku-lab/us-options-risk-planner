@@ -82,6 +82,36 @@ export function getCompositeNetEntryPremiumUSD(simulation: TradeSimulation): num
   return (validation.putLeg.premiumUSD - validation.callLeg.premiumUSD) * CONTRACT_SIZE * validation.callLeg.quantity;
 }
 
+export function getSyntheticForwardTicketNetPremiumUSD(simulation: TradeSimulation): number | undefined {
+  if (simulation.strategyType !== "synthetic_forward") return undefined;
+  const ticket = simulation.syntheticForwardTicket;
+  const price = ticket?.netFillPriceUSD ?? ticket?.netOrderPriceUSD;
+  const quantity = validateCompositeOptionPosition(simulation).callLeg?.quantity;
+  if (price === undefined || !Number.isFinite(price) || !quantity || quantity <= 0) return undefined;
+  return price * CONTRACT_SIZE * quantity;
+}
+
+export function getSyntheticForwardMarginCheck(simulation: TradeSimulation) {
+  if (simulation.strategyType !== "synthetic_forward") return undefined;
+  const ticket = simulation.syntheticForwardTicket;
+  const requiredUSD = ticket?.requiredMarginUSD;
+  const availableUSD = ticket?.marginAvailableUSD;
+  if (requiredUSD === undefined || !Number.isFinite(requiredUSD) || requiredUSD < 0) return { status: "unconfirmed" as const, requiredUSD, availableUSD };
+  if (availableUSD === undefined || !Number.isFinite(availableUSD) || availableUSD < 0) return { status: "unconfirmed" as const, requiredUSD, availableUSD };
+  return { status: availableUSD >= requiredUSD ? "sufficient" as const : "insufficient" as const, requiredUSD, availableUSD, surplusUSD: availableUSD - requiredUSD };
+}
+
+export function validateSyntheticForwardTicketForOpen(simulation: TradeSimulation): string[] {
+  if (simulation.strategyType !== "synthetic_forward") return [];
+  const validation = validateCompositeOptionPosition(simulation);
+  const ticket = simulation.syntheticForwardTicket;
+  const reasons = [...validation.reasons];
+  if (!ticket || !Number.isFinite(ticket.netFillPriceUSD) || ticket.netFillPriceUSD === 0) reasons.push("ネット約定価格を入力してください。");
+  if (!ticket || !Number.isFinite(ticket.actualTotalCommissionUSD) || (ticket.actualTotalCommissionUSD ?? 0) <= 0) reasons.push("実績総手数料を入力してください。");
+  if (!ticket?.assignmentAccepted) reasons.push("P売りの割当受容と同一口座の現金確認を明示してください。");
+  return reasons;
+}
+
 export function getCompositeAssignmentFunding(simulation: TradeSimulation, account?: Pick<AccountState, "cashBalance" | "currency">) {
   const validation = validateCompositeOptionPosition(simulation);
   if (!isCompositeOptionStrategy(simulation) || !validation.putLeg) return undefined;

@@ -6,7 +6,7 @@ import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, type WorkspaceMode } from "@/s
 import { calculateDte, getShortOptionLegs } from "@/domain/calculations";
 import { calculateProfitTakeBuybackPriceUSD, getDefaultExitOrderPlanForLeg, getExitOrderPlanForLeg, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
 import { calculateOptionEntryExecutionSummary, createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
-import { getCompositeOptionLifecycle, isCompositeOptionStrategy, validateCompositeOptionPosition } from "@/domain/compositeOptionPosition";
+import { getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardTicketNetPremiumUSD, isCompositeOptionStrategy, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "@/domain/compositeOptionPosition";
 import {
   calculateOptionCloseExecutionResults,
   createOptionCloseExecutionDraft,
@@ -221,12 +221,17 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
         : null,
       brokerMarginJPY: nextNeedsPut ? simulation.brokerMarginJPY : 0,
       denominatorMode: strategyType === "short_put" || isComposite ? "cash_secured" : simulation.denominatorMode,
+      syntheticForwardTicket: strategyType === "synthetic_forward" ? simulation.syntheticForwardTicket ?? {} : undefined,
+      brokerCommissionUSD: strategyType === "synthetic_forward" ? undefined : simulation.brokerCommissionUSD,
     });
   };
   const updateLeg = (id: string, patch: Partial<TradeSimulation["optionLegs"][number]>) => {
     update({
       optionLegs: simulation.optionLegs.map((leg) => (leg.id === id ? { ...leg, ...patch } : leg)),
     });
+  };
+  const updateSyntheticForwardTicket = (patch: Partial<NonNullable<TradeSimulation["syntheticForwardTicket"]>>) => {
+    update({ syntheticForwardTicket: { ...simulation.syntheticForwardTicket, ...patch } });
   };
   const putIntentValue =
     putLeg?.putIntent === "do_not_want_to_buy" || putLeg?.putIntent === "cannot_buy" || putLeg?.putIntent === "avoid_assignment"
@@ -250,9 +255,12 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const entryOptionLegs = simulation.optionLegs.length > 0 ? simulation.optionLegs : recoveredEntryOptionLegs;
   const shortExitLegs = getShortOptionLegs(simulation);
   const isComposite = isCompositeOptionStrategy(simulation);
+  const isSyntheticForward = simulation.strategyType === "synthetic_forward";
   const compositeValidation = validateCompositeOptionPosition(simulation);
   const compositeLifecycle = getCompositeOptionLifecycle(simulation);
   const executionLegs = isComposite ? entryOptionLegs : shortExitLegs;
+  const syntheticTicketPremiumUSD = getSyntheticForwardTicketNetPremiumUSD(simulation);
+  const syntheticMarginCheck = getSyntheticForwardMarginCheck(simulation);
   const optionEntrySummary = calculateOptionEntryExecutionSummary(simulation);
   const showOptionEntryExecutions = ["planned", "open"].includes(simulation.status) || optionEntryExecutions.length > 0;
   const optionCloseExecutions = simulation.optionCloseExecutions ?? [];
@@ -435,6 +443,12 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     return patch;
   };
   const updateStatus = (nextStatus: SimulationStatus) => {
+    const syntheticTicketMissing = nextStatus === "open" ? validateSyntheticForwardTicketForOpen(simulation) : [];
+    if (syntheticTicketMissing.length > 0) {
+      setWorkflowNotice({ message: `正式保存には ${syntheticTicketMissing.join(" ")}`, actionLabel: "複合チケット入力へ戻る", anchorId: "synthetic-forward-ticket" });
+      scrollToEditorAnchor("synthetic-forward-ticket");
+      return;
+    }
     const transitionPatch = applyStatusTransitionDrafts(nextStatus);
     let notice = getStatusWorkflowNotice(simulation.status, nextStatus);
     if (notice && nextStatus === "assigned" && getShortOptionLegs(simulation).every((leg) => leg.type === "call")) {
@@ -982,7 +996,17 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               プット売り単体では、現物株の保有入力は使いません。P権利行使時に買う資金は分母比較で確認します。
             </div>
           )}
-          {needsBrokerMarginInput ? (
+          {isSyntheticForward ? (
+            <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
+              <div className="font-bold">複合チケットの注文時証拠金</div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <NumberInput label="注文時必要証拠金" value={simulation.syntheticForwardTicket?.requiredMarginUSD ?? Number.NaN} suffix="USD" min={0} onChange={(requiredMarginUSD) => updateSyntheticForwardTicket({ requiredMarginUSD })} />
+                <NumberInput label="証拠金余力" value={simulation.syntheticForwardTicket?.marginAvailableUSD ?? Number.NaN} suffix="USD" min={0} onChange={(marginAvailableUSD) => updateSyntheticForwardTicket({ marginAvailableUSD })} />
+              </div>
+              <TextInput label="証拠金取得時刻（任意）" value={simulation.syntheticForwardTicket?.marginAsOf ?? ""} type="datetime-local" onChange={(marginAsOf) => updateSyntheticForwardTicket({ marginAsOf })} />
+              <p className="mt-2 text-xs font-semibold">{syntheticMarginCheck?.status === "sufficient" ? "注文時証拠金: 充足" : syntheticMarginCheck?.status === "insufficient" ? "注文時証拠金: 不足" : "注文時証拠金: 未確認"}</p>
+            </div>
+          ) : needsBrokerMarginInput ? (
             <>
               <NumberInput
                 label="チケット表示証拠金"
@@ -1012,7 +1036,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
           </div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div id={isSyntheticForward ? "synthetic-forward-ticket" : undefined} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
           <h3 className="text-sm font-bold text-slate-950">3. オプション脚</h3>
           <div className="mt-3 grid gap-3">
           {isComposite && callLeg && putLeg ? (
@@ -1032,7 +1056,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               onChange={(entryDate) => update({ entryDate, dte: calculateDte(entryDate, simulation.expiryDate) })}
             />
             <TextInput
-              label="満期日"
+              label={isSyntheticForward ? "共通満期日" : "満期日"}
               value={simulation.expiryDate}
               type="date"
               onChange={(expiryDate) =>
@@ -1044,7 +1068,25 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               }
             />
           </div>
-          {needsCall && callLeg ? (
+          {isSyntheticForward && callLeg && putLeg ? (
+            <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
+              <div className="font-bold">Saxo複合チケット: C買い + P売り</div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <NumberInput label="共通行使価格" value={callLeg.strikeUSD} suffix="USD" min={0} onChange={(strikeUSD) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, strikeUSD })) })} />
+                <NumberInput label="各脚数量" value={callLeg.quantity} suffix="枚" min={1} onChange={(quantity) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, quantity })) })} />
+                <NumberInput label="ネット指値（注文前）" value={simulation.syntheticForwardTicket?.netOrderPriceUSD ?? Number.NaN} suffix="USD/株" onChange={(netOrderPriceUSD) => updateSyntheticForwardTicket({ netOrderPriceUSD })} />
+                <NumberInput label="想定総手数料（注文前）" value={simulation.syntheticForwardTicket?.estimatedTotalCommissionUSD ?? Number.NaN} suffix="USD" min={0} onChange={(estimatedTotalCommissionUSD) => updateSyntheticForwardTicket({ estimatedTotalCommissionUSD })} />
+                <NumberInput label="ネット約定価格（実績）" value={simulation.syntheticForwardTicket?.netFillPriceUSD ?? Number.NaN} suffix="USD/株" onChange={(netFillPriceUSD) => updateSyntheticForwardTicket({ netFillPriceUSD })} />
+                <NumberInput label="実績総手数料" value={simulation.syntheticForwardTicket?.actualTotalCommissionUSD ?? Number.NaN} suffix="USD" min={0} onChange={(actualTotalCommissionUSD) => updateSyntheticForwardTicket({ actualTotalCommissionUSD })} />
+                <TextInput label="複合チケットID（任意）" value={simulation.syntheticForwardTicket?.ticketId ?? ""} onChange={(ticketId) => updateSyntheticForwardTicket({ ticketId })} />
+                <TextInput label="注文ID（任意）" value={simulation.syntheticForwardTicket?.orderId ?? ""} onChange={(orderId) => updateSyntheticForwardTicket({ orderId })} />
+              </div>
+              <div className="mt-3 rounded bg-white px-3 py-2 font-semibold">ネットプレミアム合計: {syntheticTicketPremiumUSD === undefined ? "未入力" : formatUSD(syntheticTicketPremiumUSD)} ({simulation.syntheticForwardTicket?.netFillPriceUSD !== undefined ? "実績" : "注文前想定"})</div>
+              <label className="mt-3 flex items-start gap-2 text-xs font-semibold"><input type="checkbox" checked={simulation.syntheticForwardTicket?.assignmentAccepted ?? false} onChange={(event) => updateSyntheticForwardTicket({ assignmentAccepted: event.target.checked })} />P売りの割当を受容し、同一口座のUSD現金残高を別途確認した</label>
+              <p className="mt-2 text-xs">証拠金余力・買付可能額はUSD現金残高ではありません。割当資金の充足判定には使いません。</p>
+            </div>
+          ) : null}
+          {!isSyntheticForward && needsCall && callLeg ? (
             <>
               <NumberInput label="C権利行使価格" value={callLeg.strikeUSD} suffix="USD" onChange={(strikeUSD) => updateLeg(callLeg.id, { strikeUSD })} />
               <NumberInput label="Cプレミアム" value={callLeg.premiumUSD} suffix="USD/株" onChange={(premiumUSD) => updateLeg(callLeg.id, { premiumUSD })} />
@@ -1098,7 +1140,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               ) : null}
             </>
           ) : null}
-          {needsPut && putLeg ? (
+          {!isSyntheticForward && needsPut && putLeg ? (
             <>
               <NumberInput label="P権利行使価格" value={putLeg.strikeUSD} suffix="USD" onChange={(strikeUSD) => updateLeg(putLeg.id, { strikeUSD })} />
               <NumberInput label="Pプレミアム" value={putLeg.premiumUSD} suffix="USD/株" onChange={(premiumUSD) => updateLeg(putLeg.id, { premiumUSD })} />
@@ -1118,7 +1160,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               />
             </>
           ) : null}
-          {simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
+          {!isSyntheticForward && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
             <NumberInput
               label="取引手数料（USD）"
               value={simulation.brokerCommissionUSD ?? 0}
@@ -1126,7 +1168,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               min={0}
               onChange={(brokerCommissionUSD) => update({ brokerCommissionUSD })}
             />
-          ) : (
+          ) : !isSyntheticForward ? (
             <>
               <NumberInput
                 label="取引手数料・諸費用（JPY）"
@@ -1143,10 +1185,10 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                 onChange={(brokerCommissionUSD) => update({ brokerCommissionUSD })}
               />
             </>
-          )}
-          <p className="-mt-2 text-xs leading-5 text-slate-500">
+          ) : null}
+          {!isSyntheticForward ? <p className="-mt-2 text-xs leading-5 text-slate-500">
             Saxoの取引チケットに表示される取引手数料をUSDで入力します。JPY欄は、画面上でJPY手数料が確認できる場合だけ入力します。
-          </p>
+          </p> : null}
           </div>
         </div>
       </div>

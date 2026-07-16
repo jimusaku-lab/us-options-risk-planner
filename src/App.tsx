@@ -35,6 +35,7 @@ import {
   describeBestSaxoHistoryOptionLegMismatch,
   findEntryHistoryMatches,
   findSaxoAssignmentStockAcquisitionItem,
+  findSaxoSyntheticForwardParentHistory,
   getSaxoHistoryCandidateKeys,
   getSaxoHistoryCandidateTarget,
   getSaxoHistoryCandidateTargetForSimulations,
@@ -45,6 +46,7 @@ import {
   resolveSaxoHistoryUnderlyingSymbol,
   resolveSaxoHistoryOptionLegMatch,
   resolveSaxoPositionSymbol,
+  type SaxoSyntheticForwardPair,
   type SaxoApiOrderSnapshot,
   type SaxoApiPositionSnapshot,
   type SaxoHistoryDiscoveryItem,
@@ -519,6 +521,17 @@ export default function App() {
           ? "Saxo現在建玉から下書きを作成しました。Saxo取引履歴に複数候補があります。3-Aで履歴候補を選んでください。"
           : "Saxo現在建玉から下書きを作成しました。Saxo取引履歴から補完できませんでした。履歴を再取得するか、不足項目だけ手入力してください。",
     );
+  };
+
+  const createSyntheticForwardFromSaxoPositions = (pair: SaxoSyntheticForwardPair, historyItems: SaxoHistoryDiscoveryItem[] = saxoHistoryCandidates) => {
+    const existing = useOptionsStore.getState().simulations.find((simulation) => simulation.strategyType === "synthetic_forward" && simulation.fixtureMeta?.saxoAccountKey === pair.accountKey && simulation.optionLegs.some((leg) => leg.saxoPositionId === (pair.callPosition.positionId ?? pair.callPosition.id)) && simulation.optionLegs.some((leg) => leg.saxoPositionId === (pair.putPosition.positionId ?? pair.putPosition.id)));
+    if (existing) { selectSimulation(existing.id); setIsEditorOpen(true); setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() }); setQuoteStatus("このSynthetic Forward候補はすでに統合下書きへ反映済みです。3-Aで確認してください。"); return; }
+    const parentHistory = findSaxoSyntheticForwardParentHistory(pair, historyItems);
+    const entryDate = parentHistory?.tradeDate ?? formatLocalDate(new Date()); const parentOrderId = parentHistory?.orderId ?? parentHistory?.id; const parentNetFill = parentHistory?.price; const parentCommission = parentHistory?.transactionCost === undefined ? undefined : Math.abs(parentHistory.transactionCost); const id = `saxo-synthetic-draft-${pair.callPosition.id}-${pair.putPosition.id}`;
+    const simulation: TradeSimulation = { id, status: "planned", name: `${pair.ticker} Synthetic Forward / API取込下書き`, ticker: pair.ticker, underlyingName: pair.callPosition.underlyingName ?? pair.putPosition.underlyingName ?? "", strategyType: "synthetic_forward", currentPriceUSD: pair.callPosition.currentPrice ?? pair.putPosition.currentPrice ?? 0, fxRateJPY: selected?.fxRateJPY ?? 0, accountCode: pair.accountCode, accountEnvironment: pair.accountCode === "N" ? "PROD_N_USD_SETTLEMENT" : activeWorkspace === "demo" ? "DEMO_JPY_BASE" : "PROD_P_JPY_SETTLEMENT", entryDate, expiryDate: pair.expiry, dte: Math.max(0, Math.ceil((Date.parse(pair.expiry) - Date.parse(entryDate)) / 86400000)), accountCurrency: pair.accountCode === "N" ? "USD" : "JPY", referenceFxRateJPY: selected?.referenceFxRateJPY ?? selected?.fxRateJPY ?? 0, stockPosition: null,
+      optionLegs: [{ id: `${id}-call`, type: "call", side: "buy", strikeUSD: pair.strike, premiumUSD: 0, quantity: pair.quantity, expiryDate: pair.expiry, assignmentPolicy: "unknown", brokerSymbol: pair.callPosition.instrumentCode, saxoAccountKey: pair.accountKey, saxoPositionId: pair.callPosition.positionId ?? pair.callPosition.id, saxoUic: pair.callPosition.uic }, { id: `${id}-put`, type: "put", side: "sell", strikeUSD: pair.strike, premiumUSD: 0, quantity: pair.quantity, expiryDate: pair.expiry, putIntent: "accept_assignment", assignmentPolicy: "unknown", brokerSymbol: pair.putPosition.instrumentCode, saxoAccountKey: pair.accountKey, saxoPositionId: pair.putPosition.positionId ?? pair.putPosition.id, saxoUic: pair.putPosition.uic }],
+      syntheticForwardTicket: { ticketId: parentOrderId, orderId: parentOrderId, netFillPriceUSD: parentNetFill, actualTotalCommissionUSD: parentCommission }, optionEntryExecutions: [], optionCloseExecutions: [], brokerMarginJPY: 0, brokerMarginUSD: 0, marginBufferMultiplier: 1, marginUsagePercent: 0, availableCashJPY: 0, denominatorMode: "cash_secured", taxProfileId: "japan_derivative_separate_tax_user_confirm", nisaExpectedAnnualReturnPct: settings.defaultNisaExpectedAnnualReturnPct, beginnerMode: settings.beginnerMode, fixtureMeta: { source: activeWorkspace === "demo" ? "demo" : "live", isRealMoney: activeWorkspace !== "demo", broker: "SaxoBank", purpose: "development-fixture", createdAt: entryDate, notes: parentHistory ? "Saxo SyntheticUnderlying親注文を一次根拠に二脚を統合した下書きです。3-Aで約定実績と割当確認を完了してください。" : "Saxo現在建玉の二脚を統合した下書きです。親注文のネット約定価格・総手数料は未照合です。", saxoAccountKey: pair.accountKey } };
+    upsertSimulation(simulation); selectSimulation(simulation.id); setIsEditorOpen(true); setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() }); setQuoteStatus(parentHistory ? `Saxo親注文 ${parentOrderId ?? ""} のネット約定価格を根拠に、C${pair.strike}買い/P${pair.strike}売りを一件のSynthetic Forward下書きへ反映しました。` : "C買い/P売りを一件のSynthetic Forward下書きへ統合しました。親注文の約定実績を3-Aで確認してください。");
   };
 
   const linkSaxoPositionToExistingSimulation = (
@@ -1334,6 +1347,7 @@ export default function App() {
     onCreateHistoryDraft: applySaxoHistoryDraftToSelectedSimulation,
     onCreateAssignmentDraft: applySaxoAssignmentDraftToSelectedSimulation,
     onCreatePositionDraft: createSimulationFromSaxoPosition,
+    onCreateSyntheticForwardDraft: createSyntheticForwardFromSaxoPositions,
     onLinkPositionToExisting: linkSaxoPositionToExistingSimulation,
     onCreateStockTransferFromPosition: createStockTransferFromSaxoPosition,
     stockTransfers,

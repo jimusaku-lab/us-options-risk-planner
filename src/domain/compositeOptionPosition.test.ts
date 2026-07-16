@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import type { TradeSimulation } from "@/types/domain";
-import { getCompositeAssignmentFunding, getCompositeOptionLifecycle, shouldIncludeCompositeCloseResultsInPerformance, validateCompositeOptionPosition } from "./compositeOptionPosition";
+import { getCompositeAssignmentFunding, getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardTicketNetPremiumUSD, shouldIncludeCompositeCloseResultsInPerformance, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "./compositeOptionPosition";
 
 function composite(strategyType: "synthetic_forward" | "combo", callStrike = 205, putStrike = 205): TradeSimulation {
   const call = { id: "combo-call", type: "call" as const, side: "buy" as const, strikeUSD: callStrike, premiumUSD: 8, quantity: 1, expiryDate: "2026-09-18" };
@@ -29,5 +29,13 @@ describe("composite option positions", () => {
   });
   it("keeps put assignment funding separate from the net premium", () => {
     const funding = getCompositeAssignmentFunding(composite("synthetic_forward"), { currency: "USD", cashBalance: 20_953.74 }); expect(funding).toMatchObject({ requiredUSD: 20_500, status: "sufficient" }); expect(funding?.surplusUSD).toBeCloseTo(453.74);
+  });
+  it("records Saxo synthetic-ticket net values without allocating them to option legs", () => {
+    const position = composite("synthetic_forward", 210, 210);
+    position.syntheticForwardTicket = { ticketId: "ticket-1", netOrderPriceUSD: 5.85, estimatedTotalCommissionUSD: 4.5, netFillPriceUSD: 5.85, actualTotalCommissionUSD: 4.5, requiredMarginUSD: 4_000, marginAvailableUSD: 20_874.48, assignmentAccepted: true };
+    expect(getSyntheticForwardTicketNetPremiumUSD(position)).toBe(585); expect(getSyntheticForwardMarginCheck(position)).toMatchObject({ status: "sufficient", surplusUSD: 16_874.48 }); expect(validateSyntheticForwardTicketForOpen(position)).toEqual([]); expect(position.optionLegs.map((leg) => leg.premiumUSD)).toEqual([8, 7]);
+  });
+  it("blocks a synthetic-forward open transition until actual net values and assignment acknowledgement exist", () => {
+    const position = composite("synthetic_forward", 210, 210); position.syntheticForwardTicket = { netOrderPriceUSD: 5.85, estimatedTotalCommissionUSD: 4.5 }; expect(validateSyntheticForwardTicketForOpen(position).join(" ")).toContain("ネット約定価格"); expect(validateSyntheticForwardTicketForOpen(position).join(" ")).toContain("実績総手数料");
   });
 });

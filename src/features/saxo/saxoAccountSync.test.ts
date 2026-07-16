@@ -7,6 +7,8 @@ import {
   createSaxoPositionDraftSummary,
   findEntryHistoryMatches,
   findSaxoAssignmentStockAcquisitionItem,
+  findSaxoSyntheticForwardPairs,
+  findSaxoSyntheticForwardParentHistory,
   findOrderCandidatesForLeg,
   getSaxoHistoryCandidateKeys,
   getSaxoHistoryCandidateTarget,
@@ -262,6 +264,35 @@ describe("Saxo read-only account sync", () => {
 
     expect(rows[0].status).toBe("matched");
     expect(rows[0].simulation?.id).toBe(simulation.id);
+  });
+
+  it("groups NVDA C210 long and P210 short into one synthetic-forward candidate and uses its parent fill", () => {
+    const base = {
+      accountKey: "n-account-1234",
+      accountAssignment: "N" as const,
+      accountCode: "N" as const,
+      symbol: "NVDA",
+      assetType: "StockOption",
+      kind: "option" as const,
+      quantity: 1,
+      expiry: "2026-12-18",
+      strike: 210,
+      currency: "USD",
+      missingFields: [],
+      fetchedAt: "2026-07-16T00:00:00.000Z",
+    };
+    const call: SaxoApiPositionSnapshot = { ...base, id: "nvda-c210", positionId: "call-position", side: "long", optionType: "call" };
+    const put: SaxoApiPositionSnapshot = { ...base, id: "nvda-p210", positionId: "put-position", quantity: -1, side: "short", optionType: "put" };
+
+    const pairs = findSaxoSyntheticForwardPairs([call, put]);
+
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]).toMatchObject({ ticker: "NVDA", accountCode: "N", expiry: "2026-12-18", strike: 210, quantity: 1 });
+    expect(findSaxoSyntheticForwardParentHistory(pairs[0], [
+      { id: "other", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", price: 99 },
+      { id: "parent", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", price: 5.85 },
+    ])).toMatchObject({ orderId: "5425367936", price: 5.85 });
+    expect(findSaxoSyntheticForwardPairs([{ ...put, strike: 211 }, call])).toHaveLength(0);
   });
 
   it("links an executed Saxo covered call to the existing planned covered call even when strike and premium differ", () => {

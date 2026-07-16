@@ -1453,6 +1453,7 @@ function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
 function normalizeHistoryItem(raw, kind, index) {
   const accountKey = firstString(raw, ["AccountKey", "AccountId", "AccountNumber"]);
   const sourceId = firstString(raw, ["ClosedPositionId", "TradeId", "PositionId", "OrderId", "Id"]);
+  const orderId = firstString(raw, ["OrderId", "OrderID", "RelatedOrderId", "MultiLegOrderId"]);
   const profitLoss = firstNumber(raw, ["ClosedProfitLoss", "ProfitLossOnTrade", "RealizedPnl", "ProfitLoss"]);
   const profitLossBase = firstNumber(raw, ["ClosedProfitLossInBaseCurrency", "ProfitLossOnTradeInBaseCurrency", "BookedAmountUSD", "BookedAmountAccountCurrency", "BookedAmount", "Amount"]);
   const optionTypeRaw = firstString(raw, ["PutCall", "CallPut", "OptionType", "OptionRootType"]);
@@ -1473,6 +1474,7 @@ function normalizeHistoryItem(raw, kind, index) {
   const exchangeRateMatch = firstNumberMatch(raw, exchangeRateAliases);
   return {
     id: `${kind}-${index}`,
+    orderId,
     kind,
     sourceIdMasked: sourceId ? maskSecret(sourceId) : undefined,
     accountKey: accountKey ? maskSecret(accountKey) : undefined,
