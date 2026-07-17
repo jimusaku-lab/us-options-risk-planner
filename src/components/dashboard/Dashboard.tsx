@@ -15,6 +15,7 @@ import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 const statusClassName = {
   planned: "bg-sky-100 text-sky-800",
+  entry_confirmation: "bg-amber-100 text-amber-800",
   open: "bg-emerald-100 text-emerald-800",
   closed: "bg-slate-200 text-slate-700",
   assigned: "bg-violet-100 text-violet-800",
@@ -73,7 +74,7 @@ export function Dashboard({
   onClearJournalFocus?: () => void;
 }) {
   const showHistory = historyOpen;
-  const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "open");
+  const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "entry_confirmation" || simulation.status === "open");
   const historySimulations = simulations.filter((simulation) => endedStatuses.has(simulation.status));
   const focusedSimulation = journalFocusSimulationId
     ? simulations.find((simulation) => simulation.id === journalFocusSimulationId)
@@ -107,7 +108,7 @@ export function Dashboard({
           ) : (
             <>
               <span className="font-semibold text-slate-900">現在管理中 {currentSimulations.length}件</span>
-              <span className="text-slate-500">注文前・建玉中を優先表示</span>
+              <span className="text-slate-500">注文前・約定確認待ち・建玉中を優先表示</span>
             </>
           )}
         </div>
@@ -136,7 +137,7 @@ export function Dashboard({
       ) : null}
       {simulations.length > 0 && currentSimulations.length === 0 ? (
         <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
-          現在の注文前・建玉中の建玉はありません。過去の結果は「履歴を表示」から確認できます。
+          現在の注文前・約定確認待ち・建玉中の建玉はありません。過去の結果は「履歴を表示」から確認できます。
         </div>
       ) : null}
       {visibleSimulations.length > 0 ? <div className="mt-4 overflow-x-auto">

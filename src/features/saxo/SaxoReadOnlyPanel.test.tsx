@@ -31,7 +31,7 @@ it("uses the filled-state CTA and reopens an integrated 3-A without creating ano
   fireEvent.click(screen.getByRole("button", { name: "約定済み二脚を統合して3-Aで確認" }));
   expect(onCreateDraft).toHaveBeenCalledWith(pair);
   rerender(<table><tbody><SyntheticForwardPairRow pair={pair} drafted filled integrated onCreateDraft={onCreateDraft} /></tbody></table>);
-  expect(screen.getByRole("button", { name: "確認済みの3-Aを開く" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "約定済みシンセティックの3-Aを開く" })).toBeEnabled();
 });
 
 it("renders an unresolved pair without individual reflection controls", () => {

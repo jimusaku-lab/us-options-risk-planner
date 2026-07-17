@@ -27,7 +27,7 @@ export type PutIntent =
   | "cannot_buy";
 export type OptionType = "call" | "put";
 export type OptionSide = "sell" | "buy";
-export type SimulationStatus = "planned" | "open" | "closed" | "assigned" | "expired";
+export type SimulationStatus = "planned" | "entry_confirmation" | "open" | "closed" | "assigned" | "expired";
 export type DataSource = "manual" | "saxo_api" | "imported_csv" | "calculated" | "demo_fixture";
 export type RiskSeverity = "info" | "warning" | "danger";
 export type SaxoAccountCode = "P" | "N";

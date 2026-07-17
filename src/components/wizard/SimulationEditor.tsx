@@ -262,7 +262,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const syntheticTicketPremiumUSD = getSyntheticForwardTicketNetPremiumUSD(simulation);
   const syntheticMarginCheck = getSyntheticForwardMarginCheck(simulation);
   const optionEntrySummary = calculateOptionEntryExecutionSummary(simulation);
-  const showOptionEntryExecutions = ["planned", "open"].includes(simulation.status) || optionEntryExecutions.length > 0;
+  const showOptionEntryExecutions = ["planned", "entry_confirmation", "open"].includes(simulation.status) || optionEntryExecutions.length > 0;
   const optionCloseExecutions = simulation.optionCloseExecutions ?? [];
   const optionCloseResults = calculateOptionCloseExecutionResults(simulation);
   const showOptionCloseExecutions = ["open", "closed", "expired"].includes(simulation.status) || optionCloseExecutions.length > 0;
@@ -443,7 +443,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     return patch;
   };
   const updateStatus = (nextStatus: SimulationStatus) => {
-    const syntheticTicketMissing = nextStatus === "open" ? validateSyntheticForwardTicketForOpen(simulation) : [];
+    const syntheticTicketMissing = nextStatus === "open" && simulation.status !== "entry_confirmation" ? validateSyntheticForwardTicketForOpen(simulation) : [];
     if (syntheticTicketMissing.length > 0) {
       setWorkflowNotice({ message: `正式保存には ${syntheticTicketMissing.join(" ")}`, actionLabel: "複合チケット入力へ戻る", anchorId: "synthetic-forward-ticket" });
       scrollToEditorAnchor("synthetic-forward-ticket");
@@ -496,6 +496,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
         : null,
     );
     update({
+      ...(simulation.status === "entry_confirmation" ? { status: "entry_confirmation" as const } : {}),
       optionEntryExecutions: optionEntryExecutions.map((execution) => ({ ...execution, confirmed: true })),
     });
   };
@@ -658,7 +659,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const missingSaxoHistoryCloseCandidate =
     focusRequest?.anchorId === "option-close-executions" && focusRequest.saxoHistoryIssue === "missing-close-candidate";
   const isSaxoApiDraft = isSaxoApiPositionDraft(simulation);
-  const isSaxoFilledSyntheticForward = isSyntheticForward && simulation.status === "open" && simulation.syntheticForwardTicket?.netFillPriceUSD !== undefined && optionEntryExecutions.length >= 2 && optionEntryExecutions.some((execution) => execution.saxoSourceType === "history");
+  const isSaxoFilledSyntheticForward = isSyntheticForward && simulation.status === "entry_confirmation" && simulation.syntheticForwardTicket?.netFillPriceUSD !== undefined && optionEntryExecutions.length >= 2 && optionEntryExecutions.some((execution) => execution.saxoSourceType === "history");
   const saxoDraftMissingItems = getSaxoDraftMissingItems(simulation);
   const entryRationaleJournal = simulation.entryRationaleJournal ?? createJournalForSimulation(simulation);
   const confirmSaxoApiDraft = () => {
@@ -774,6 +775,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               {getStatusLabel(status)}
             </button>
           ))}
+          {simulation.status === "entry_confirmation" ? <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">約定確認待ち</span> : null}
             <label className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-700">
               <input
                 type="checkbox"
@@ -1200,7 +1202,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
         <div id="option-entry-executions" className={`mt-4 rounded-lg border bg-white p-3 ${highlightedAnchorId === "option-entry-executions" ? "border-amber-400 ring-2 ring-amber-200" : "border-slate-200"}`}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-slate-950">3-A. 建玉開始の約定確認</h3>
+              <h3 className="text-sm font-bold text-slate-950">{isSaxoFilledSyntheticForward ? "3-A. Synthetic Forward 建玉開始の約定確認" : "3-A. 建玉開始の約定確認"}</h3>
               <p className="mt-1 text-xs leading-5 text-slate-500">
                 {isSaxoFilledSyntheticForward ? "Saxoで約定済みの親注文と二脚を反映しています。二脚の約定価格・数量を確認して保存してください。" : "注文前の予定値を、Saxoで実際に約定した建玉実績に確認・修正します。注文ID、ポジションID、約定時刻は通常入力に使わず、必要な場合だけメモへ残します。"}
               </p>
@@ -1226,7 +1228,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               ) : null}
             </div>
           </div>
-          {simulation.status === "open" && optionEntryExecutions.some((execution) => !execution.confirmed) ? (
+          {simulation.status === "entry_confirmation" && optionEntryExecutions.some((execution) => !execution.confirmed) ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">
               約定情報未確認です。P口座ではSaxo取引履歴のプレミアムJPYと取引費用JPYを確認してください。
             </div>
@@ -1241,6 +1243,12 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               >
                 建玉中に変更
               </button>
+            </div>
+          ) : null}
+          {entryExecutionsConfirmed && simulation.status === "entry_confirmation" ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
+              <span className="font-semibold">約定済み二脚の確認が完了しました。正式保存して建玉中にします。</span>
+              <button type="button" className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-100" onClick={() => updateStatus("open")}>正式保存して建玉中にする</button>
             </div>
           ) : null}
           {entryExecutionsConfirmed && simulation.status === "open" ? (
@@ -2602,6 +2610,7 @@ function getOptionLegLabel(leg: OptionLeg): string {
 function isLikelyNextStatus(current: SimulationStatus, next: SimulationStatus): boolean {
   if (current === next) return true;
   if (current === "planned") return next === "open";
+  if (current === "entry_confirmation") return next === "open";
   if (current === "open") return ["closed", "assigned", "expired"].includes(next);
   return false;
 }

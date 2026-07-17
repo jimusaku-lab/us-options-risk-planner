@@ -688,7 +688,7 @@ export function reconcileSaxoPositions(
   simulations: TradeSimulation[],
   positions: SaxoApiPositionSnapshot[],
 ): SaxoPositionReconciliationRow[] {
-  const activeSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "open");
+  const activeSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "entry_confirmation" || simulation.status === "open");
   const matchedLegIds = new Set<string>();
   const rows: SaxoPositionReconciliationRow[] = [];
 
@@ -826,7 +826,7 @@ export function resolveSaxoPositionSymbol(position: SaxoApiPositionSnapshot, sim
 
   const matchingTickers = new Set(
     simulations
-      .filter((simulation) => simulation.status === "planned" || simulation.status === "open")
+      .filter((simulation) => simulation.status === "planned" || simulation.status === "entry_confirmation" || simulation.status === "open")
       .filter((simulation) => simulationOptionShapeMatchesPosition(simulation, position))
       .map((simulation) => normalizeSymbol(simulation.ticker))
       .filter(Boolean),

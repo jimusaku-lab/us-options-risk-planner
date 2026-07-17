@@ -26,6 +26,19 @@ export function isCompositeOptionStrategy(simulation: Pick<TradeSimulation, "str
   return simulation.strategyType === "synthetic_forward" || simulation.strategyType === "combo";
 }
 
+export function isSyntheticForwardEntryConfirmation(simulation: Pick<TradeSimulation, "strategyType" | "status">): boolean {
+  return simulation.strategyType === "synthetic_forward" && simulation.status === "entry_confirmation";
+}
+
+/** Preserve user-entered fields while repairing only imported, unconfirmed Saxo synthetic forwards. */
+export function shouldRecoverSaxoSyntheticForwardEntryConfirmation(simulation: TradeSimulation, hasFilledSaxoEvidence: boolean): boolean {
+  if (!hasFilledSaxoEvidence || simulation.strategyType !== "synthetic_forward") return false;
+  if (simulation.status === "planned") return true;
+  const importedSynthetic = (simulation.fixtureMeta?.notes ?? "").includes("Saxo SyntheticUnderlying");
+  const entryExecutions = simulation.optionEntryExecutions ?? [];
+  return simulation.status === "open" && importedSynthetic && (entryExecutions.length === 0 || entryExecutions.every((execution) => !execution.confirmed));
+}
+
 export function validateCompositeOptionPosition(simulation: TradeSimulation): CompositeOptionPositionValidation {
   if (!isCompositeOptionStrategy(simulation)) return { valid: true, reasons: [] };
   const callLegs = simulation.optionLegs.filter((leg) => leg.type === "call" && leg.side === "buy");
@@ -69,7 +82,7 @@ export function getCompositeOptionLifecycle(simulation: TradeSimulation): Compos
   const hasPartialEntry = callEntryContracts > 0 || putEntryContracts > 0;
   const hasReportedEntry = (simulation.optionEntryExecutions ?? []).some((execution) => execution.legId === validation.callLeg?.id || execution.legId === validation.putLeg?.id);
   const state = closeComplete ? "closed" : hasPartialClose ? "partial_close" : entryComplete ? "open" : hasPartialEntry ? "partial_entry" : "planned";
-  const label = state === "closed" ? "二脚決済済み" : state === "partial_close" ? "一部決済・要確認" : state === "open" ? "二脚建玉中" : state === "partial_entry" ? "一部約定・要確認" : simulation.status === "open" && hasReportedEntry ? "二脚約定確認待ち" : "二脚約定待ち";
+  const label = state === "closed" ? "二脚決済済み" : state === "partial_close" ? "一部決済・要確認" : state === "open" ? "二脚建玉中" : state === "partial_entry" ? "一部約定・要確認" : (simulation.status === "open" || simulation.status === "entry_confirmation") && hasReportedEntry ? "二脚約定確認待ち" : "二脚約定待ち";
   return { state, label, callEntryContracts, putEntryContracts, callCloseContracts, putCloseContracts, entryComplete, closeComplete };
 }
 

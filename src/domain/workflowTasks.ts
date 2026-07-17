@@ -30,6 +30,10 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
     ];
   }
 
+  if (simulation.status === "entry_confirmation") {
+    return [task(simulation, { id: `${simulation.id}-confirm-synthetic-entry`, type: "confirm_entry_execution", severity: "warning", label: "約定確認を開く", detail: "Saxoで約定済みの親注文と二脚を確認して、建玉中として正式保存してください。", actionLabel: "約定確認を開く", targetAnchor: "option-entry-executions" })];
+  }
+
   if (simulation.status === "open") {
     const firstShortLeg = shortLegs[0];
     const firstLongLeg = longLegs[0];

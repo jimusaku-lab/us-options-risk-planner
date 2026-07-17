@@ -38,6 +38,7 @@ export const denominatorExplanations: Record<DenominatorMode, string> = {
 
 export const statusLabels: Record<SimulationStatus, string> = {
   planned: "注文前",
+  entry_confirmation: "約定確認待ち",
   open: "建玉中",
   closed: "決済済み",
   assigned: "権利行使済み",
