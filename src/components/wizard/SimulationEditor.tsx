@@ -659,7 +659,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const missingSaxoHistoryCloseCandidate =
     focusRequest?.anchorId === "option-close-executions" && focusRequest.saxoHistoryIssue === "missing-close-candidate";
   const isSaxoApiDraft = isSaxoApiPositionDraft(simulation);
-  const isSaxoFilledSyntheticForward = isSyntheticForward && simulation.status === "entry_confirmation" && simulation.syntheticForwardTicket?.netFillPriceUSD !== undefined && optionEntryExecutions.length >= 2 && optionEntryExecutions.some((execution) => execution.saxoSourceType === "history");
+  const isSaxoFilledSyntheticForward = isSyntheticForward && simulation.status === "entry_confirmation" && optionEntryExecutions.length >= 2;
   const saxoDraftMissingItems = getSaxoDraftMissingItems(simulation);
   const entryRationaleJournal = simulation.entryRationaleJournal ?? createJournalForSimulation(simulation);
   const confirmSaxoApiDraft = () => {

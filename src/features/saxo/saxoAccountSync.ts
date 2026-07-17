@@ -294,6 +294,21 @@ export function findSaxoSyntheticForwardParentHistory(
     })[0];
 }
 
+/** Resolve only one exact composite parent. A tie is intentionally left unresolved to avoid opening another position. */
+export function findSaxoSyntheticForwardSimulationForPair(pair: SaxoSyntheticForwardPair, simulations: TradeSimulation[], parentOrderId?: string): TradeSimulation | undefined {
+  const matches = simulations.filter((simulation) => simulation.strategyType === "synthetic_forward").filter((simulation) => simulation.accountCode === pair.accountCode).filter((simulation) => simulation.ticker.trim().toUpperCase() === pair.ticker.toUpperCase()).map((simulation) => {
+    const callLeg = simulation.optionLegs.find((leg) => leg.type === "call" && leg.side === "buy");
+    const putLeg = simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell");
+    if (!callLeg || !putLeg || callLeg.expiryDate !== pair.expiry || putLeg.expiryDate !== pair.expiry || callLeg.strikeUSD !== pair.strike || putLeg.strikeUSD !== pair.strike || callLeg.quantity !== pair.quantity || putLeg.quantity !== pair.quantity) return undefined;
+    const callPositionId = pair.callPosition.positionId ?? pair.callPosition.id; const putPositionId = pair.putPosition.positionId ?? pair.putPosition.id;
+    const positionScore = Number(callLeg.saxoPositionId === callPositionId) + Number(putLeg.saxoPositionId === putPositionId);
+    const orderScore = Number(Boolean(parentOrderId) && simulation.syntheticForwardTicket?.orderId === parentOrderId);
+    return { simulation, score: positionScore * 10 + orderScore };
+  }).filter((match): match is { simulation: TradeSimulation; score: number } => Boolean(match)).sort((left, right) => right.score - left.score);
+  if (matches.length === 0 || (matches.length > 1 && matches[0].score === matches[1].score)) return undefined;
+  return matches[0].simulation;
+}
+
 export type SaxoSyntheticForwardFillEvidence = {
   status: "filled" | "incomplete";
   parentHistory?: SaxoHistoryDiscoveryItem;

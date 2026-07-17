@@ -34,6 +34,13 @@ it("uses the filled-state CTA and reopens an integrated 3-A without creating ano
   expect(screen.getByRole("button", { name: "約定済みシンセティックの3-Aを開く" })).toBeEnabled();
 });
 
+it("keeps a recovery CTA active when only the stale drafted marker remains", () => {
+  const onCreateDraft = vi.fn();
+  render(<table><tbody><SyntheticForwardPairRow pair={pair} drafted recoveryRequired onCreateDraft={onCreateDraft} /></tbody></table>);
+  const button = screen.getByRole("button", { name: "統合下書きを復旧して3-Aへ進む" });
+  expect(button).toBeEnabled(); fireEvent.click(button); expect(onCreateDraft).toHaveBeenCalledWith(pair);
+});
+
 it("renders an unresolved pair without individual reflection controls", () => {
   const hold: SaxoSyntheticForwardHold = { id: "hold", callPosition, putPosition, accountCode: "N", expiry: "2026-12-18", strike: 210, quantity: 1, reason: "原資産識別子をSaxoから取得できませんでした。" };
   render(<table><tbody><SyntheticForwardHoldRow hold={hold} /></tbody></table>);

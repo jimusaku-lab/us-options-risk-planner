@@ -23,6 +23,7 @@ import {
   applyOrderAccountMappings,
   createSaxoPositionDraftSummary,
   findEntryHistoryMatches,
+  findSaxoSyntheticForwardSimulationForPair,
   resolveSaxoSyntheticForwardFillEvidence,
   findSaxoSyntheticForwardPairing,
   findSaxoAssignmentStockAcquisitionItem,
@@ -149,7 +150,7 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
-  onCreateSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
+  onCreateSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[], options?: { forceEntryConfirmation?: boolean }) => void;
   onRecoverSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
   onLinkPositionToExisting?: (position: SaxoApiPositionSnapshot, simulation: TradeSimulation, historyItems?: SaxoHistoryDiscoveryItem[]) => boolean | void;
   onCreateStockTransferFromPosition?: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
@@ -1426,9 +1427,13 @@ export function SaxoReadOnlyPanel({
                   );
                 }}
                 onCreateSyntheticForwardDraft={(pair) => {
+                  const historyItems = historyEndpoints.flatMap((endpoint) => endpoint.items ?? []);
+                  const parentOrderId = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems).parentHistory?.orderId;
+                  const integrated = findSaxoSyntheticForwardSimulationForPair(pair, simulations, parentOrderId);
+                  const recoveryRequired = (draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id)) && !integrated;
                   setDraftedPositionIds((current) => Array.from(new Set([...current, pair.callPosition.id, pair.putPosition.id])));
-                  onCreateSyntheticForwardDraft?.(pair, historyEndpoints.flatMap((endpoint) => endpoint.items ?? []));
-                  setMessage("C買い/P売りを一件のSynthetic Forwardとして開きました。約定済みなら3-Aの約定確認へ進みます。");
+                  onCreateSyntheticForwardDraft?.(pair, historyItems, { forceEntryConfirmation: recoveryRequired });
+                  setMessage(recoveryRequired ? "統合下書きを復旧し、該当するSynthetic Forwardの3-Aへ進みます。" : "C買い/P売りを一件のSynthetic Forwardとして開きました。約定済みなら3-Aの約定確認へ進みます。");
                 }}
                 onRecoverSyntheticForwardDraft={onRecoverSyntheticForwardDraft}
                 onCreateDraftFromBroken={(position) => {
@@ -2411,7 +2416,7 @@ function PositionsPreview({
   onRepairLink: (row: SaxoPositionReconciliationRow) => void;
   onOpenLinked: (row: SaxoPositionReconciliationRow, anchorId?: string) => void;
   onCreateDraft: (position: SaxoApiPositionSnapshot) => void;
-  onCreateSyntheticForwardDraft: (pair: SaxoSyntheticForwardPair) => void;
+  onCreateSyntheticForwardDraft: (pair: SaxoSyntheticForwardPair, options?: { forceEntryConfirmation?: boolean }) => void;
   onRecoverSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems: SaxoHistoryDiscoveryItem[]) => void;
   onCreateDraftFromBroken: (position: SaxoApiPositionSnapshot) => void;
   onRecreateDraftFromStaleFlag: (position: SaxoApiPositionSnapshot) => void;
@@ -2451,7 +2456,7 @@ function PositionsPreview({
     if (!onRecoverSyntheticForwardDraft) return;
     for (const pair of syntheticForwardPairs) {
       const evidence = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems);
-      const existing = simulations.find((simulation) => simulation.strategyType === "synthetic_forward" && simulation.fixtureMeta?.saxoAccountKey === pair.accountKey && simulation.optionLegs.some((leg) => leg.saxoPositionId === (pair.callPosition.positionId ?? pair.callPosition.id)) && simulation.optionLegs.some((leg) => leg.saxoPositionId === (pair.putPosition.positionId ?? pair.putPosition.id)));
+      const existing = findSaxoSyntheticForwardSimulationForPair(pair, simulations, evidence.parentHistory?.orderId);
       const key = `${pair.id}:${existing?.id ?? "none"}`;
       if (existing && shouldRecoverSaxoSyntheticForwardEntryConfirmation(existing, evidence.status === "filled") && !recoveredSyntheticPairKeys.current.has(key)) {
         recoveredSyntheticPairKeys.current.add(key);
@@ -2532,8 +2537,8 @@ function PositionsPreview({
             </thead>
             <tbody>
               {syntheticForwardPairs.map((pair) => {
-                const existingSynthetic = simulations.find((simulation) => simulation.strategyType === "synthetic_forward" && simulation.fixtureMeta?.saxoAccountKey === pair.accountKey && simulation.optionLegs.some((leg) => leg.saxoPositionId === (pair.callPosition.positionId ?? pair.callPosition.id)) && simulation.optionLegs.some((leg) => leg.saxoPositionId === (pair.putPosition.positionId ?? pair.putPosition.id)));
-                return <SyntheticForwardPairRow key={pair.id} pair={pair} filled={resolveSaxoSyntheticForwardFillEvidence(pair, historyItems).status === "filled"} integrated={Boolean(existingSynthetic)} drafted={draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id)} onCreateDraft={onCreateSyntheticForwardDraft} />;
+                const evidence = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems); const existingSynthetic = findSaxoSyntheticForwardSimulationForPair(pair, simulations, evidence.parentHistory?.orderId); const drafted = draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id);
+                return <SyntheticForwardPairRow key={pair.id} pair={pair} filled={evidence.status === "filled"} integrated={Boolean(existingSynthetic)} drafted={drafted} recoveryRequired={drafted && !existingSynthetic} onCreateDraft={onCreateSyntheticForwardDraft} />;
               })}
               {syntheticForwardHolds.map((hold) => (
                 <SyntheticForwardHoldRow key={hold.id} hold={hold} />
@@ -3480,12 +3485,14 @@ export function SyntheticForwardPairRow({
   drafted,
   filled = false,
   integrated = false,
+  recoveryRequired = false,
   onCreateDraft,
 }: {
   pair: SaxoSyntheticForwardPair;
   drafted: boolean;
   filled?: boolean;
   integrated?: boolean;
+  recoveryRequired?: boolean;
   onCreateDraft: (pair: SaxoSyntheticForwardPair) => void;
 }) {
   return (
@@ -3513,10 +3520,10 @@ export function SyntheticForwardPairRow({
           type="button"
           className="inline-flex items-center gap-1 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-40"
           onClick={() => onCreateDraft(pair)}
-          disabled={drafted && !integrated}
+          disabled={drafted && !integrated && !recoveryRequired}
         >
           <FilePlus2 size={13} />
-          {integrated && filled ? "約定済みシンセティックの3-Aを開く" : integrated ? "確認済みの3-Aを開く" : filled ? "約定済み二脚を統合して3-Aで確認" : drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
+          {recoveryRequired ? "統合下書きを復旧して3-Aへ進む" : integrated && filled ? "約定済みシンセティックの3-Aを開く" : integrated ? "確認済みの3-Aを開く" : filled ? "約定済み二脚を統合して3-Aで確認" : drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
         </button>
       </td>
     </tr>

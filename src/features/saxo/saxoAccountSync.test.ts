@@ -10,6 +10,7 @@ import {
   findSaxoSyntheticForwardPairing,
   findSaxoSyntheticForwardPairs,
   findSaxoSyntheticForwardParentHistory,
+  findSaxoSyntheticForwardSimulationForPair,
   resolveSaxoSyntheticForwardFillEvidence,
   findOrderCandidatesForLeg,
   getSaxoHistoryCandidateKeys,
@@ -307,6 +308,14 @@ describe("Saxo read-only account sync", () => {
     ]);
     expect(held.pairs).toHaveLength(0);
     expect(held.holds).toMatchObject([{ reason: "原資産識別子をSaxoから取得できませんでした。" }]);
+  });
+
+  it("resolves only the matching synthetic-forward parent and never a different ticker", () => {
+    const base = { accountKey: "n-account-1234", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "NVDA", underlyingSymbol: "NVDA", underlyingIdentity: "uic:12345:stock", assetType: "StockOption", kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z" };
+    const pair = findSaxoSyntheticForwardPairs([{ ...base, id: "call", quantity: 1, side: "long", optionType: "call" }, { ...base, id: "put", quantity: -1, side: "short", optionType: "put" }])[0];
+    const target = createOpenPutSimulation({ id: "nvda-synthetic", status: "entry_confirmation", name: "NVDA Synthetic Forward", ticker: "NVDA", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", expiryDate: "2026-12-18", optionLegs: [{ id: "call-leg", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "call" }, { id: "put-leg", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "put" }] });
+    const visa = { ...target, id: "visa-long-call", ticker: "V", name: "VISA C340", optionLegs: [{ ...target.optionLegs[0], strikeUSD: 340 }, target.optionLegs[1]] };
+    expect(findSaxoSyntheticForwardSimulationForPair(pair, [visa, target])?.id).toBe("nvda-synthetic");
   });
 
   it("requires the parent and both leg trades before treating a synthetic forward as filled", () => {
