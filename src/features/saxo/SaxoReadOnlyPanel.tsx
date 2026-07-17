@@ -23,6 +23,7 @@ import {
   applyOrderAccountMappings,
   createSaxoPositionDraftSummary,
   findEntryHistoryMatches,
+  resolveSaxoSyntheticForwardFillEvidence,
   findSaxoSyntheticForwardPairing,
   findSaxoAssignmentStockAcquisitionItem,
   getSaxoHistoryCandidateKeys,
@@ -2515,9 +2516,10 @@ function PositionsPreview({
               </tr>
             </thead>
             <tbody>
-              {syntheticForwardPairs.map((pair) => (
-                <SyntheticForwardPairRow key={pair.id} pair={pair} drafted={draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id)} onCreateDraft={onCreateSyntheticForwardDraft} />
-              ))}
+              {syntheticForwardPairs.map((pair) => {
+                const existingSynthetic = simulations.find((simulation) => simulation.strategyType === "synthetic_forward" && simulation.fixtureMeta?.saxoAccountKey === pair.accountKey && simulation.optionLegs.some((leg) => leg.saxoPositionId === (pair.callPosition.positionId ?? pair.callPosition.id)) && simulation.optionLegs.some((leg) => leg.saxoPositionId === (pair.putPosition.positionId ?? pair.putPosition.id)));
+                return <SyntheticForwardPairRow key={pair.id} pair={pair} filled={resolveSaxoSyntheticForwardFillEvidence(pair, historyItems).status === "filled"} integrated={Boolean(existingSynthetic)} drafted={draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id)} onCreateDraft={onCreateSyntheticForwardDraft} />;
+              })}
               {syntheticForwardHolds.map((hold) => (
                 <SyntheticForwardHoldRow key={hold.id} hold={hold} />
               ))}
@@ -3461,10 +3463,14 @@ function getHistoryCandidateAnchorId(
 export function SyntheticForwardPairRow({
   pair,
   drafted,
+  filled = false,
+  integrated = false,
   onCreateDraft,
 }: {
   pair: SaxoSyntheticForwardPair;
   drafted: boolean;
+  filled?: boolean;
+  integrated?: boolean;
   onCreateDraft: (pair: SaxoSyntheticForwardPair) => void;
 }) {
   return (
@@ -3482,9 +3488,9 @@ export function SyntheticForwardPairRow({
       <td className="numeric-input py-2 pr-3 text-right">親注文で確認</td>
       <td className="numeric-input py-2 pr-3 text-right">二脚合算なし</td>
       <td className="py-2 pr-3">
-        <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">二脚統合候補</span>
+        <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">{integrated ? "3-A反映済み" : filled ? "二脚約定済み" : "二脚統合候補"}</span>
         <p className="mt-1 max-w-[290px] text-xs leading-5 text-teal-900">
-          個別の「建玉入力へ下書き反映」と「今回は無視」は利用しません。親SyntheticUnderlying注文のネット約定価格を3-Aで確認します。
+          {integrated ? "親注文と二脚を統合済みです。重複作成せず、保存済みの3-Aを開きます。" : filled ? "親SyntheticUnderlying注文と二脚の約定履歴を確認しました。親注文のネット約定価格を正として3-Aへ反映します。" : "個別の「建玉入力へ下書き反映」と「今回は無視」は利用しません。親SyntheticUnderlying注文のネット約定価格を3-Aで確認します。"}
         </p>
       </td>
       <td className="py-2">
@@ -3492,10 +3498,10 @@ export function SyntheticForwardPairRow({
           type="button"
           className="inline-flex items-center gap-1 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-40"
           onClick={() => onCreateDraft(pair)}
-          disabled={drafted}
+          disabled={drafted && !integrated}
         >
           <FilePlus2 size={13} />
-          {drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
+          {integrated ? "確認済みの3-Aを開く" : filled ? "約定済み二脚を統合して3-Aで確認" : drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
         </button>
       </td>
     </tr>

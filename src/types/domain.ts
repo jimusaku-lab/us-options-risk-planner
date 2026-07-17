@@ -325,6 +325,8 @@ export type BrokerSettlement = {
 export type SyntheticForwardTicket = {
   ticketId?: string;
   orderId?: string;
+  parentHistoryId?: string;
+  parentTradeDate?: string;
   netOrderPriceUSD?: number;
   estimatedTotalCommissionUSD?: number;
   netFillPriceUSD?: number;

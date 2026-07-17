@@ -10,6 +10,7 @@ import {
   findSaxoSyntheticForwardPairing,
   findSaxoSyntheticForwardPairs,
   findSaxoSyntheticForwardParentHistory,
+  resolveSaxoSyntheticForwardFillEvidence,
   findOrderCandidatesForLeg,
   getSaxoHistoryCandidateKeys,
   getSaxoHistoryCandidateTarget,
@@ -306,6 +307,18 @@ describe("Saxo read-only account sync", () => {
     ]);
     expect(held.pairs).toHaveLength(0);
     expect(held.holds).toMatchObject([{ reason: "原資産識別子をSaxoから取得できませんでした。" }]);
+  });
+
+  it("requires the parent and both leg trades before treating a synthetic forward as filled", () => {
+    const base = { accountKey: "n-account-1234", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "NVDA", underlyingSymbol: "NVDA", underlyingIdentity: "uic:12345:stock", assetType: "StockOption", kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z" };
+    const call: SaxoApiPositionSnapshot = { ...base, id: "call", positionId: "call-position", quantity: 1, side: "long", optionType: "call", premiumOpenPrice: 26.25 };
+    const put: SaxoApiPositionSnapshot = { ...base, id: "put", positionId: "put-position", quantity: -1, side: "short", optionType: "put", premiumOpenPrice: 21.05 };
+    const pair = findSaxoSyntheticForwardPairs([call, put])[0];
+    const parent: SaxoHistoryDiscoveryItem = { id: "parent-trade", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", quantity: 1, buySell: "buy", price: 5.85, tradeDate: "2026-07-16", currency: "USD" };
+    const callTrade: SaxoHistoryDiscoveryItem = { id: "call-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "call", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "buy", openClose: "open", price: 26.25, tradeDate: "2026-07-16", currency: "USD" };
+    const putTrade: SaxoHistoryDiscoveryItem = { id: "put-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "put", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "sell", openClose: "open", price: 21.05, tradeDate: "2026-07-16", currency: "USD" };
+    expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade, putTrade])).toMatchObject({ status: "filled", parentHistory: { orderId: "5425367936", price: 5.85 }, callHistory: { price: 26.25 }, putHistory: { price: 21.05 }, missing: [] });
+    expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade])).toMatchObject({ status: "incomplete", missing: ["put"] });
   });
 
   it("links an executed Saxo covered call to the existing planned covered call even when strike and premium differ", () => {

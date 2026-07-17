@@ -67,8 +67,9 @@ export function getCompositeOptionLifecycle(simulation: TradeSimulation): Compos
   const closeComplete = entryComplete && callCloseContracts >= validation.callLeg.quantity && putCloseContracts >= validation.putLeg.quantity;
   const hasPartialClose = callCloseContracts > 0 || putCloseContracts > 0;
   const hasPartialEntry = callEntryContracts > 0 || putEntryContracts > 0;
+  const hasReportedEntry = (simulation.optionEntryExecutions ?? []).some((execution) => execution.legId === validation.callLeg?.id || execution.legId === validation.putLeg?.id);
   const state = closeComplete ? "closed" : hasPartialClose ? "partial_close" : entryComplete ? "open" : hasPartialEntry ? "partial_entry" : "planned";
-  const label = state === "closed" ? "二脚決済済み" : state === "partial_close" ? "一部決済・要確認" : state === "open" ? "二脚建玉中" : state === "partial_entry" ? "一部約定・要確認" : "二脚約定待ち";
+  const label = state === "closed" ? "二脚決済済み" : state === "partial_close" ? "一部決済・要確認" : state === "open" ? "二脚建玉中" : state === "partial_entry" ? "一部約定・要確認" : simulation.status === "open" && hasReportedEntry ? "二脚約定確認待ち" : "二脚約定待ち";
   return { state, label, callEntryContracts, putEntryContracts, callCloseContracts, putCloseContracts, entryComplete, closeComplete };
 }
 

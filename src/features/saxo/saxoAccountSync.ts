@@ -294,6 +294,35 @@ export function findSaxoSyntheticForwardParentHistory(
     })[0];
 }
 
+export type SaxoSyntheticForwardFillEvidence = {
+  status: "filled" | "incomplete";
+  parentHistory?: SaxoHistoryDiscoveryItem;
+  callHistory?: SaxoHistoryDiscoveryItem;
+  putHistory?: SaxoHistoryDiscoveryItem;
+  missing: ("parent" | "call" | "put")[];
+};
+
+function isSaxoFilledTradeHistory(item: SaxoHistoryDiscoveryItem | undefined): item is SaxoHistoryDiscoveryItem {
+  if (!item || item.kind !== "trade" || item.price === undefined || !Number.isFinite(item.price)) return false;
+  const status = (item.sourceStatus ?? "").toLowerCase();
+  return !/(cancel|reject|unfilled|working|pending)/.test(status);
+}
+
+/** Require a composite parent trade and a matching entry trade for each leg. */
+export function resolveSaxoSyntheticForwardFillEvidence(
+  pair: SaxoSyntheticForwardPair,
+  historyItems: SaxoHistoryDiscoveryItem[],
+): SaxoSyntheticForwardFillEvidence {
+  const parentHistory = findSaxoSyntheticForwardParentHistory(pair, historyItems);
+  const callHistory = findEntryHistoryMatches(pair.callPosition, historyItems).map((match) => match.item).find(isSaxoFilledTradeHistory);
+  const putHistory = findEntryHistoryMatches(pair.putPosition, historyItems).map((match) => match.item).find(isSaxoFilledTradeHistory);
+  const missing: SaxoSyntheticForwardFillEvidence["missing"] = [];
+  if (!isSaxoFilledTradeHistory(parentHistory)) missing.push("parent");
+  if (!callHistory) missing.push("call");
+  if (!putHistory) missing.push("put");
+  return { status: missing.length === 0 ? "filled" : "incomplete", parentHistory, callHistory, putHistory, missing };
+}
+
 export type SaxoPositionReconciliationRow = {
   id: string;
   status: SaxoPositionMatchStatus;

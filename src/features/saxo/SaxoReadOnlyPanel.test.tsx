@@ -24,6 +24,16 @@ it("renders one composite CTA for a paired synthetic forward and no individual d
   expect(onCreateDraft).toHaveBeenCalledWith(pair);
 });
 
+it("uses the filled-state CTA and reopens an integrated 3-A without creating another draft", () => {
+  const onCreateDraft = vi.fn();
+  const { rerender } = render(<table><tbody><SyntheticForwardPairRow pair={pair} drafted={false} filled onCreateDraft={onCreateDraft} /></tbody></table>);
+  expect(screen.getByRole("button", { name: "約定済み二脚を統合して3-Aで確認" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "約定済み二脚を統合して3-Aで確認" }));
+  expect(onCreateDraft).toHaveBeenCalledWith(pair);
+  rerender(<table><tbody><SyntheticForwardPairRow pair={pair} drafted filled integrated onCreateDraft={onCreateDraft} /></tbody></table>);
+  expect(screen.getByRole("button", { name: "確認済みの3-Aを開く" })).toBeEnabled();
+});
+
 it("renders an unresolved pair without individual reflection controls", () => {
   const hold: SaxoSyntheticForwardHold = { id: "hold", callPosition, putPosition, accountCode: "N", expiry: "2026-12-18", strike: 210, quantity: 1, reason: "原資産識別子をSaxoから取得できませんでした。" };
   render(<table><tbody><SyntheticForwardHoldRow hold={hold} /></tbody></table>);
