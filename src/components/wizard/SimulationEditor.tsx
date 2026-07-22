@@ -14,7 +14,7 @@ import {
   getNOptionStandardCommissionUSD,
   updateStandardEntryCommissionForContracts,
 } from "@/domain/optionEntryExecutions";
-import { getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardTicketNetPremiumUSD, isCompositeOptionStrategy, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "@/domain/compositeOptionPosition";
+import { getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardTicketNetPremiumUSD, isCompositeOptionStrategy, isSyntheticForwardEntrySaved, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "@/domain/compositeOptionPosition";
 import {
   calculateOptionCloseExecutionResults,
   createOptionCloseExecutionDraft,
@@ -45,6 +45,7 @@ type SimulationEditorProps = {
   onDiscardDraft?: (simulationId: string) => void;
   onCloseDecisionAction?: (anchorId: string) => void;
   onCloseEditor?: () => void;
+  onOpenDashboard?: () => void;
   onStockAcquisitionCompleteClose?: () => void;
   onOpenPerformance?: () => void;
   onReturnToSaxoHistory?: () => void;
@@ -53,7 +54,7 @@ type SimulationEditorProps = {
   focusRequest?: { anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string } | null;
 };
 
-export function SimulationEditor({ simulation, workspace, standardNOptionCommissionUSD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onStockAcquisitionCompleteClose, onOpenPerformance, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
+export function SimulationEditor({ simulation, workspace, standardNOptionCommissionUSD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onOpenDashboard, onStockAcquisitionCompleteClose, onOpenPerformance, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
   const [quoteStatus, setQuoteStatus] = useState<string>("");
   const [workflowNotice, setWorkflowNotice] = useState<{ message: string; actionLabel: string; anchorId: string } | null>(null);
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
@@ -687,6 +688,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
     focusRequest?.anchorId === "option-close-executions" && focusRequest.saxoHistoryIssue === "missing-close-candidate";
   const isSaxoApiDraft = isSaxoApiPositionDraft(simulation);
   const isSaxoFilledSyntheticForward = isSyntheticForward && simulation.status === "entry_confirmation" && optionEntryExecutions.length >= 2;
+  const syntheticForwardEntrySaved = isSyntheticForwardEntrySaved(simulation);
   const saxoDraftMissingItems = getSaxoDraftMissingItems(simulation);
   const entryRationaleJournal = simulation.entryRationaleJournal ?? createJournalForSimulation(simulation);
   const confirmSaxoApiDraft = () => {
@@ -743,7 +745,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
 
   return (
     <section>
-      {isSaxoApiDraft ? (
+      {isSaxoApiDraft && !isSyntheticForwardEntrySaved(simulation) ? (
         <div className="mb-4 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -1236,7 +1238,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              {entryOptionLegs.length > 0 ? (
+              {!syntheticForwardEntrySaved && entryOptionLegs.length > 0 ? (
                 <button
                   className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
                   type="button"
@@ -1245,7 +1247,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                   約定確認を追加
                 </button>
               ) : null}
-              {optionEntryExecutions.some((execution) => !execution.confirmed) ? (
+              {!syntheticForwardEntrySaved && optionEntryExecutions.some((execution) => !execution.confirmed) ? (
                 <button
                   className="rounded-md border border-emerald-300 bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
                   type="button"
@@ -1256,12 +1258,18 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               ) : null}
             </div>
           </div>
-          {simulation.status === "entry_confirmation" && optionEntryExecutions.some((execution) => !execution.confirmed) ? (
+          {!syntheticForwardEntrySaved && simulation.status === "entry_confirmation" && optionEntryExecutions.some((execution) => !execution.confirmed) ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">
               約定情報未確認です。P口座ではSaxo取引履歴のプレミアムJPYと取引費用JPYを確認してください。
             </div>
           ) : null}
-          {entryExecutionsConfirmed && simulation.status === "planned" ? (
+          {isSyntheticForward && entryExecutionsConfirmed && !syntheticForwardEntrySaved && ["planned", "entry_confirmation"].includes(simulation.status) ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
+              <div><div className="font-semibold">二脚の約定は保存済みですが、シンセティック建玉が未作成です。</div><div className="mt-1 text-xs text-amber-800">ネット約定価格と証拠金の確認状態は保持したまま、親建玉だけを確定します。</div></div>
+              <button type="button" className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100" onClick={() => updateStatus("open")}>シンセティック建玉を確定</button>
+            </div>
+          ) : null}
+          {!isSyntheticForward && entryExecutionsConfirmed && simulation.status === "planned" ? (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
               <span className="font-semibold">建玉開始を確認しました。建玉状態を建玉中に変更できます。</span>
               <button
@@ -1273,13 +1281,18 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               </button>
             </div>
           ) : null}
-          {entryExecutionsConfirmed && simulation.status === "entry_confirmation" ? (
+          {!isSyntheticForward && entryExecutionsConfirmed && simulation.status === "entry_confirmation" ? (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
               <span className="font-semibold">約定済み二脚の確認が完了しました。正式保存して建玉中にします。</span>
               <button type="button" className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-100" onClick={() => updateStatus("open")}>正式保存して建玉中にする</button>
             </div>
           ) : null}
-          {entryExecutionsConfirmed && simulation.status === "open" ? (
+          {syntheticForwardEntrySaved ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
+              <div><div className="font-semibold">シンセティックフォワードを保存済み</div><div className="mt-1 text-xs text-emerald-800">C買い {callLeg?.quantity ?? 0}枚・P売り {putLeg?.quantity ?? 0}枚を保存し、建玉ダッシュボードへ反映済みです。</div></div>
+              <div className="flex flex-wrap gap-2"><button type="button" className="rounded-md border border-emerald-700 bg-emerald-700 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-800" onClick={onOpenDashboard}>建玉ダッシュボードで確認</button><button type="button" className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-100" onClick={() => document.getElementById("option-entry-executions")?.scrollIntoView({ behavior: "smooth", block: "start" })}>3-Aの内容を確認</button></div>
+            </div>
+          ) : entryExecutionsConfirmed && simulation.status === "open" ? (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm leading-6 text-sky-950">
               <div>
                 <div className="font-semibold">建玉開始は確認済みです。</div>
@@ -1337,42 +1350,12 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <button
-                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
-                        type="button"
-                        disabled={execution.confirmed}
-                        onClick={() => complementSaxoEntryHistory(execution)}
-                      >
-                        Saxo取引履歴から補完
-                      </button>
-                      <button
-                        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
-                        type="button"
-                        disabled={entryCandidates.length === 0 || execution.confirmed}
-                        onClick={() => setEntryCandidatePickerId(entryCandidatePickerId === execution.id ? null : execution.id)}
-                      >
-                        履歴候補を選ぶ
-                      </button>
-                      {!execution.confirmed ? (
-                        <button
-                          className="rounded-md border border-emerald-300 bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-700"
-                          type="button"
-                          onClick={() => confirmEntryExecutionAndMaybeDraft(execution.id)}
-                        >
-                          確認して正式保存する
-                        </button>
-                      ) : (
-                        <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800">
-                          確認済み
-                        </span>
-                      )}
-                      <button
-                        className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-50"
-                        type="button"
-                        onClick={() => (isSaxoApiDraft ? onDiscardDraft?.(simulation.id) : removeOptionEntryExecution(execution.id))}
-                      >
-                        下書きを破棄
-                      </button>
+                      {syntheticForwardEntrySaved ? <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800">保存済み</span> : <>
+                        <button className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400" type="button" disabled={execution.confirmed} onClick={() => complementSaxoEntryHistory(execution)}>Saxo取引履歴から補完</button>
+                        <button className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400" type="button" disabled={entryCandidates.length === 0 || execution.confirmed} onClick={() => setEntryCandidatePickerId(entryCandidatePickerId === execution.id ? null : execution.id)}>履歴候補を選ぶ</button>
+                        {!execution.confirmed ? <button className="rounded-md border border-emerald-300 bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-700" type="button" onClick={() => confirmEntryExecutionAndMaybeDraft(execution.id)}>確認して正式保存する</button> : <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800">確認済み</span>}
+                        {!execution.confirmed ? <button className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-50" type="button" onClick={() => (isSaxoApiDraft ? onDiscardDraft?.(simulation.id) : removeOptionEntryExecution(execution.id))}>下書きを破棄</button> : null}
+                      </>}
                     </div>
                   </div>
                   <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-700">
@@ -1381,23 +1364,24 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       <span className="font-semibold">履歴補完: {formatEntryHistoryCompletion(execution)}</span>
                       {entryCandidates.length > 0 ? <span>候補 {entryCandidates.length}件</span> : null}
                     </div>
-                    {isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "unmatched" ? (
+                    {syntheticForwardEntrySaved ? <p className="mt-1 text-slate-600">監査用: 保存済みの約定内容です。履歴補完の状態は記録として保持しています。</p> : null}
+                    {!syntheticForwardEntrySaved && isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "unmatched" ? (
                       <p className="mt-1 text-amber-700">
                         Saxo取引履歴から補完できませんでした。履歴を再取得するか、不足項目だけ手入力してください。
                       </p>
                     ) : null}
-                    {isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "multiple" ? (
+                    {!syntheticForwardEntrySaved && isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "multiple" ? (
                       <p className="mt-1 text-amber-700">Saxo取引履歴に複数候補があります。「履歴候補を選ぶ」から該当履歴を選択してください。</p>
                     ) : null}
-                    {isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "manual" ? (
+                    {!syntheticForwardEntrySaved && isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "manual" ? (
                       <p className="mt-1 text-amber-700">
                         Saxo取引履歴から一部項目を自動補完できませんでした。Saxo画面の取引履歴に表示されている値を手入力してください。
                       </p>
                     ) : null}
-                    {isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "matched" ? (
+                    {!syntheticForwardEntrySaved && isSaxoCurrentPositionEntry && execution.historyCompletionStatus === "matched" ? (
                       <p className="mt-1 text-emerald-700">Saxo現在建玉とSaxo取引履歴で補完済みです。内容を確認して正式保存してください。</p>
                     ) : null}
-                    {isSaxoCurrentPositionEntry && entryMissingItems.length > 0 ? (
+                    {!syntheticForwardEntrySaved && isSaxoCurrentPositionEntry && entryMissingItems.length > 0 ? (
                       <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
                         <div className="font-bold">不足項目: {entryMissingItems.join("、")}</div>
                         <p className="mt-1">
@@ -1432,7 +1416,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       </details>
                     ) : null}
                   </div>
-                  {entryCandidatePickerId === execution.id ? (
+                  {!syntheticForwardEntrySaved && entryCandidatePickerId === execution.id ? (
                     <div className="mt-3 rounded-md border border-teal-200 bg-white p-3">
                       <div className="text-xs font-bold text-slate-800">Saxo取引履歴候補</div>
                       {entryCandidates.length > 0 ? (

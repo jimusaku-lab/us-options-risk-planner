@@ -30,14 +30,14 @@ it("uses the filled-state CTA and reopens an integrated 3-A without creating ano
   expect(screen.getByRole("button", { name: "約定済み二脚を統合して3-Aで確認" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "約定済み二脚を統合して3-Aで確認" }));
   expect(onCreateDraft).toHaveBeenCalledWith(pair);
-  rerender(<table><tbody><SyntheticForwardPairRow pair={pair} drafted filled integrated onCreateDraft={onCreateDraft} /></tbody></table>);
-  expect(screen.getByRole("button", { name: "約定済みシンセティックの3-Aを開く" })).toBeEnabled();
+  rerender(<table><tbody><SyntheticForwardPairRow pair={pair} drafted filled integrated saved onCreateDraft={onCreateDraft} onOpenDashboard={vi.fn()} /></tbody></table>);
+  expect(screen.getByRole("button", { name: "建玉ダッシュボードで確認" })).toBeEnabled();
 });
 
 it("keeps a recovery CTA active when only the stale drafted marker remains", () => {
   const onCreateDraft = vi.fn();
   render(<table><tbody><SyntheticForwardPairRow pair={pair} drafted recoveryRequired onCreateDraft={onCreateDraft} /></tbody></table>);
-  const button = screen.getByRole("button", { name: "統合下書きを復旧して3-Aへ進む" });
+  const button = screen.getByRole("button", { name: "シンセティック建玉を復旧して確認" });
   expect(button).toBeEnabled(); fireEvent.click(button); expect(onCreateDraft).toHaveBeenCalledWith(pair);
 });
 

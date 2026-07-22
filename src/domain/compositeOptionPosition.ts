@@ -86,6 +86,11 @@ export function getCompositeOptionLifecycle(simulation: TradeSimulation): Compos
   return { state, label, callEntryContracts, putEntryContracts, callCloseContracts, putCloseContracts, entryComplete, closeComplete };
 }
 
+/** A saved synthetic forward is the parent record with both entry legs formally confirmed. */
+export function isSyntheticForwardEntrySaved(simulation: TradeSimulation): boolean {
+  return simulation.strategyType === "synthetic_forward" && simulation.status === "open" && getCompositeOptionLifecycle(simulation)?.entryComplete === true;
+}
+
 export function shouldIncludeCompositeCloseResultsInPerformance(simulation: TradeSimulation): boolean {
   return !isCompositeOptionStrategy(simulation) || getCompositeOptionLifecycle(simulation)?.closeComplete === true;
 }

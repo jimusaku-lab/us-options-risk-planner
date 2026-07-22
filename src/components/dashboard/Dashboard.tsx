@@ -84,7 +84,7 @@ export function Dashboard({
   const hiddenByJournalFocusCount = focusedSimulation ? Math.max(0, simulations.length - 1) : 0;
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <section id="position-dashboard" tabIndex={-1} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm focus:outline-none">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-bold text-slate-950">建玉ダッシュボード</h2>

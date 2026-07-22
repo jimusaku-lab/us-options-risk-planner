@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import type { TradeSimulation } from "@/types/domain";
-import { getCompositeAssignmentFunding, getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardTicketNetPremiumUSD, isSyntheticForwardEntryConfirmation, shouldIncludeCompositeCloseResultsInPerformance, shouldRecoverSaxoSyntheticForwardEntryConfirmation, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "./compositeOptionPosition";
+import { getCompositeAssignmentFunding, getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardTicketNetPremiumUSD, isSyntheticForwardEntryConfirmation, isSyntheticForwardEntrySaved, shouldIncludeCompositeCloseResultsInPerformance, shouldRecoverSaxoSyntheticForwardEntryConfirmation, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "./compositeOptionPosition";
 
 function composite(strategyType: "synthetic_forward" | "combo", callStrike = 205, putStrike = 205): TradeSimulation {
   const call = { id: "combo-call", type: "call" as const, side: "buy" as const, strikeUSD: callStrike, premiumUSD: 8, quantity: 1, expiryDate: "2026-09-18" };
@@ -23,6 +23,9 @@ describe("composite option positions", () => {
   it("accepts a combo with a put strike at or below the call strike", () => expect(validateCompositeOptionPosition(composite("combo", 210, 200)).valid).toBe(true));
   it("keeps a parent in partial entry until both Saxo-matched legs are confirmed", () => {
     const position = composite("synthetic_forward"); position.optionEntryExecutions = [entry("combo-call")]; expect(getCompositeOptionLifecycle(position)?.state).toBe("partial_entry"); position.optionEntryExecutions.push(entry("combo-put")); expect(getCompositeOptionLifecycle(position)?.state).toBe("open");
+  });
+  it("marks only an open parent with both confirmed legs as saved", () => {
+    const position = composite("synthetic_forward"); position.optionEntryExecutions = [entry("combo-call"), entry("combo-put")]; expect(isSyntheticForwardEntrySaved(position)).toBe(true); position.status = "entry_confirmation"; expect(isSyntheticForwardEntrySaved(position)).toBe(false);
   });
   it("recovers only unconfirmed Saxo synthetic imports into entry confirmation", () => {
     const position = composite("synthetic_forward"); position.status = "planned"; expect(shouldRecoverSaxoSyntheticForwardEntryConfirmation(position, true)).toBe(true);

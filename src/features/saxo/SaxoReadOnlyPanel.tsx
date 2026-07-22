@@ -57,7 +57,7 @@ import {
 } from "@/features/saxo/saxoAccountSync";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { summarizeSaxoHistoryCompletion } from "@/features/saxo/saxoHistoryCompletion";
-import { shouldRecoverSaxoSyntheticForwardEntryConfirmation } from "@/domain/compositeOptionPosition";
+import { isSyntheticForwardEntrySaved, shouldRecoverSaxoSyntheticForwardEntryConfirmation } from "@/domain/compositeOptionPosition";
 import type { AccountState, OptionLeg, SaxoAccountCode, StockTransferEvent, TradeSimulation } from "@/types/domain";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 
@@ -135,6 +135,7 @@ export function SaxoReadOnlyPanel({
   onCreateStockTransferFromPosition,
   stockTransfers = [],
   onOpenLinkedSimulation,
+  onOpenSyntheticForwardDashboard,
   onOpenHistoryTarget,
   onOpenWheelManagement,
   onDownloadJson,
@@ -156,6 +157,7 @@ export function SaxoReadOnlyPanel({
   onCreateStockTransferFromPosition?: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
   stockTransfers?: StockTransferEvent[];
   onOpenLinkedSimulation?: (simulationId: string, anchorId?: string) => void;
+  onOpenSyntheticForwardDashboard?: (simulationId: string) => void;
   onOpenHistoryTarget?: (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record" | "stock-settlement-record", sourceTradeId?: string) => void;
   onOpenWheelManagement?: (ticker?: string) => void;
   onDownloadJson?: () => void;
@@ -1527,6 +1529,7 @@ export function SaxoReadOnlyPanel({
                 }}
                 onOpenWheelManagement={onOpenWheelManagement}
                 onDownloadJson={onDownloadJson}
+                onOpenSyntheticForwardDashboard={onOpenSyntheticForwardDashboard}
                 onOpenSimulationAt={(simulationId, anchorId) => {
                   onOpenLinkedSimulation?.(simulationId, anchorId);
                   setMessage("対応するP口座の権利行使済み建玉を開きました。");
@@ -2390,6 +2393,7 @@ function PositionsPreview({
   onCreateStockTransfer,
   onOpenWheelManagement,
   onDownloadJson,
+  onOpenSyntheticForwardDashboard,
   onOpenSimulationAt,
 }: {
   rows: SaxoPositionReconciliationRow[];
@@ -2424,6 +2428,7 @@ function PositionsPreview({
   onCreateStockTransfer: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
   onOpenWheelManagement?: (ticker?: string) => void;
   onDownloadJson?: () => void;
+  onOpenSyntheticForwardDashboard?: (simulationId: string) => void;
   onOpenSimulationAt: (simulationId: string, anchorId?: string) => void;
 }) {
   const recoveredSyntheticPairKeys = useRef(new Set<string>());
@@ -2449,7 +2454,12 @@ function PositionsPreview({
     if (!row.position) return false;
     return resolveLinkedSimulation(row).status !== "linked";
   });
-  const actionRequiredRows = actionRequiredRegularRows.length + syntheticForwardPairs.length + syntheticForwardHolds.length + pendingStockTransferRows.length;
+  const savedSyntheticPairIds = new Set(syntheticForwardPairs.filter((pair) => {
+    const evidence = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems);
+    const existing = findSaxoSyntheticForwardSimulationForPair(pair, simulations, evidence.parentHistory?.orderId);
+    return Boolean(existing && isSyntheticForwardEntrySaved(existing));
+  }).map((pair) => pair.id));
+  const actionRequiredRows = actionRequiredRegularRows.length + syntheticForwardPairs.filter((pair) => !savedSyntheticPairIds.has(pair.id)).length + syntheticForwardHolds.length + pendingStockTransferRows.length;
   const confirmedCurrentHoldingRows = linkedRegularRows.length + recordedStockTransferRows.length;
   const draft = draftPosition ? createSaxoPositionDraftSummary(draftPosition, simulations) : null;
   useEffect(() => {
@@ -2537,8 +2547,8 @@ function PositionsPreview({
             </thead>
             <tbody>
               {syntheticForwardPairs.map((pair) => {
-                const evidence = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems); const existingSynthetic = findSaxoSyntheticForwardSimulationForPair(pair, simulations, evidence.parentHistory?.orderId); const drafted = draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id);
-                return <SyntheticForwardPairRow key={pair.id} pair={pair} filled={evidence.status === "filled"} integrated={Boolean(existingSynthetic)} drafted={drafted} recoveryRequired={drafted && !existingSynthetic} onCreateDraft={onCreateSyntheticForwardDraft} />;
+                const evidence = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems); const existingSynthetic = findSaxoSyntheticForwardSimulationForPair(pair, simulations, evidence.parentHistory?.orderId); const drafted = draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id); const saved = Boolean(existingSynthetic && isSyntheticForwardEntrySaved(existingSynthetic));
+                return <SyntheticForwardPairRow key={pair.id} pair={pair} filled={evidence.status === "filled"} integrated={Boolean(existingSynthetic)} saved={saved} drafted={drafted} recoveryRequired={drafted && !existingSynthetic} onCreateDraft={onCreateSyntheticForwardDraft} onOpenDashboard={existingSynthetic ? () => onOpenSyntheticForwardDashboard?.(existingSynthetic.id) : undefined} />;
               })}
               {syntheticForwardHolds.map((hold) => (
                 <SyntheticForwardHoldRow key={hold.id} hold={hold} />
@@ -3485,15 +3495,19 @@ export function SyntheticForwardPairRow({
   drafted,
   filled = false,
   integrated = false,
+  saved = false,
   recoveryRequired = false,
   onCreateDraft,
+  onOpenDashboard,
 }: {
   pair: SaxoSyntheticForwardPair;
   drafted: boolean;
   filled?: boolean;
   integrated?: boolean;
+  saved?: boolean;
   recoveryRequired?: boolean;
   onCreateDraft: (pair: SaxoSyntheticForwardPair) => void;
+  onOpenDashboard?: () => void;
 }) {
   return (
     <tr className="border-b border-teal-100 bg-teal-50 align-top">
@@ -3510,20 +3524,20 @@ export function SyntheticForwardPairRow({
       <td className="numeric-input py-2 pr-3 text-right">親注文で確認</td>
       <td className="numeric-input py-2 pr-3 text-right">二脚合算なし</td>
       <td className="py-2 pr-3">
-        <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">{integrated && filled ? "約定確認待ち" : integrated ? "3-A反映済み" : filled ? "二脚約定済み" : "二脚統合候補"}</span>
+        <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">{saved ? "保存済み" : integrated && filled ? "約定確認待ち" : integrated ? "3-A反映済み" : filled ? "二脚約定済み" : "二脚統合候補"}</span>
         <p className="mt-1 max-w-[290px] text-xs leading-5 text-teal-900">
-          {integrated ? "親注文と二脚を統合済みです。重複作成せず、保存済みの3-Aを開きます。" : filled ? "親SyntheticUnderlying注文と二脚の約定履歴を確認しました。親注文のネット約定価格を正として3-Aへ反映します。" : "個別の「建玉入力へ下書き反映」と「今回は無視」は利用しません。親SyntheticUnderlying注文のネット約定価格を3-Aで確認します。"}
+          {saved ? "二脚と親シンセティック建玉は保存済みです。新規保存や下書き破棄は行いません。" : recoveryRequired ? "二脚の約定は保存済みですが、親シンセティック建玉が未作成です。親建玉だけを復旧します。" : integrated ? "親注文と二脚を統合済みです。重複作成せず、保存済みの3-Aを開きます。" : filled ? "親SyntheticUnderlying注文と二脚の約定履歴を確認しました。親注文のネット約定価格を正として3-Aへ反映します。" : "個別の「建玉入力へ下書き反映」と「今回は無視」は利用しません。親SyntheticUnderlying注文のネット約定価格を3-Aで確認します。"}
         </p>
       </td>
       <td className="py-2">
         <button
           type="button"
           className="inline-flex items-center gap-1 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-40"
-          onClick={() => onCreateDraft(pair)}
+          onClick={() => saved ? onOpenDashboard?.() : onCreateDraft(pair)}
           disabled={drafted && !integrated && !recoveryRequired}
         >
           <FilePlus2 size={13} />
-          {recoveryRequired ? "統合下書きを復旧して3-Aへ進む" : integrated && filled ? "約定済みシンセティックの3-Aを開く" : integrated ? "確認済みの3-Aを開く" : filled ? "約定済み二脚を統合して3-Aで確認" : drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
+          {saved ? "建玉ダッシュボードで確認" : recoveryRequired ? "シンセティック建玉を復旧して確認" : integrated && filled ? "約定済みシンセティックの3-Aを開く" : integrated ? "確認済みの3-Aを開く" : filled ? "約定済み二脚を統合して3-Aで確認" : drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
         </button>
       </td>
     </tr>

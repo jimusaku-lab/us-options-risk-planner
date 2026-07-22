@@ -162,6 +162,27 @@ describe("SimulationEditor", () => {
     expect(screen.getAllByDisplayValue("2.25").length).toBeGreaterThan(0);
     expect(screen.queryByText(/不足項目: .*取引費用USD/)).not.toBeInTheDocument();
   });
+
+  it("shows the synthetic-forward saved panel and hides draft actions after both legs are confirmed", () => {
+    const onOpenDashboard = vi.fn();
+    const simulation = buildVisaLongCallSimulation({
+      status: "open", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD",
+      optionLegs: [
+        { id: "synthetic-call", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18", assignmentPolicy: "unknown" },
+        { id: "synthetic-put", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", putIntent: "accept_assignment", assignmentPolicy: "unknown" },
+      ],
+      optionEntryExecutions: [
+        { id: "synthetic-entry-call", legId: "synthetic-call", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 26.25, settlementCurrency: "USD", commissionUSD: 2.25, source: "saxo_api_estimate", confirmed: true },
+        { id: "synthetic-entry-put", legId: "synthetic-put", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 21.05, settlementCurrency: "USD", commissionUSD: 2.25, source: "saxo_api_estimate", confirmed: true },
+      ],
+    });
+    render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} onOpenDashboard={onOpenDashboard} />);
+    expect(screen.getByText("シンセティックフォワードを保存済み")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Saxo取引履歴から補完" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "下書きを破棄" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "建玉ダッシュボードで確認" }));
+    expect(onOpenDashboard).toHaveBeenCalledOnce();
+  });
 });
 
 const visaEntryHistory: SaxoHistoryDiscoveryItem = {
