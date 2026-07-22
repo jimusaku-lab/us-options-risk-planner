@@ -1,4 +1,5 @@
 import type { AccountState, OptionLeg, TradeSimulation } from "@/types/domain";
+import { ensureNOptionEntryStandardCommission } from "@/domain/optionEntryExecutions";
 
 const CONTRACT_SIZE = 100;
 
@@ -20,6 +21,17 @@ export type CompositeOptionLifecycle = {
   putCloseContracts: number;
   entryComplete: boolean;
   closeComplete: boolean;
+};
+
+export type SyntheticForwardParentFinalization = {
+  entryComplete: boolean;
+  sourceConfirmed: boolean;
+  netFillPriceUSD?: number;
+  actualTotalCommissionUSD?: number;
+  entryCostUSD?: number;
+  requiredMarginUSD?: number;
+  missingFields: string[];
+  complete: boolean;
 };
 
 export function isCompositeOptionStrategy(simulation: Pick<TradeSimulation, "strategyType">): boolean {
@@ -86,9 +98,95 @@ export function getCompositeOptionLifecycle(simulation: TradeSimulation): Compos
   return { state, label, callEntryContracts, putEntryContracts, callCloseContracts, putCloseContracts, entryComplete, closeComplete };
 }
 
-/** A saved synthetic forward is the parent record with both entry legs formally confirmed. */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function roundUSD(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function hasSaxoSyntheticSource(simulation: TradeSimulation): boolean {
+  const ticket = simulation.syntheticForwardTicket;
+  return Boolean(ticket?.ticketId || ticket?.orderId || ticket?.parentHistoryId) ||
+    (simulation.optionEntryExecutions ?? []).some((execution) => (execution.historyCandidateIds?.length ?? 0) > 0);
+}
+
+function hasImportedSaxoEvidence(simulation: TradeSimulation): boolean {
+  return (simulation.optionEntryExecutions ?? []).some((execution) => execution.source === "saxo_api_estimate" || (execution.historyCandidateIds?.length ?? 0) > 0) ||
+    (simulation.fixtureMeta?.notes ?? "").includes("Saxo SyntheticUnderlying");
+}
+
+function getConfirmedEntryExecutions(simulation: TradeSimulation, legId: string) {
+  return (simulation.optionEntryExecutions ?? []).filter((execution) => execution.legId === legId && execution.confirmed);
+}
+
+/** Calculates parent ticket facts from both confirmed legs without inferring required margin. */
+export function getSyntheticForwardParentFinalization(simulation: TradeSimulation): SyntheticForwardParentFinalization | undefined {
+  if (simulation.strategyType !== "synthetic_forward") return undefined;
+  const validation = validateCompositeOptionPosition(simulation);
+  const lifecycle = getCompositeOptionLifecycle(simulation);
+  const ticket = simulation.syntheticForwardTicket;
+  const missingFields = [...validation.reasons];
+  if (!lifecycle?.entryComplete || !validation.callLeg || !validation.putLeg) missingFields.push("C買い/P売り二脚の約定確認");
+
+  const callExecutions = validation.callLeg ? getConfirmedEntryExecutions(simulation, validation.callLeg.id) : [];
+  const putExecutions = validation.putLeg ? getConfirmedEntryExecutions(simulation, validation.putLeg.id) : [];
+  const callContracts = callExecutions.reduce((sum, execution) => sum + Math.max(0, execution.contracts || 0), 0);
+  const putContracts = putExecutions.reduce((sum, execution) => sum + Math.max(0, execution.contracts || 0), 0);
+  const canAggregate = Boolean(validation.callLeg && validation.putLeg && callContracts >= validation.callLeg.quantity && putContracts >= validation.putLeg.quantity);
+  const callAverage = canAggregate ? callExecutions.reduce((sum, execution) => sum + execution.fillPriceUSD * execution.contracts, 0) / callContracts : undefined;
+  const putAverage = canAggregate ? putExecutions.reduce((sum, execution) => sum + execution.fillPriceUSD * execution.contracts, 0) / putContracts : undefined;
+  const aggregatedNet = callAverage !== undefined && putAverage !== undefined ? roundUSD(callAverage - putAverage) : undefined;
+  const aggregatedCommission = canAggregate && [...callExecutions, ...putExecutions].every((execution) => isFiniteNumber(execution.commissionUSD))
+    ? roundUSD([...callExecutions, ...putExecutions].reduce((sum, execution) => sum + Math.abs(execution.commissionUSD ?? 0), 0))
+    : undefined;
+  const sourceConfirmed = hasSaxoSyntheticSource(simulation);
+  const canRepairLegacyImportedTicket = hasImportedSaxoEvidence(simulation) && ticket?.netFillSource === undefined;
+  const netFillPriceUSD = ticket?.netFillSource === "manual"
+    ? ticket.netFillPriceUSD
+    : canRepairLegacyImportedTicket && aggregatedNet !== undefined ? aggregatedNet : ticket?.netFillPriceUSD ?? aggregatedNet;
+  const actualTotalCommissionUSD = ticket?.actualTotalCommissionSource === "manual"
+    ? ticket.actualTotalCommissionUSD
+    : canRepairLegacyImportedTicket && aggregatedCommission !== undefined ? aggregatedCommission : ticket?.actualTotalCommissionUSD ?? aggregatedCommission;
+  const quantity = validation.callLeg?.quantity;
+  const calculatedEntryCost = isFiniteNumber(netFillPriceUSD) && isFiniteNumber(actualTotalCommissionUSD) && quantity && quantity > 0
+    ? roundUSD(netFillPriceUSD * CONTRACT_SIZE * quantity + actualTotalCommissionUSD)
+    : undefined;
+  const entryCostUSD = ticket?.entryCostSource === "manual"
+    ? ticket.entryCostUSD
+    : canRepairLegacyImportedTicket && calculatedEntryCost !== undefined ? calculatedEntryCost : ticket?.entryCostUSD ?? calculatedEntryCost;
+  const requiredMarginUSD = ticket?.requiredMarginUSD;
+  if (!sourceConfirmed) missingFields.push("親注文IDまたは二脚のSaxo履歴");
+  if (!isFiniteNumber(netFillPriceUSD)) missingFields.push("ネット約定価格");
+  if (!isFiniteNumber(actualTotalCommissionUSD)) missingFields.push("実績総手数料");
+  if (!isFiniteNumber(entryCostUSD)) missingFields.push("建玉時支払額");
+  if (!isFiniteNumber(requiredMarginUSD) || requiredMarginUSD < 0) missingFields.push("注文時必要証拠金");
+  return { entryComplete: lifecycle?.entryComplete === true, sourceConfirmed, netFillPriceUSD, actualTotalCommissionUSD, entryCostUSD, requiredMarginUSD, missingFields: Array.from(new Set(missingFields)), complete: missingFields.length === 0 };
+}
+
+/** Idempotently completes imported parent facts after the second leg is formally saved. */
+export function finalizeSyntheticForwardParent(simulation: TradeSimulation): TradeSimulation {
+  if (simulation.strategyType !== "synthetic_forward") return simulation;
+  const entryExecutions = (simulation.optionEntryExecutions ?? []).map((execution) => ensureNOptionEntryStandardCommission(simulation, execution));
+  const withFees = entryExecutions.some((execution, index) => execution !== (simulation.optionEntryExecutions ?? [])[index]) ? { ...simulation, optionEntryExecutions: entryExecutions } : simulation;
+  const finalization = getSyntheticForwardParentFinalization(withFees);
+  if (!finalization || !finalization.entryComplete) return withFees;
+  const ticket = withFees.syntheticForwardTicket ?? {};
+  const imported = hasImportedSaxoEvidence(withFees);
+  const nextTicket = {
+    ...ticket,
+    ...(ticket.netFillSource === "manual" || !isFiniteNumber(finalization.netFillPriceUSD) ? {} : { netFillPriceUSD: finalization.netFillPriceUSD, netFillSource: ticket.netFillSource ?? (imported ? "leg_aggregate" as const : undefined) }),
+    ...(ticket.actualTotalCommissionSource === "manual" || !isFiniteNumber(finalization.actualTotalCommissionUSD) ? {} : { actualTotalCommissionUSD: finalization.actualTotalCommissionUSD, actualTotalCommissionSource: ticket.actualTotalCommissionSource ?? (imported ? "leg_aggregate" as const : undefined) }),
+    ...(ticket.entryCostSource === "manual" || !isFiniteNumber(finalization.entryCostUSD) ? {} : { entryCostUSD: finalization.entryCostUSD, entryCostSource: ticket.entryCostSource ?? (imported ? "leg_aggregate" as const : undefined) }),
+  };
+  const ticketChanged = nextTicket.netFillPriceUSD !== ticket.netFillPriceUSD || nextTicket.netFillSource !== ticket.netFillSource || nextTicket.actualTotalCommissionUSD !== ticket.actualTotalCommissionUSD || nextTicket.actualTotalCommissionSource !== ticket.actualTotalCommissionSource || nextTicket.entryCostUSD !== ticket.entryCostUSD || nextTicket.entryCostSource !== ticket.entryCostSource;
+  return ticketChanged ? { ...withFees, syntheticForwardTicket: nextTicket } : withFees;
+}
+
+/** A saved synthetic forward has complete parent facts as well as both confirmed entry legs. */
 export function isSyntheticForwardEntrySaved(simulation: TradeSimulation): boolean {
-  return simulation.strategyType === "synthetic_forward" && simulation.status === "open" && getCompositeOptionLifecycle(simulation)?.entryComplete === true;
+  return simulation.strategyType === "synthetic_forward" && simulation.status === "open" && getSyntheticForwardParentFinalization(simulation)?.complete === true;
 }
 
 export function shouldIncludeCompositeCloseResultsInPerformance(simulation: TradeSimulation): boolean {

@@ -30,6 +30,8 @@ it("uses the filled-state CTA and reopens an integrated 3-A without creating ano
   expect(screen.getByRole("button", { name: "約定済み二脚を統合して3-Aで確認" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "約定済み二脚を統合して3-Aで確認" }));
   expect(onCreateDraft).toHaveBeenCalledWith(pair);
+  rerender(<table><tbody><SyntheticForwardPairRow pair={pair} drafted filled integrated onCreateDraft={onCreateDraft} /></tbody></table>);
+  expect(screen.getByRole("button", { name: "親シンセティックの確定情報を確認" })).toBeEnabled();
   rerender(<table><tbody><SyntheticForwardPairRow pair={pair} drafted filled integrated saved onCreateDraft={onCreateDraft} onOpenDashboard={vi.fn()} /></tbody></table>);
   expect(screen.getByRole("button", { name: "建玉ダッシュボードで確認" })).toBeEnabled();
 });

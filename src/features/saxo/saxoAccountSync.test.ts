@@ -295,8 +295,8 @@ describe("Saxo read-only account sync", () => {
     expect(pairs[0]).toMatchObject({ ticker: "NVDA", accountCode: "N", expiry: "2026-12-18", strike: 210, quantity: 1 });
     expect(findSaxoSyntheticForwardParentHistory(pairs[0], [
       { id: "other", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", price: 99 },
-      { id: "parent", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", price: 5.85 },
-    ])).toMatchObject({ orderId: "5425367936", price: 5.85 });
+      { id: "parent", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", price: 5.2 },
+    ])).toMatchObject({ orderId: "5425367936", price: 5.2 });
     expect(findSaxoSyntheticForwardPairs([{ ...put, strike: 211 }, call])).toHaveLength(0);
     expect(findSaxoSyntheticForwardPairs([
       { ...call, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "NVDA/18Z26C210:XCBF" },
@@ -323,10 +323,10 @@ describe("Saxo read-only account sync", () => {
     const call: SaxoApiPositionSnapshot = { ...base, id: "call", positionId: "call-position", quantity: 1, side: "long", optionType: "call", premiumOpenPrice: 26.25 };
     const put: SaxoApiPositionSnapshot = { ...base, id: "put", positionId: "put-position", quantity: -1, side: "short", optionType: "put", premiumOpenPrice: 21.05 };
     const pair = findSaxoSyntheticForwardPairs([call, put])[0];
-    const parent: SaxoHistoryDiscoveryItem = { id: "parent-trade", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", quantity: 1, buySell: "buy", price: 5.85, tradeDate: "2026-07-16", currency: "USD" };
+    const parent: SaxoHistoryDiscoveryItem = { id: "parent-trade", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", quantity: 1, buySell: "buy", price: 5.2, tradeDate: "2026-07-16", currency: "USD" };
     const callTrade: SaxoHistoryDiscoveryItem = { id: "call-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "call", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "buy", openClose: "open", price: 26.25, tradeDate: "2026-07-16", currency: "USD" };
     const putTrade: SaxoHistoryDiscoveryItem = { id: "put-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "put", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "sell", openClose: "open", price: 21.05, tradeDate: "2026-07-16", currency: "USD" };
-    expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade, putTrade])).toMatchObject({ status: "filled", parentHistory: { orderId: "5425367936", price: 5.85 }, callHistory: { price: 26.25 }, putHistory: { price: 21.05 }, missing: [] });
+    expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade, putTrade])).toMatchObject({ status: "filled", parentHistory: { orderId: "5425367936", price: 5.2 }, callHistory: { price: 26.25 }, putHistory: { price: 21.05 }, missing: [] });
     expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade])).toMatchObject({ status: "incomplete", missing: ["put"] });
   });
 

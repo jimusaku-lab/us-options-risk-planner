@@ -331,7 +331,13 @@ export type SyntheticForwardTicket = {
   estimatedTotalCommissionUSD?: number;
   netFillPriceUSD?: number;
   actualTotalCommissionUSD?: number;
+  /** Net debit/credit plus actual total commission for the opened parent position. */
+  entryCostUSD?: number;
+  netFillSource?: "saxo_parent" | "leg_aggregate" | "manual";
+  actualTotalCommissionSource?: "saxo_parent" | "leg_aggregate" | "manual";
+  entryCostSource?: "saxo_parent" | "leg_aggregate" | "manual";
   requiredMarginUSD?: number;
+  requiredMarginSource?: "saxo_order_snapshot" | "user_confirmed";
   marginAvailableUSD?: number;
   marginAsOf?: string;
   assignmentAccepted?: boolean;

@@ -22,6 +22,7 @@ import {
 } from "@/domain/optionCloseExecutions";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
 import { DEFAULT_N_OPTION_STANDARD_COMMISSION_USD } from "@/domain/optionEntryExecutions";
+import { finalizeSyntheticForwardParent } from "@/domain/compositeOptionPosition";
 
 export type WorkspaceMode = "demo" | "live";
 
@@ -178,7 +179,7 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
   };
   const exitOrderPlan = normalizeExitOrderPlan(normalized);
   const exitOrderPlans = normalizeExitOrderPlans({ ...normalized, exitOrderPlan });
-  return sanitizeSaxoHistoryCloseExecutions({
+  return finalizeSyntheticForwardParent(sanitizeSaxoHistoryCloseExecutions({
     ...normalized,
     optionEntryExecutions: normalized.optionEntryExecutions ?? [],
     optionCloseExecutions: normalizeOptionCloseExecutionsForStatus(normalized.optionCloseExecutions, normalized.status),
@@ -206,7 +207,7 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
               : exitOrderPlan.stopLossAmountJPY ?? 0
             : exitOrderPlan.stopLossBuybackPriceUSD ?? 0,
     },
-  });
+  }));
 }
 
 function normalizeAccountInputs(value: unknown, fallback: AccountInputs): AccountInputs {

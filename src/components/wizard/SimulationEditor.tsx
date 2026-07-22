@@ -14,7 +14,7 @@ import {
   getNOptionStandardCommissionUSD,
   updateStandardEntryCommissionForContracts,
 } from "@/domain/optionEntryExecutions";
-import { getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardTicketNetPremiumUSD, isCompositeOptionStrategy, isSyntheticForwardEntrySaved, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "@/domain/compositeOptionPosition";
+import { getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardParentFinalization, getSyntheticForwardTicketNetPremiumUSD, isCompositeOptionStrategy, isSyntheticForwardEntrySaved, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "@/domain/compositeOptionPosition";
 import {
   calculateOptionCloseExecutionResults,
   createOptionCloseExecutionDraft,
@@ -271,6 +271,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
   const executionLegs = isComposite ? entryOptionLegs : shortExitLegs;
   const syntheticTicketPremiumUSD = getSyntheticForwardTicketNetPremiumUSD(simulation);
   const syntheticMarginCheck = getSyntheticForwardMarginCheck(simulation);
+  const syntheticParentFinalization = getSyntheticForwardParentFinalization(simulation);
   const optionEntrySummary = calculateOptionEntryExecutionSummary(simulation);
   const syntheticEntryFeeBreakdown = isSyntheticForward
     ? [callLeg, putLeg]
@@ -1032,7 +1033,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
             <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
               <div className="font-bold">複合チケットの注文時証拠金</div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <NumberInput label="注文時必要証拠金" value={simulation.syntheticForwardTicket?.requiredMarginUSD ?? Number.NaN} suffix="USD" min={0} onChange={(requiredMarginUSD) => updateSyntheticForwardTicket({ requiredMarginUSD })} />
+                <NumberInput label="注文時必要証拠金" value={simulation.syntheticForwardTicket?.requiredMarginUSD ?? Number.NaN} suffix="USD" min={0} onChange={(requiredMarginUSD) => updateSyntheticForwardTicket({ requiredMarginUSD, requiredMarginSource: "user_confirmed" })} />
                 <NumberInput label="証拠金余力" value={simulation.syntheticForwardTicket?.marginAvailableUSD ?? Number.NaN} suffix="USD" min={0} onChange={(marginAvailableUSD) => updateSyntheticForwardTicket({ marginAvailableUSD })} />
               </div>
               <TextInput label="証拠金取得時刻（任意）" value={simulation.syntheticForwardTicket?.marginAsOf ?? ""} type="datetime-local" onChange={(marginAsOf) => updateSyntheticForwardTicket({ marginAsOf })} />
@@ -1109,12 +1110,13 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                 <NumberInput label="各脚数量" value={callLeg.quantity} suffix="枚" min={1} onChange={(quantity) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, quantity })), optionEntryExecutions: optionEntryExecutions.map((execution) => updateStandardEntryCommissionForContracts(execution, quantity, standardNOptionCommissionUSD)) })} />
                 <NumberInput label={isSaxoFilledSyntheticForward ? "ネット注文価格（参照）" : "ネット指値（注文前）"} value={simulation.syntheticForwardTicket?.netOrderPriceUSD ?? Number.NaN} suffix="USD/株" onChange={(netOrderPriceUSD) => updateSyntheticForwardTicket({ netOrderPriceUSD })} />
                 <NumberInput label={isSaxoFilledSyntheticForward ? "想定総手数料（参照）" : "想定総手数料（注文前）"} value={simulation.syntheticForwardTicket?.estimatedTotalCommissionUSD ?? Number.NaN} suffix="USD" min={0} onChange={(estimatedTotalCommissionUSD) => updateSyntheticForwardTicket({ estimatedTotalCommissionUSD })} />
-                <NumberInput label={isSaxoFilledSyntheticForward ? "親注文ネット約定価格（実績）" : "ネット約定価格（実績）"} value={simulation.syntheticForwardTicket?.netFillPriceUSD ?? Number.NaN} suffix="USD/株" onChange={(netFillPriceUSD) => updateSyntheticForwardTicket({ netFillPriceUSD })} />
-                <NumberInput label="実績総手数料" value={simulation.syntheticForwardTicket?.actualTotalCommissionUSD ?? Number.NaN} suffix="USD" min={0} onChange={(actualTotalCommissionUSD) => updateSyntheticForwardTicket({ actualTotalCommissionUSD })} />
+                <NumberInput label={isSaxoFilledSyntheticForward ? "親注文ネット約定価格（実績）" : "ネット約定価格（実績）"} value={simulation.syntheticForwardTicket?.netFillPriceUSD ?? Number.NaN} suffix="USD/株" onChange={(netFillPriceUSD) => updateSyntheticForwardTicket({ netFillPriceUSD, netFillSource: "manual" })} />
+                <NumberInput label="実績総手数料" value={simulation.syntheticForwardTicket?.actualTotalCommissionUSD ?? Number.NaN} suffix="USD" min={0} onChange={(actualTotalCommissionUSD) => updateSyntheticForwardTicket({ actualTotalCommissionUSD, actualTotalCommissionSource: "manual" })} />
                 <TextInput label="複合チケットID（任意）" value={simulation.syntheticForwardTicket?.ticketId ?? ""} onChange={(ticketId) => updateSyntheticForwardTicket({ ticketId })} />
                 <TextInput label="注文ID（任意）" value={simulation.syntheticForwardTicket?.orderId ?? ""} onChange={(orderId) => updateSyntheticForwardTicket({ orderId })} />
               </div>
               <div className="mt-3 rounded bg-white px-3 py-2 font-semibold">{isSaxoFilledSyntheticForward ? "親注文ネット約定値" : "ネットプレミアム合計"}: {syntheticTicketPremiumUSD === undefined ? "未入力" : formatUSD(syntheticTicketPremiumUSD)} ({simulation.syntheticForwardTicket?.netFillPriceUSD !== undefined ? "実績" : "注文前想定"})</div>
+              {simulation.syntheticForwardTicket?.entryCostUSD !== undefined ? <div className="mt-2 rounded bg-white px-3 py-2 text-xs font-semibold text-slate-800">建玉時支払額（実績）: {formatUSD(simulation.syntheticForwardTicket.entryCostUSD)}</div> : null}
               {syntheticEntryFeeBreakdown.length > 0 ? <div className="mt-2 rounded bg-white px-3 py-2 text-xs font-semibold text-slate-800"><div>3-A 取引費用USD</div><div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{syntheticEntryFeeBreakdown.map(({ leg, execution }) => <span key={leg.id}>{leg.type === "call" ? "C買い" : "P売り"} {formatUSD(execution!.commissionUSD ?? 0)} ({formatEntryCommissionSource(execution!)})</span>)}<span>合計 {formatUSD(syntheticEntryFeeTotalUSD)}</span></div></div> : null}
               {isSaxoFilledSyntheticForward && simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? <p className="mt-2 text-xs font-semibold text-amber-800">実績総手数料は未取得です。建玉中の状態は維持し、3-Aで確認してください。</p> : null}
               <label className="mt-3 flex items-start gap-2 text-xs font-semibold"><input type="checkbox" checked={simulation.syntheticForwardTicket?.assignmentAccepted ?? false} onChange={(event) => updateSyntheticForwardTicket({ assignmentAccepted: event.target.checked })} />P売りの割当を受容し、同一口座のUSD現金残高を別途確認した</label>
@@ -1267,6 +1269,15 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
               <div><div className="font-semibold">二脚の約定は保存済みですが、シンセティック建玉が未作成です。</div><div className="mt-1 text-xs text-amber-800">ネット約定価格と証拠金の確認状態は保持したまま、親建玉だけを確定します。</div></div>
               <button type="button" className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100" onClick={() => updateStatus("open")}>シンセティック建玉を確定</button>
+            </div>
+          ) : null}
+          {isSyntheticForward && entryExecutionsConfirmed && simulation.status === "open" && !syntheticForwardEntrySaved ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
+              <div>
+                <div className="font-semibold">二脚建玉中・親シンセティックの確定情報を確認</div>
+                <div className="mt-1 text-xs text-amber-800">{syntheticParentFinalization?.missingFields.length ? `未確認: ${syntheticParentFinalization.missingFields.join("、")}` : "親チケットの確定情報を確認してください。"}</div>
+              </div>
+              <button type="button" className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100" onClick={() => scrollToEditorAnchor("synthetic-forward-ticket")}>親シンセティックの確定情報を確認</button>
             </div>
           ) : null}
           {!isSyntheticForward && entryExecutionsConfirmed && simulation.status === "planned" ? (

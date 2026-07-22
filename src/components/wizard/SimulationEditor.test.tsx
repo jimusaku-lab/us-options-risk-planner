@@ -172,9 +172,10 @@ describe("SimulationEditor", () => {
         { id: "synthetic-put", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", putIntent: "accept_assignment", assignmentPolicy: "unknown" },
       ],
       optionEntryExecutions: [
-        { id: "synthetic-entry-call", legId: "synthetic-call", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 26.25, settlementCurrency: "USD", commissionUSD: 2.25, source: "saxo_api_estimate", confirmed: true },
-        { id: "synthetic-entry-put", legId: "synthetic-put", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 21.05, settlementCurrency: "USD", commissionUSD: 2.25, source: "saxo_api_estimate", confirmed: true },
+        { id: "synthetic-entry-call", legId: "synthetic-call", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 26.25, settlementCurrency: "USD", commissionUSD: 2.25, source: "saxo_api_estimate", historyCandidateIds: ["call-trade"], confirmed: true },
+        { id: "synthetic-entry-put", legId: "synthetic-put", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 21.05, settlementCurrency: "USD", commissionUSD: 2.25, source: "saxo_api_estimate", historyCandidateIds: ["put-trade"], confirmed: true },
       ],
+      syntheticForwardTicket: { orderId: "5425367936", netFillPriceUSD: 5.2, actualTotalCommissionUSD: 4.5, entryCostUSD: 524.5, requiredMarginUSD: 4_000 },
     });
     render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} onOpenDashboard={onOpenDashboard} />);
     expect(screen.getByText("シンセティックフォワードを保存済み")).toBeInTheDocument();

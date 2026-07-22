@@ -3524,9 +3524,9 @@ export function SyntheticForwardPairRow({
       <td className="numeric-input py-2 pr-3 text-right">親注文で確認</td>
       <td className="numeric-input py-2 pr-3 text-right">二脚合算なし</td>
       <td className="py-2 pr-3">
-        <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">{saved ? "保存済み" : integrated && filled ? "約定確認待ち" : integrated ? "3-A反映済み" : filled ? "二脚約定済み" : "二脚統合候補"}</span>
+        <span className="rounded bg-teal-100 px-2 py-1 text-xs font-bold text-teal-900">{saved ? "保存済み" : integrated && filled ? "二脚建玉中・親情報要確認" : integrated ? "3-A反映済み" : filled ? "二脚約定済み" : "二脚統合候補"}</span>
         <p className="mt-1 max-w-[290px] text-xs leading-5 text-teal-900">
-          {saved ? "二脚と親シンセティック建玉は保存済みです。新規保存や下書き破棄は行いません。" : recoveryRequired ? "二脚の約定は保存済みですが、親シンセティック建玉が未作成です。親建玉だけを復旧します。" : integrated ? "親注文と二脚を統合済みです。重複作成せず、保存済みの3-Aを開きます。" : filled ? "親SyntheticUnderlying注文と二脚の約定履歴を確認しました。親注文のネット約定価格を正として3-Aへ反映します。" : "個別の「建玉入力へ下書き反映」と「今回は無視」は利用しません。親SyntheticUnderlying注文のネット約定価格を3-Aで確認します。"}
+          {saved ? "二脚と親シンセティック建玉は保存済みです。新規保存や下書き破棄は行いません。" : recoveryRequired ? "二脚の約定は保存済みですが、親シンセティック建玉が未作成です。親建玉だけを復旧します。" : integrated && filled ? "二脚は建玉中です。ネット約定、実績総手数料、注文時必要証拠金を親建玉で確認してください。" : integrated ? "親注文と二脚を統合済みです。重複作成せず、保存済みの3-Aを開きます。" : filled ? "親SyntheticUnderlying注文と二脚の約定履歴を確認しました。親注文のネット約定価格を正として3-Aへ反映します。" : "個別の「建玉入力へ下書き反映」と「今回は無視」は利用しません。親SyntheticUnderlying注文のネット約定価格を3-Aで確認します。"}
         </p>
       </td>
       <td className="py-2">
@@ -3537,7 +3537,7 @@ export function SyntheticForwardPairRow({
           disabled={drafted && !integrated && !recoveryRequired}
         >
           <FilePlus2 size={13} />
-          {saved ? "建玉ダッシュボードで確認" : recoveryRequired ? "シンセティック建玉を復旧して確認" : integrated && filled ? "約定済みシンセティックの3-Aを開く" : integrated ? "確認済みの3-Aを開く" : filled ? "約定済み二脚を統合して3-Aで確認" : drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
+          {saved ? "建玉ダッシュボードで確認" : recoveryRequired ? "シンセティック建玉を復旧して確認" : integrated && filled ? "親シンセティックの確定情報を確認" : integrated ? "確認済みの3-Aを開く" : filled ? "約定済み二脚を統合して3-Aで確認" : drafted ? "統合下書き反映済み" : "2脚をシンセティックとして下書き反映"}
         </button>
       </td>
     </tr>

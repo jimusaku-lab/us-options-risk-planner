@@ -4,7 +4,7 @@ import { Fragment } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
-import { getCompositeAssignmentFunding, getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardTicketNetPremiumUSD, isCompositeOptionStrategy } from "@/domain/compositeOptionPosition";
+import { getCompositeAssignmentFunding, getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, isCompositeOptionStrategy } from "@/domain/compositeOptionPosition";
 import { resolveEffectiveCoveredCallSimulation } from "@/domain/coveredCallCoverage";
 import { getJournalStatusLabel, getJournalStatusTone } from "@/domain/entryRationaleJournal";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
@@ -178,7 +178,6 @@ export function Dashboard({
               const isHistoryRow = endedStatuses.has(simulation.status);
               const compositeLifecycle = getCompositeOptionLifecycle(simulation);
               const compositeFunding = getCompositeAssignmentFunding(simulation, accountInputs[simulation.accountCode]);
-              const syntheticTicketPremium = getSyntheticForwardTicketNetPremiumUSD(simulation);
               const syntheticMarginCheck = getSyntheticForwardMarginCheck(simulation);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
@@ -311,7 +310,13 @@ export function Dashboard({
                   <td className="py-3 pr-3 text-slate-700">
                     <div>{getStrategyLabel(simulation.strategyType)}</div>
                     {isCompositeOptionStrategy(simulation) ? <div className="mt-1 text-xs font-semibold text-indigo-700">C買い {callLeg?.quantity ?? 0} / P売り {putLeg?.quantity ?? 0}</div> : null}
-                    {simulation.strategyType === "synthetic_forward" ? <div className="mt-1 text-xs text-indigo-700">ネット {syntheticTicketPremium === undefined ? "未入力" : formatUSD(syntheticTicketPremium)} / 証拠金 {syntheticMarginCheck?.status === "sufficient" ? "充足" : syntheticMarginCheck?.status === "insufficient" ? "不足" : "未確認"}</div> : null}
+                    {simulation.strategyType === "synthetic_forward" ? (
+                      <div className="mt-1 text-xs text-indigo-700">
+                        <div>ネット約定 {simulation.syntheticForwardTicket?.netFillPriceUSD === undefined ? "未入力" : `${formatUSD(simulation.syntheticForwardTicket.netFillPriceUSD)} / 株`}</div>
+                        <div>実績総手数料 {simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.actualTotalCommissionUSD)} / 建玉時支払額 {simulation.syntheticForwardTicket?.entryCostUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.entryCostUSD)}</div>
+                        <div>注文時証拠金 {syntheticMarginCheck?.status === "sufficient" ? "充足" : syntheticMarginCheck?.status === "insufficient" ? "不足" : "要確認"}</div>
+                      </div>
+                    ) : null}
                     {compositeFunding ? <div className={`mt-1 text-xs ${compositeFunding.status === "sufficient" ? "text-emerald-700" : "text-amber-700"}`}>P割当資金 {formatUSD(compositeFunding.requiredUSD)}: {compositeFunding.status === "sufficient" ? "充足" : compositeFunding.status === "insufficient" ? "不足" : "未確認"}</div> : null}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">{strikeLabel}</td>
