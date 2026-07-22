@@ -21,6 +21,7 @@ import {
   sanitizeSaxoHistoryCloseExecutions,
 } from "@/domain/optionCloseExecutions";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
+import { DEFAULT_N_OPTION_STANDARD_COMMISSION_USD } from "@/domain/optionEntryExecutions";
 
 export type WorkspaceMode = "demo" | "live";
 
@@ -57,6 +58,7 @@ export type AppSettings = {
   beginnerMode: boolean;
   defaultMarginBufferMultiplier: number;
   defaultNisaExpectedAnnualReturnPct: number;
+  defaultNOptionCommissionUSD?: number;
 };
 
 export type AccountInputs = Record<SaxoAccountCode, AccountState>;
@@ -99,7 +101,7 @@ type OptionsStore = {
   updateSettings: (settings: Partial<AppSettings>) => void;
 };
 
-export const DEFAULT_BROKER_COMMISSION_USD = 2.25;
+export const DEFAULT_BROKER_COMMISSION_USD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD;
 export const DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT = 9;
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -840,6 +842,7 @@ const storedSettings = loadJson<AppSettings>(SETTINGS_KEY, {
   beginnerMode: true,
   defaultMarginBufferMultiplier: 2,
   defaultNisaExpectedAnnualReturnPct: DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT,
+  defaultNOptionCommissionUSD: DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
 });
 
 const initialSettings: AppSettings = {
@@ -848,6 +851,12 @@ const initialSettings: AppSettings = {
     storedSettings.defaultNisaExpectedAnnualReturnPct === 6
       ? DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT
       : storedSettings.defaultNisaExpectedAnnualReturnPct,
+  defaultNOptionCommissionUSD:
+    typeof storedSettings.defaultNOptionCommissionUSD === "number" &&
+    Number.isFinite(storedSettings.defaultNOptionCommissionUSD) &&
+    storedSettings.defaultNOptionCommissionUSD >= 0
+      ? storedSettings.defaultNOptionCommissionUSD
+      : DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
 };
 
 function createBlankSimulation(workspace: WorkspaceMode, settings: AppSettings): TradeSimulation {

@@ -399,6 +399,8 @@ export type OptionEntryExecution = {
   brokerExchangeRateJPY?: number;
   brokerTaxIncludedFeeJPY?: number;
   commissionUSD?: number;
+  /** Origin of the N-account USD option entry fee. */
+  commissionSource?: "standard_default" | "saxo_actual" | "manual";
   commissionJPY?: number;
   referenceFxRateJPY?: number;
   inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";

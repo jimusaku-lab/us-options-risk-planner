@@ -129,6 +129,39 @@ describe("SimulationEditor", () => {
     expect(screen.getByDisplayValue("-4288")).toBeInTheDocument();
     expect(screen.getByDisplayValue("164.23105")).toBeInTheDocument();
   });
+
+  it("backfills a missing N-account fee as a standard value without a missing-fee warning", async () => {
+    const initialSimulation = buildVisaLongCallSimulation({
+      accountCode: "N",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      accountCurrency: "USD",
+      optionEntryExecutions: [
+        {
+          id: "n-entry",
+          legId: "saxo-visa-c340-leg",
+          tradeDate: "2026-06-30",
+          contracts: 1,
+          fillPriceUSD: 24.1,
+          settlementCurrency: "USD",
+          inputMode: "USD_EXECUTION_CALC",
+          source: "saxo_api_estimate",
+          saxoSourceType: "current_position",
+          historyCompletionStatus: "unmatched",
+          confirmed: false,
+        },
+      ],
+    });
+    function Harness() {
+      const [current, setCurrent] = useState(initialSimulation);
+      return <SimulationEditor simulation={current} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={setCurrent} />;
+    }
+
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.getByText(/費用出所: 標準取引費用/)).toBeInTheDocument());
+    expect(screen.getAllByDisplayValue("2.25").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/不足項目: .*取引費用USD/)).not.toBeInTheDocument();
+  });
 });
 
 const visaEntryHistory: SaxoHistoryDiscoveryItem = {

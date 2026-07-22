@@ -11,7 +11,12 @@ import {
   deriveSaxoHistoryRealizedPnlAutofill,
   sanitizeSaxoHistoryCloseExecutions,
 } from "@/domain/optionCloseExecutions";
-import { createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
+import {
+  DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
+  applySaxoActualEntryCommission,
+  createOptionEntryExecutionDraft,
+  getNOptionStandardCommissionUSD,
+} from "@/domain/optionEntryExecutions";
 import { getWorkflowTargetAnchorId } from "@/domain/workflowTasks";
 import { calculatePayoffSeries } from "@/domain/payoff";
 import { generateChecklist, generateRiskWarnings } from "@/domain/riskRules";
@@ -150,6 +155,7 @@ export default function App() {
     linkCoveredCallToWheelCycle,
     settings,
   } = useOptionsStore();
+  const standardNOptionCommissionUSD = settings.defaultNOptionCommissionUSD ?? DEFAULT_N_OPTION_STANDARD_COMMISSION_USD;
   const {
     candidates,
     importWarnings,
@@ -465,7 +471,8 @@ export default function App() {
           brokerExchangeFeeJPY: !isNAccount ? bestHistory?.exchangeFee : undefined,
           brokerExchangeRateJPY: !isNAccount ? bestHistory?.exchangeRate : undefined,
           brokerTaxIncludedFeeJPY: !isNAccount ? bestHistory?.taxIncludedFee : undefined,
-          commissionUSD: isNAccount ? Math.abs(bestHistory?.transactionCost ?? DEFAULT_BROKER_COMMISSION_USD) : undefined,
+          commissionUSD: isNAccount ? (bestHistory?.transactionCost !== undefined ? Math.abs(bestHistory.transactionCost) : getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD)) : undefined,
+          commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
           referenceFxRateJPY: bestHistory?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
           inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
           source: "saxo_api_estimate",
@@ -534,19 +541,21 @@ export default function App() {
     const parentOrderId = parentHistory?.orderId ?? parentHistory?.id;
     const parentNetFill = parentHistory?.price;
     const parentCommission = parentHistory?.transactionCost === undefined ? undefined : Math.abs(parentHistory.transactionCost);
-    const createEntryExecution = (legId: string, history: NonNullable<typeof fillEvidence.callHistory>, fallbackQuantity: number) => ({
+    const createEntryExecution = (legId: string, history: NonNullable<typeof fillEvidence.callHistory>, fallbackQuantity: number): OptionEntryExecution => ({
       id: `saxo-synthetic-entry-${legId}-${history.id}`, legId, tradeDate: history.tradeDate ?? entryDate,
       contracts: history.quantity === undefined ? fallbackQuantity : Math.max(1, Math.abs(history.quantity)), fillPriceUSD: history.price ?? 0,
       settlementCurrency: pair.accountCode === "N" ? "USD" as const : "JPY" as const,
       brokerBookedAmountJPY: pair.accountCode === "P" ? history.bookedAmount ?? history.profitLossBase : undefined, brokerPremiumJPY: pair.accountCode === "P" ? history.premiumAmount : undefined,
       brokerTransactionCostJPY: pair.accountCode === "P" ? history.transactionCost : undefined, brokerFeeJPY: pair.accountCode === "P" ? history.feeAmount : undefined,
       brokerExchangeFeeJPY: pair.accountCode === "P" ? history.exchangeFee : undefined, brokerExchangeRateJPY: pair.accountCode === "P" ? history.exchangeRate : undefined,
-      brokerTaxIncludedFeeJPY: pair.accountCode === "P" ? history.taxIncludedFee : undefined, commissionUSD: pair.accountCode === "N" && history.transactionCost !== undefined ? Math.abs(history.transactionCost) : undefined,
+      brokerTaxIncludedFeeJPY: pair.accountCode === "P" ? history.taxIncludedFee : undefined,
+      commissionUSD: pair.accountCode === "N" ? (history.transactionCost !== undefined ? Math.abs(history.transactionCost) : getNOptionStandardCommissionUSD(history.quantity === undefined ? fallbackQuantity : Math.max(1, Math.abs(history.quantity)), standardNOptionCommissionUSD)) : undefined,
+      commissionSource: pair.accountCode === "N" ? (history.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
       referenceFxRateJPY: history.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY, inputMode: pair.accountCode === "N" ? "USD_EXECUTION_CALC" as const : "P_JPY_BROKER_STATEMENT" as const,
       source: "saxo_api_estimate" as const, saxoSourceType: "history" as const, historyCompletionStatus: "matched" as const, historyCandidateIds: [history.id], confirmed: false,
       memo: "入力元: Saxo SyntheticUnderlying親注文 + Saxo取引履歴。親注文のネット約定価格を一次根拠として、3-Aで二脚の約定実績を確認してください。",
     });
-    const createPositionEntry = (legId: string, position: SaxoApiPositionSnapshot, contracts: number) => ({ id: `saxo-synthetic-entry-${legId}-${position.id}`, legId, tradeDate: entryDate, contracts, fillPriceUSD: position.premiumOpenPrice ?? position.currentOptionPrice ?? 0, settlementCurrency: pair.accountCode === "N" ? "USD" as const : "JPY" as const, referenceFxRateJPY: selected?.referenceFxRateJPY ?? selected?.fxRateJPY, inputMode: pair.accountCode === "N" ? "USD_EXECUTION_CALC" as const : "P_JPY_BROKER_STATEMENT" as const, source: "saxo_api_estimate" as const, saxoSourceType: "current_position" as const, historyCompletionStatus: "unmatched" as const, historyCandidateIds: [], confirmed: false, memo: "入力元: Saxo現在建玉の二脚。取引履歴の約定値は3-Aで確認してください。" });
+    const createPositionEntry = (legId: string, position: SaxoApiPositionSnapshot, contracts: number): OptionEntryExecution => ({ id: `saxo-synthetic-entry-${legId}-${position.id}`, legId, tradeDate: entryDate, contracts, fillPriceUSD: position.premiumOpenPrice ?? position.currentOptionPrice ?? 0, settlementCurrency: pair.accountCode === "N" ? "USD" as const : "JPY" as const, commissionUSD: pair.accountCode === "N" ? getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD) : undefined, commissionSource: pair.accountCode === "N" ? "standard_default" : undefined, referenceFxRateJPY: selected?.referenceFxRateJPY ?? selected?.fxRateJPY, inputMode: pair.accountCode === "N" ? "USD_EXECUTION_CALC" as const : "P_JPY_BROKER_STATEMENT" as const, source: "saxo_api_estimate" as const, saxoSourceType: "current_position" as const, historyCompletionStatus: "unmatched" as const, historyCandidateIds: [], confirmed: false, memo: "入力元: Saxo現在建玉の二脚。取引履歴の約定値は3-Aで確認してください。" });
     const existing = findSaxoSyntheticForwardSimulationForPair(pair, useOptionsStore.getState().simulations, parentOrderId);
     if (existing) {
       if (shouldRecoverSaxoSyntheticForwardEntryConfirmation(existing, isEntryConfirmation)) {
@@ -663,7 +672,8 @@ export default function App() {
       brokerExchangeFeeJPY: !isNAccount ? bestHistory?.exchangeFee : undefined,
       brokerExchangeRateJPY: !isNAccount ? bestHistory?.exchangeRate : undefined,
       brokerTaxIncludedFeeJPY: !isNAccount ? bestHistory?.taxIncludedFee : undefined,
-      commissionUSD: isNAccount ? Math.abs(bestHistory?.transactionCost ?? target.brokerCommissionUSD ?? DEFAULT_BROKER_COMMISSION_USD) : undefined,
+      commissionUSD: isNAccount ? (bestHistory?.transactionCost !== undefined ? Math.abs(bestHistory.transactionCost) : getNOptionStandardCommissionUSD(actualQuantity, standardNOptionCommissionUSD)) : undefined,
+      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
       referenceFxRateJPY: bestHistory?.exchangeRate ?? target.referenceFxRateJPY ?? target.fxRateJPY ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
       inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
       source: "saxo_api_estimate",
@@ -867,7 +877,7 @@ export default function App() {
     const targetSimulation = simulations.find((simulation) => simulation.id === id);
     if (targetSimulation && anchorId === "option-entry-executions" && (targetSimulation.optionEntryExecutions ?? []).length === 0) {
       const entryDrafts = targetSimulation.optionLegs
-        .map((leg) => createOptionEntryExecutionDraft({ simulation: targetSimulation, leg }));
+        .map((leg) => createOptionEntryExecutionDraft({ simulation: targetSimulation, leg, standardCommissionUSD: standardNOptionCommissionUSD }));
       if (entryDrafts.length > 0) {
         upsertSimulation({
           ...targetSimulation,
@@ -1124,13 +1134,14 @@ export default function App() {
     );
     if (!existingEntry) {
       const isN = target.accountEnvironment === "PROD_N_USD_SETTLEMENT";
-      const draft = createOptionEntryExecutionDraft({ simulation: target, leg: shortLeg });
+      const draft = createOptionEntryExecutionDraft({ simulation: target, leg: shortLeg, standardCommissionUSD: standardNOptionCommissionUSD });
+      const entryWithSaxoCommission = isN ? applySaxoActualEntryCommission(draft, item.transactionCost) : draft;
       upsertSimulation({
         ...target,
         optionEntryExecutions: [
           ...(target.optionEntryExecutions ?? []),
           {
-            ...draft,
+            ...entryWithSaxoCommission,
             tradeDate: item.tradeDate ?? draft.tradeDate,
             contracts: item.quantity !== undefined ? Math.max(1, Math.abs(item.quantity)) : draft.contracts,
             fillPriceUSD: item.price ?? draft.fillPriceUSD,
@@ -1141,7 +1152,8 @@ export default function App() {
             brokerExchangeFeeJPY: !isN ? item.exchangeFee : undefined,
             brokerExchangeRateJPY: !isN ? item.exchangeRate : undefined,
             brokerTaxIncludedFeeJPY: !isN ? item.taxIncludedFee : undefined,
-            commissionUSD: isN ? Math.abs(item.transactionCost ?? draft.commissionUSD ?? DEFAULT_BROKER_COMMISSION_USD) : draft.commissionUSD,
+            commissionUSD: entryWithSaxoCommission.commissionUSD,
+            commissionSource: entryWithSaxoCommission.commissionSource,
             referenceFxRateJPY: item.exchangeRate ?? draft.referenceFxRateJPY,
             source: "saxo_api_estimate",
             saxoSourceType: "history",
@@ -1782,6 +1794,7 @@ export default function App() {
               <SimulationEditor
                 simulation={selected}
                 workspace={activeWorkspace}
+                standardNOptionCommissionUSD={standardNOptionCommissionUSD}
                 canUseExternalQuotes={canUseExternalQuotes}
                 externalQuoteModeLabel={externalQuoteModeLabel}
                 onChange={upsertSimulation}

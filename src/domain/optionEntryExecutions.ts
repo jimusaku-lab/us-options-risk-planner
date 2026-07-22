@@ -2,6 +2,68 @@ import type { Currency, OptionEntryExecution, OptionLeg, TradeSimulation } from 
 import { formatLocalDate } from "@/lib/date";
 
 const CONTRACT_SIZE = 100;
+export const DEFAULT_N_OPTION_STANDARD_COMMISSION_USD = 2.25;
+
+export function getNOptionStandardCommissionUSD(
+  contracts: number,
+  standardCommissionUSD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
+): number {
+  return Math.round(Math.abs(contracts) * standardCommissionUSD * 100) / 100;
+}
+
+export function applySaxoActualEntryCommission(
+  execution: OptionEntryExecution,
+  transactionCostUSD: number | undefined,
+): OptionEntryExecution {
+  if (
+    transactionCostUSD === undefined ||
+    !Number.isFinite(transactionCostUSD) ||
+    execution.commissionSource === "manual" ||
+    execution.commissionSource === "saxo_actual"
+  ) {
+    return execution;
+  }
+  if (execution.commissionSource !== "standard_default" && execution.commissionUSD !== undefined) return execution;
+  return {
+    ...execution,
+    commissionUSD: Math.abs(transactionCostUSD),
+    commissionSource: "saxo_actual",
+  };
+}
+
+export function updateStandardEntryCommissionForContracts(
+  execution: OptionEntryExecution,
+  contracts: number,
+  standardCommissionUSD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
+): OptionEntryExecution {
+  return {
+    ...execution,
+    contracts,
+    ...(execution.commissionSource === "standard_default"
+      ? { commissionUSD: getNOptionStandardCommissionUSD(contracts, standardCommissionUSD) }
+      : {}),
+  };
+}
+
+export function ensureNOptionEntryStandardCommission(
+  simulation: TradeSimulation,
+  execution: OptionEntryExecution,
+  standardCommissionUSD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
+): OptionEntryExecution {
+  if (
+    simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" ||
+    execution.commissionUSD !== undefined ||
+    execution.commissionSource === "manual" ||
+    execution.commissionSource === "saxo_actual"
+  ) {
+    return execution;
+  }
+  return {
+    ...execution,
+    commissionUSD: getNOptionStandardCommissionUSD(execution.contracts, standardCommissionUSD),
+    commissionSource: "standard_default",
+  };
+}
 
 export type OptionEntryExecutionSummary = {
   executions: OptionEntryExecution[];
@@ -18,6 +80,7 @@ export function createOptionEntryExecutionDraft(params: {
   simulation: TradeSimulation;
   leg: OptionLeg;
   tradeDate?: string;
+  standardCommissionUSD?: number;
 }): OptionEntryExecution {
   const isN = params.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
   const fxRate = isN ? params.simulation.referenceFxRateJPY ?? params.simulation.fxRateJPY : params.simulation.fxRateJPY;
@@ -29,7 +92,8 @@ export function createOptionEntryExecutionDraft(params: {
     fillPriceUSD: params.leg.premiumUSD,
     settlementCurrency: isN ? "USD" : "JPY",
     brokerExchangeRateJPY: isN ? undefined : fxRate,
-    commissionUSD: isN ? 2.25 : undefined,
+    commissionUSD: isN ? getNOptionStandardCommissionUSD(params.leg.quantity, params.standardCommissionUSD) : undefined,
+    commissionSource: isN ? "standard_default" : undefined,
     commissionJPY: undefined,
     referenceFxRateJPY: fxRate,
     inputMode: isN ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",

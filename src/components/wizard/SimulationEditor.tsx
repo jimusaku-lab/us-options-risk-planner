@@ -5,7 +5,15 @@ import type { DenominatorMode, ExitBrokerOrderType, ExitOrderPlan, ExitOrderPlan
 import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, type WorkspaceMode } from "@/store/useOptionsStore";
 import { calculateDte, getShortOptionLegs } from "@/domain/calculations";
 import { calculateProfitTakeBuybackPriceUSD, getDefaultExitOrderPlanForLeg, getExitOrderPlanForLeg, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
-import { calculateOptionEntryExecutionSummary, createOptionEntryExecutionDraft } from "@/domain/optionEntryExecutions";
+import {
+  DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
+  applySaxoActualEntryCommission,
+  calculateOptionEntryExecutionSummary,
+  createOptionEntryExecutionDraft,
+  ensureNOptionEntryStandardCommission,
+  getNOptionStandardCommissionUSD,
+  updateStandardEntryCommissionForContracts,
+} from "@/domain/optionEntryExecutions";
 import { getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardTicketNetPremiumUSD, isCompositeOptionStrategy, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "@/domain/compositeOptionPosition";
 import {
   calculateOptionCloseExecutionResults,
@@ -29,6 +37,7 @@ import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketD
 type SimulationEditorProps = {
   simulation: TradeSimulation;
   workspace: WorkspaceMode;
+  standardNOptionCommissionUSD?: number;
   canUseExternalQuotes: boolean;
   externalQuoteModeLabel: string;
   onChange: (simulation: TradeSimulation) => void;
@@ -44,7 +53,7 @@ type SimulationEditorProps = {
   focusRequest?: { anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string } | null;
 };
 
-export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onStockAcquisitionCompleteClose, onOpenPerformance, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
+export function SimulationEditor({ simulation, workspace, standardNOptionCommissionUSD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onStockAcquisitionCompleteClose, onOpenPerformance, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
   const [quoteStatus, setQuoteStatus] = useState<string>("");
   const [workflowNotice, setWorkflowNotice] = useState<{ message: string; actionLabel: string; anchorId: string } | null>(null);
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
@@ -262,6 +271,13 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
   const syntheticTicketPremiumUSD = getSyntheticForwardTicketNetPremiumUSD(simulation);
   const syntheticMarginCheck = getSyntheticForwardMarginCheck(simulation);
   const optionEntrySummary = calculateOptionEntryExecutionSummary(simulation);
+  const syntheticEntryFeeBreakdown = isSyntheticForward
+    ? [callLeg, putLeg]
+        .filter((leg): leg is OptionLeg => Boolean(leg))
+        .map((leg) => ({ leg, execution: optionEntryExecutions.find((execution) => execution.legId === leg.id) }))
+        .filter((item) => item.execution?.commissionUSD !== undefined)
+    : [];
+  const syntheticEntryFeeTotalUSD = syntheticEntryFeeBreakdown.reduce((sum, item) => sum + Math.abs(item.execution?.commissionUSD ?? 0), 0);
   const showOptionEntryExecutions = ["planned", "entry_confirmation", "open"].includes(simulation.status) || optionEntryExecutions.length > 0;
   const optionCloseExecutions = simulation.optionCloseExecutions ?? [];
   const optionCloseResults = calculateOptionCloseExecutionResults(simulation);
@@ -371,7 +387,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
       const existingLegIds = new Set(optionEntryExecutions.map((execution) => execution.legId));
       const drafts = entryOptionLegs
         .filter((leg) => !existingLegIds.has(leg.id))
-        .map((leg) => createOptionEntryExecutionDraft({ simulation, leg }));
+        .map((leg) => createOptionEntryExecutionDraft({ simulation, leg, standardCommissionUSD: standardNOptionCommissionUSD }));
       if (drafts.length > 0 || optionEntryExecutions.length > 0) scrollToEditorAnchor("option-entry-executions");
       return drafts.length > 0 ? { optionEntryExecutions: [...optionEntryExecutions, ...drafts] } : {};
     }
@@ -517,7 +533,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     const execution = optionEntryExecutions.find((entry) => entry.id === executionId);
     if (!execution) return;
     const isNEntry = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
-    const nextExecution: OptionEntryExecution = {
+    const nextExecution = applySaxoActualEntryCommission({
       ...execution,
       tradeDate: item.tradeDate ?? execution.tradeDate,
       contracts: item.quantity !== undefined ? Math.max(1, Math.abs(item.quantity)) : execution.contracts,
@@ -529,12 +545,11 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
       brokerExchangeFeeJPY: !isNEntry ? item.exchangeFee ?? execution.brokerExchangeFeeJPY : execution.brokerExchangeFeeJPY,
       brokerExchangeRateJPY: !isNEntry ? item.exchangeRate ?? execution.brokerExchangeRateJPY : execution.brokerExchangeRateJPY,
       brokerTaxIncludedFeeJPY: !isNEntry ? item.taxIncludedFee ?? execution.brokerTaxIncludedFeeJPY : execution.brokerTaxIncludedFeeJPY,
-      commissionUSD: isNEntry ? Math.abs(item.transactionCost ?? execution.commissionUSD ?? 0) : execution.commissionUSD,
       referenceFxRateJPY: item.exchangeRate ?? execution.referenceFxRateJPY,
       source: "saxo_api_estimate",
       saxoSourceType: "current_position",
       historyCandidateIds: Array.from(new Set([...(execution.historyCandidateIds ?? []), item.id])),
-    };
+    }, isNEntry ? item.transactionCost : undefined);
     const missingItems = getEntryExecutionMissingItems(nextExecution, isNEntry);
     updateOptionEntryExecution(executionId, {
       ...nextExecution,
@@ -572,7 +587,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     update({
       optionEntryExecutions: [
         ...optionEntryExecutions,
-        createOptionEntryExecutionDraft({ simulation, leg }),
+        createOptionEntryExecutionDraft({ simulation, leg, standardCommissionUSD: standardNOptionCommissionUSD }),
       ],
     });
   };
@@ -620,6 +635,18 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
     simulation.id,
     simulation.optionLegs.length,
     recoveredEntryOptionLegs.map((leg) => `${leg.id}:${leg.type}:${leg.side}:${leg.strikeUSD}:${leg.expiryDate}:${leg.quantity}:${leg.premiumUSD}`).join("|"),
+  ]);
+  useEffect(() => {
+    if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" || optionEntryExecutions.length === 0) return;
+    const nextExecutions = optionEntryExecutions.map((execution) => ensureNOptionEntryStandardCommission(simulation, execution, standardNOptionCommissionUSD));
+    if (nextExecutions.some((execution, index) => execution !== optionEntryExecutions[index])) {
+      update({ optionEntryExecutions: nextExecutions });
+    }
+  }, [
+    simulation.id,
+    simulation.accountEnvironment,
+    standardNOptionCommissionUSD,
+    optionEntryExecutions.map((execution) => `${execution.id}:${execution.contracts}:${execution.commissionUSD}:${execution.commissionSource ?? ""}`).join("|"),
   ]);
   useEffect(() => {
     if (entryOptionLegs.length === 0 || optionEntryExecutions.length === 0) return;
@@ -1046,7 +1073,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
             <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm leading-6 text-indigo-950">
               <div className="font-bold">親建玉: C買い {callLeg.quantity}枚 / P売り {putLeg.quantity}枚</div>
               <p className="mt-1">Saxo照合・途中決済・成績は脚別に管理します。P売りの割当資金はネットプレミアムと相殺しません。</p>
-              <NumberInput label="二脚の枚数" value={callLeg.quantity} suffix="枚" min={1} onChange={(quantity) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, quantity })) })} />
+              <NumberInput label="二脚の枚数" value={callLeg.quantity} suffix="枚" min={1} onChange={(quantity) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, quantity })), optionEntryExecutions: optionEntryExecutions.map((execution) => updateStandardEntryCommissionForContracts(execution, quantity, standardNOptionCommissionUSD)) })} />
               {!compositeValidation.valid ? <p className="mt-2 font-semibold text-red-700">{compositeValidation.reasons.join(" ")}</p> : null}
               {compositeLifecycle ? <p className="mt-2 text-xs font-semibold">状態: {compositeLifecycle.label}</p> : null}
             </div>
@@ -1077,7 +1104,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
               {isSaxoFilledSyntheticForward ? <p className="mt-1 text-xs font-semibold">Saxo約定済み二脚を統合済みです。親注文のネット約定価格を正として、3-Aで二脚の約定確認を保存してください。</p> : null}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <NumberInput label="共通行使価格" value={callLeg.strikeUSD} suffix="USD" min={0} onChange={(strikeUSD) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, strikeUSD })) })} />
-                <NumberInput label="各脚数量" value={callLeg.quantity} suffix="枚" min={1} onChange={(quantity) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, quantity })) })} />
+                <NumberInput label="各脚数量" value={callLeg.quantity} suffix="枚" min={1} onChange={(quantity) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, quantity })), optionEntryExecutions: optionEntryExecutions.map((execution) => updateStandardEntryCommissionForContracts(execution, quantity, standardNOptionCommissionUSD)) })} />
                 <NumberInput label={isSaxoFilledSyntheticForward ? "ネット注文価格（参照）" : "ネット指値（注文前）"} value={simulation.syntheticForwardTicket?.netOrderPriceUSD ?? Number.NaN} suffix="USD/株" onChange={(netOrderPriceUSD) => updateSyntheticForwardTicket({ netOrderPriceUSD })} />
                 <NumberInput label={isSaxoFilledSyntheticForward ? "想定総手数料（参照）" : "想定総手数料（注文前）"} value={simulation.syntheticForwardTicket?.estimatedTotalCommissionUSD ?? Number.NaN} suffix="USD" min={0} onChange={(estimatedTotalCommissionUSD) => updateSyntheticForwardTicket({ estimatedTotalCommissionUSD })} />
                 <NumberInput label={isSaxoFilledSyntheticForward ? "親注文ネット約定価格（実績）" : "ネット約定価格（実績）"} value={simulation.syntheticForwardTicket?.netFillPriceUSD ?? Number.NaN} suffix="USD/株" onChange={(netFillPriceUSD) => updateSyntheticForwardTicket({ netFillPriceUSD })} />
@@ -1086,6 +1113,7 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                 <TextInput label="注文ID（任意）" value={simulation.syntheticForwardTicket?.orderId ?? ""} onChange={(orderId) => updateSyntheticForwardTicket({ orderId })} />
               </div>
               <div className="mt-3 rounded bg-white px-3 py-2 font-semibold">{isSaxoFilledSyntheticForward ? "親注文ネット約定値" : "ネットプレミアム合計"}: {syntheticTicketPremiumUSD === undefined ? "未入力" : formatUSD(syntheticTicketPremiumUSD)} ({simulation.syntheticForwardTicket?.netFillPriceUSD !== undefined ? "実績" : "注文前想定"})</div>
+              {syntheticEntryFeeBreakdown.length > 0 ? <div className="mt-2 rounded bg-white px-3 py-2 text-xs font-semibold text-slate-800"><div>3-A 取引費用USD</div><div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{syntheticEntryFeeBreakdown.map(({ leg, execution }) => <span key={leg.id}>{leg.type === "call" ? "C買い" : "P売り"} {formatUSD(execution!.commissionUSD ?? 0)} ({formatEntryCommissionSource(execution!)})</span>)}<span>合計 {formatUSD(syntheticEntryFeeTotalUSD)}</span></div></div> : null}
               {isSaxoFilledSyntheticForward && simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? <p className="mt-2 text-xs font-semibold text-amber-800">実績総手数料は未取得です。建玉中の状態は維持し、3-Aで確認してください。</p> : null}
               <label className="mt-3 flex items-start gap-2 text-xs font-semibold"><input type="checkbox" checked={simulation.syntheticForwardTicket?.assignmentAccepted ?? false} onChange={(event) => updateSyntheticForwardTicket({ assignmentAccepted: event.target.checked })} />P売りの割当を受容し、同一口座のUSD現金残高を別途確認した</label>
               <p className="mt-2 text-xs">証拠金余力・買付可能額はUSD現金残高ではありません。割当資金の充足判定には使いません。</p>
@@ -1435,9 +1463,10 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                       value={selectedLegId}
                       onChange={(legId) => {
                         const leg = entryOptionLegs.find((item) => item.id === legId);
+                        const nextExecution = updateStandardEntryCommissionForContracts(execution, leg?.quantity ?? execution.contracts, standardNOptionCommissionUSD);
                         updateOptionEntryExecution(execution.id, {
+                          ...nextExecution,
                           legId,
-                          contracts: leg?.quantity ?? execution.contracts,
                           fillPriceUSD: leg?.premiumUSD ?? execution.fillPriceUSD,
                         });
                       }}
@@ -1461,17 +1490,18 @@ export function SimulationEditor({ simulation, workspace, canUseExternalQuotes, 
                       value={execution.contracts}
                       suffix="枚"
                       min={0}
-                      onChange={(contracts) => updateOptionEntryExecution(execution.id, { contracts })}
+                      onChange={(contracts) => updateOptionEntryExecution(execution.id, updateStandardEntryCommissionForContracts(execution, contracts, standardNOptionCommissionUSD))}
                     />
                     {isN ? (
                       <>
                         <NumberInput
-                          label="USD手数料"
+                          label="取引費用 USD"
                           value={execution.commissionUSD ?? 0}
                           suffix="USD"
                           min={0}
-                          onChange={(commissionUSD) => updateOptionEntryExecution(execution.id, { commissionUSD })}
+                          onChange={(commissionUSD) => updateOptionEntryExecution(execution.id, { commissionUSD, commissionSource: "manual" })}
                         />
+                        <div className="-mt-2 text-xs font-semibold text-slate-600">費用出所: {formatEntryCommissionSource(execution)}{execution.commissionSource === "standard_default" ? "。Saxo実費の取得後に更新されます。" : ""}</div>
                         <NumberInput
                           label="USDプレミアム"
                           value={usdPremium}
@@ -2635,7 +2665,6 @@ function getSaxoDraftMissingItems(simulation: TradeSimulation): string[] {
   if (!firstLeg?.strikeUSD) items.push("権利行使価格");
   if (!firstLeg?.expiryDate && !simulation.expiryDate) items.push("満期");
   if (!firstLeg?.premiumUSD) items.push("建て価格");
-  if (!simulation.brokerCommissionUSD && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") items.push("手数料");
   if (!simulation.denominatorMode) items.push("主分母");
   if (simulation.nisaExpectedAnnualReturnPct === undefined) items.push("NISA等比較年率");
   return items;
@@ -2792,6 +2821,13 @@ function formatEntryExecutionSource(execution: OptionEntryExecution): string {
   if (execution.source === "broker_statement") return "取引報告書";
   if (execution.source === "saxo_api_estimate") return "Saxo API候補";
   return "手入力";
+}
+
+function formatEntryCommissionSource(execution: OptionEntryExecution): string {
+  if (execution.commissionSource === "saxo_actual") return "Saxo実費";
+  if (execution.commissionSource === "manual") return "手入力";
+  if (execution.commissionSource === "standard_default") return "標準取引費用";
+  return "未設定";
 }
 
 function formatEntryHistoryCompletion(execution: OptionEntryExecution): string {
