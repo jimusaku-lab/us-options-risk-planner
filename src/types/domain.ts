@@ -179,6 +179,8 @@ export type OptionValueSnapshotSource = "manual" | "saxo" | "moomoo";
 
 export type OptionValueSnapshot = {
   snapshotDate: string;
+  /** ISO timestamp when available; older snapshots retain their date-only record. */
+  capturedAt?: string;
   underlyingPrice: number;
   optionExitPrice: number;
   strike: number;

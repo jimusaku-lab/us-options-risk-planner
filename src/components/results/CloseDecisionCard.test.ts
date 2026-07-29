@@ -12,6 +12,7 @@ import {
   calculateLongOptionCloseAnnualizedReturnPercent,
   calculateLongOptionExitBreakevenPriceUSD,
   calculateOptionValueProgress,
+  getOptionValueProgressMessage,
   getPremiumCandidateManualInputGuidance,
   getLongOptionExitOrderLineCandidate,
   getPremiumCandidatePrice,
@@ -350,6 +351,65 @@ describe("long call time value decay snapshots", () => {
     expect(progress?.netOptionMove).toBeCloseTo(5.4, 8);
     expect(progress?.decayPerDay).toBeCloseTo(1.3, 8);
     expect(progress?.intrinsicGainPerDay).toBeCloseTo(4, 8);
+  });
+
+  it("keeps the Visa observed time-value increase out of the decay warning", () => {
+    const previous = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-28",
+      capturedAt: "2026-07-28T14:00:00.000Z",
+      underlyingPrice: 362.54,
+      optionExitPrice: 36.63,
+      strike: 340,
+      expiry: "2026-11-20",
+      dte: 115,
+      optionType: "call",
+      source: "manual",
+    });
+    const current = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-29",
+      capturedAt: "2026-07-29T14:00:00.000Z",
+      underlyingPrice: 361.42,
+      optionExitPrice: 39.8,
+      strike: 340,
+      expiry: "2026-11-20",
+      dte: 114,
+      optionType: "call",
+      source: "manual",
+    });
+
+    const progress = calculateOptionValueProgress([previous, current].filter(Boolean) as NonNullable<typeof previous>[]);
+
+    expect(progress?.timeValueChange).toBeCloseTo(4.29, 8);
+    expect(progress?.netOptionMove).toBeCloseTo(3.17, 8);
+    expect(progress?.timeValueDirection).toBe("increase");
+    expect(getOptionValueProgressMessage(progress ?? null)).toBe("前回観測比で時間価値は増加しています。");
+  });
+
+  it("reports decrease, unchanged put value, and insufficient comparison data distinctly", () => {
+    const callPrevious = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-28", underlyingPrice: 360, optionExitPrice: 30, strike: 340, expiry: "2026-11-20", dte: 115, optionType: "call", source: "saxo",
+    });
+    const callCurrent = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-29", underlyingPrice: 360, optionExitPrice: 28, strike: 340, expiry: "2026-11-20", dte: 114, optionType: "call", source: "saxo",
+    });
+    const putPrevious = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-28", underlyingPrice: 90, optionExitPrice: 13, strike: 100, expiry: "2026-11-20", dte: 115, optionType: "put", source: "manual",
+    });
+    const putCurrent = buildLongOptionValueSnapshot({
+      snapshotDate: "2026-07-29", underlyingPrice: 92, optionExitPrice: 11, strike: 100, expiry: "2026-11-20", dte: 114, optionType: "put", source: "manual",
+    });
+
+    const decrease = calculateOptionValueProgress([callPrevious, callCurrent].filter(Boolean) as NonNullable<typeof callPrevious>[]);
+    const unchangedPut = calculateOptionValueProgress([putPrevious, putCurrent].filter(Boolean) as NonNullable<typeof putPrevious>[]);
+    const incomplete = { ...putCurrent!, source: "unknown" as never };
+
+    expect(decrease?.timeValueDirection).toBe("decrease");
+    expect(getOptionValueProgressMessage(decrease ?? null)).toContain("時間価値は減少しています");
+    expect(unchangedPut?.timeValueChange).toBe(0);
+    expect(unchangedPut?.timeValueDirection).toBe("unchanged");
+    expect(getOptionValueProgressMessage(unchangedPut ?? null)).toBe("前回観測比で時間価値に大きな変化はありません。");
+    expect(calculateOptionValueProgress([putPrevious!, incomplete])).toBeNull();
+    expect(getOptionValueProgressMessage(null)).toBe("比較データ不足");
   });
 
   it("updates the same-day snapshot and keeps the timeline sorted", () => {

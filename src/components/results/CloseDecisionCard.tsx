@@ -52,6 +52,7 @@ export function CloseDecisionCard({
       dte: calculateRemainingDaysUntilExpiry(leg.expiryDate),
       optionType: leg.type,
       source,
+      capturedAt: new Date().toISOString(),
     });
     updateLeg(leg.id, {
       closeCostUSD: closePriceUSD,
@@ -834,6 +835,7 @@ function LongOptionCloseCard({
     dte,
     optionType: leg.type,
     source: storedCurrentSnapshot?.source ?? "manual",
+    capturedAt: storedCurrentSnapshot?.capturedAt ?? new Date().toISOString(),
   });
   const valueTimeline = buildOptionValueTimeline(leg.valueSnapshots, currentValueSnapshot);
   const valueProgress = calculateOptionValueProgress(valueTimeline);
@@ -938,6 +940,7 @@ function LongOptionCloseCard({
         profitTargetPriceUSD={profitTargetPriceUSD}
         stopLossPriceUSD={stopLossPriceUSD}
         dte={dte}
+        theoreticalThetaUSD={leg.theta}
         exitProceedsValue={formatLongOptionExitProceedsValue(simulation, exitProceedsPreview)}
         accountCashLabel={accountCashLabel}
         accountCashValue={formatLongOptionAccountCashPreview(simulation, accountInputs, exitProceedsPreview)}
@@ -1022,7 +1025,9 @@ function LongOptionCloseCard({
   );
 }
 
-type OptionValueProgress = {
+export type OptionValueProgress = {
+  previous: OptionValueSnapshot;
+  current: OptionValueSnapshot;
   elapsedDays: number;
   intrinsicGain: number;
   timeValueChange: number;
@@ -1030,6 +1035,8 @@ type OptionValueProgress = {
   netOptionMove: number;
   decayPerDay: number;
   intrinsicGainPerDay: number;
+  timeValueDirection: "increase" | "decrease" | "unchanged";
+  sourcesMixed: boolean;
 };
 
 export function buildLongOptionValueSnapshot({
@@ -1041,6 +1048,7 @@ export function buildLongOptionValueSnapshot({
   dte,
   optionType,
   source,
+  capturedAt,
 }: {
   snapshotDate: string;
   underlyingPrice: number;
@@ -1050,6 +1058,7 @@ export function buildLongOptionValueSnapshot({
   dte: number;
   optionType: OptionType;
   source: OptionValueSnapshotSource;
+  capturedAt?: string;
 }): OptionValueSnapshot | null {
   if (!Number.isFinite(underlyingPrice) || underlyingPrice <= 0) return null;
   if (!Number.isFinite(optionExitPrice) || optionExitPrice <= 0) return null;
@@ -1059,6 +1068,7 @@ export function buildLongOptionValueSnapshot({
   const timeValue = Math.max(0, optionExitPrice - intrinsicValue);
   return {
     snapshotDate,
+    capturedAt,
     underlyingPrice,
     optionExitPrice,
     strike,
@@ -1099,12 +1109,17 @@ export function calculateOptionValueProgress(timeline: OptionValueSnapshot[]): O
   if (timeline.length < 2) return null;
   const previous = timeline[timeline.length - 2];
   const current = timeline[timeline.length - 1];
-  const elapsedDays = Math.max(1, daysBetweenIsoDates(previous.snapshotDate, current.snapshotDate));
+  if (!isComparableOptionValueSnapshot(previous) || !isComparableOptionValueSnapshot(current)) return null;
+  const elapsedDays = daysBetweenOptionValueSnapshots(previous, current);
+  if (elapsedDays === null) return null;
   const intrinsicGain = current.intrinsicValue - previous.intrinsicValue;
   const timeValueChange = current.timeValue - previous.timeValue;
   const timeValueDecay = Math.max(0, previous.timeValue - current.timeValue);
   const netOptionMove = current.optionExitPrice - previous.optionExitPrice;
+  const timeValueDirection = getTimeValueDirection(timeValueChange);
   return {
+    previous,
+    current,
     elapsedDays,
     intrinsicGain,
     timeValueChange,
@@ -1112,7 +1127,50 @@ export function calculateOptionValueProgress(timeline: OptionValueSnapshot[]): O
     netOptionMove,
     decayPerDay: timeValueDecay / elapsedDays,
     intrinsicGainPerDay: intrinsicGain / elapsedDays,
+    timeValueDirection,
+    sourcesMixed: previous.source !== current.source,
   };
+}
+
+export function getOptionValueProgressMessage(progress: OptionValueProgress | null): string {
+  if (!progress) return "比較データ不足";
+  if (progress.timeValueDirection === "increase") return "前回観測比で時間価値は増加しています。";
+  if (progress.timeValueDirection === "decrease") {
+    return "時間価値は減少しています。利確ライン、損切りライン、残存日数を確認してください。";
+  }
+  return "前回観測比で時間価値に大きな変化はありません。";
+}
+
+function getTimeValueDirection(change: number): OptionValueProgress["timeValueDirection"] {
+  if (change > 0.005) return "increase";
+  if (change < -0.005) return "decrease";
+  return "unchanged";
+}
+
+function isComparableOptionValueSnapshot(snapshot: OptionValueSnapshot): boolean {
+  return (
+    ["manual", "saxo", "moomoo"].includes(snapshot.source) &&
+    Number.isFinite(snapshot.underlyingPrice) &&
+    Number.isFinite(snapshot.optionExitPrice) &&
+    Number.isFinite(snapshot.intrinsicValue) &&
+    Number.isFinite(snapshot.timeValue) &&
+    Boolean(getOptionValueSnapshotTimestamp(snapshot))
+  );
+}
+
+function daysBetweenOptionValueSnapshots(previous: OptionValueSnapshot, current: OptionValueSnapshot): number | null {
+  const previousTimestamp = getOptionValueSnapshotTimestamp(previous);
+  const currentTimestamp = getOptionValueSnapshotTimestamp(current);
+  if (!previousTimestamp || !currentTimestamp) return null;
+  const previousTime = new Date(previousTimestamp).getTime();
+  const currentTime = new Date(currentTimestamp).getTime();
+  if (!Number.isFinite(previousTime) || !Number.isFinite(currentTime) || currentTime <= previousTime) return null;
+  return Math.max(1, Math.ceil((currentTime - previousTime) / 86_400_000));
+}
+
+function getOptionValueSnapshotTimestamp(snapshot: OptionValueSnapshot): string | null {
+  const value = snapshot.capturedAt || snapshot.snapshotDate;
+  return Number.isNaN(new Date(value).getTime()) ? null : value;
 }
 
 function LongOptionTimeValueDecayView({
@@ -1124,6 +1182,7 @@ function LongOptionTimeValueDecayView({
   profitTargetPriceUSD,
   stopLossPriceUSD,
   dte,
+  theoreticalThetaUSD,
   exitProceedsValue,
   accountCashLabel,
   accountCashValue,
@@ -1136,6 +1195,7 @@ function LongOptionTimeValueDecayView({
   profitTargetPriceUSD: number;
   stopLossPriceUSD: number;
   dte: number;
+  theoreticalThetaUSD?: number;
   exitProceedsValue: string;
   accountCashLabel: string;
   accountCashValue: string;
@@ -1159,11 +1219,7 @@ function LongOptionTimeValueDecayView({
   const timePct = Math.max(0, 100 - intrinsicPct);
   const latestTimeline = timeline.slice(-6);
   const maxTimelineValue = Math.max(...latestTimeline.map((snapshot) => snapshot.optionExitPrice), currentSnapshot.optionExitPrice, 1);
-  const progressMessage = !progress
-    ? null
-    : progress.intrinsicGain >= progress.timeValueDecay
-      ? "株価上昇が時間価値減少を上回っています。"
-      : "時間価値の減少が大きくなっています。利確ライン、損切りライン、残存日数を確認してください。";
+  const progressMessage = getOptionValueProgressMessage(progress);
 
   return (
     <section className="mt-3 rounded-md border border-indigo-200 bg-white p-3 text-sm">
@@ -1220,7 +1276,10 @@ function LongOptionTimeValueDecayView({
               : 0;
             return (
               <div key={`${snapshot.snapshotDate}-${snapshot.optionExitPrice}`} className="grid grid-cols-[88px_1fr_72px] items-center gap-2 text-xs">
-                <div className="font-semibold text-slate-600">{snapshot.snapshotDate}</div>
+                <div className="font-semibold text-slate-600">
+                  <div>{snapshot.snapshotDate}</div>
+                  <div className="text-[10px] font-medium">{sourceLabel(snapshot.source)}</div>
+                </div>
                 <div className="h-4 rounded bg-white">
                   <div className="flex h-4 overflow-hidden rounded" style={{ width: `${widthPct}%` }}>
                     <div className="bg-emerald-500" style={{ width: `${snapshotIntrinsicPct}%` }} />
@@ -1243,17 +1302,31 @@ function LongOptionTimeValueDecayView({
             <MiniMetric label="差し引き変化" value={`${formatSignedUSD(progress.netOptionMove)} / 株`} tone={progress.netOptionMove >= 0 ? "green" : "red"} />
           </div>
           <p className="mt-2 text-xs leading-5 text-slate-600">
-            {progress.elapsedDays}日差分。時間価値減少 {formatUSD(progress.timeValueDecay)} / 株、1日あたり {formatUSD(progress.decayPerDay)}。本質的価値増加は1日あたり {formatSignedUSD(progress.intrinsicGainPerDay)}。
+            比較対象: {progress.previous.snapshotDate} → {progress.current.snapshotDate}（{progress.elapsedDays}日差分）。時間的価値は {formatSignedUSD(progress.timeValueChange)} / 株、本質的価値は {formatSignedUSD(progress.intrinsicGain)} / 株。
           </p>
-          <p className="mt-2 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-xs font-semibold leading-5 text-indigo-900">
+          {progress.sourcesMixed ? (
+            <p className="mt-2 text-xs leading-5 text-slate-600">
+              取得元が混在しています: {sourceLabel(progress.previous.source)} → {sourceLabel(progress.current.source)}。
+            </p>
+          ) : null}
+          <p className={`mt-2 rounded-md px-2 py-1.5 text-xs font-semibold leading-5 ${
+            progress.timeValueDirection === "decrease"
+              ? "border border-amber-300 bg-amber-50 text-amber-950"
+              : "border border-indigo-200 bg-indigo-50 text-indigo-900"
+          }`}>
             {progressMessage}
           </p>
         </div>
       ) : (
         <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold leading-5 text-slate-600">
-          初回スナップショットのため、トレンド判定は表示しません。次回以降の価格入力で直近差分を比較します。
+          比較データ不足。取得元と記録時刻を含む直近2件の価格がそろうと、観測差分を比較します。
         </p>
       )}
+      {Number.isFinite(theoreticalThetaUSD) ? (
+        <p className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-600">
+          <span className="font-bold text-slate-800">理論上の時間減価に関する注意:</span> モデルtheta {formatSignedUSD(theoreticalThetaUSD ?? 0)} / 株・日。上の観測差分とは別の参考値です。
+        </p>
+      ) : null}
     </section>
   );
 }
