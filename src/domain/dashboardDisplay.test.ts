@@ -251,6 +251,39 @@ describe("dashboard premium display", () => {
     expect(display.annualReturnPct).toBeCloseTo(35.5, 1);
   });
 
+  it("marks a confirmed synthetic forward's net opening cashflow as annual-rate not applicable", () => {
+    const simulation: TradeSimulation = {
+      ...createPlannedCoveredCall({
+        id: "nvda-synthetic-forward",
+        status: "open",
+        name: "NVDA synthetic forward",
+        ticker: "NVDA",
+        strategyType: "synthetic_forward",
+        entryDate: "2026-07-16",
+        expiryDate: "2026-12-18",
+        dte: 0,
+        stockPosition: null,
+        denominatorMode: "cash_secured",
+        optionLegs: [
+          { id: "call-leg", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18" },
+          { id: "put-leg", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18" },
+        ],
+        optionEntryExecutions: [
+          { id: "call-entry", legId: "call-leg", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 26.25, settlementCurrency: "USD", commissionUSD: 2.25, inputMode: "USD_EXECUTION_CALC", source: "manual", confirmed: true },
+          { id: "put-entry", legId: "put-leg", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 21.05, settlementCurrency: "USD", commissionUSD: 2.25, inputMode: "USD_EXECUTION_CALC", source: "manual", confirmed: true },
+        ],
+      }),
+    };
+
+    const display = calculateDashboardPremiumDisplay(simulation);
+
+    expect(display.label).toBe("建玉時ネット支払額");
+    expect(display.premiumUSD).toBeCloseTo(-524.5, 8);
+    expect(display.annualReturnApplicability).toBe("not_applicable_synthetic");
+    expect(display.annualReturnPct).toBeUndefined();
+    expect(display.netAnnualReturnPct).toBeUndefined();
+  });
+
   it("uses confirmed entry trade date for open-position DTE display", () => {
     const simulation: TradeSimulation = {
       ...createPlannedCoveredCall({

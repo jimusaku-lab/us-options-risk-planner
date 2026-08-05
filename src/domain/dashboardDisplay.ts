@@ -28,6 +28,7 @@ export type CoveredCallAssignmentEstimate = {
 
 export type DashboardPremiumDisplay = {
   basis: "planned" | "open_unconfirmed" | "confirmed" | "history";
+  annualReturnApplicability?: "not_applicable_synthetic";
   label: string;
   premiumDirection: "received" | "paid";
   primaryAmountLabel: string;
@@ -359,10 +360,17 @@ function calculatePlannedPremiumDisplay(
   const denominatorJPY = simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT"
     ? simulation.customDenominatorJPY ?? 0
     : undefined;
+  const isSyntheticForward = simulation.strategyType === "synthetic_forward";
+  const syntheticCashflowLabel = basis === "planned"
+    ? premiumUSD < 0 ? "予定ネット支払額" : "予定ネット受取額"
+    : premiumUSD < 0 ? "約定未確認のネット支払額" : "約定未確認のネット受取額";
 
   return {
     basis,
-    label: longOptionOrderDisplay
+    annualReturnApplicability: isSyntheticForward ? "not_applicable_synthetic" : undefined,
+    label: isSyntheticForward
+      ? syntheticCashflowLabel
+      : longOptionOrderDisplay
       ? basis === "planned"
         ? "支払予定プレミアム"
         : "約定未確認の支払プレミアム"
@@ -370,7 +378,9 @@ function calculatePlannedPremiumDisplay(
         ? "予定プレミアム"
         : "約定未確認プレミアム",
     premiumDirection: longOptionOrderDisplay ? "paid" : "received",
-    primaryAmountLabel: longOptionOrderDisplay
+    primaryAmountLabel: isSyntheticForward
+      ? syntheticCashflowLabel
+      : longOptionOrderDisplay
       ? basis === "planned"
         ? "支払予定額"
         : "約定未確認の支払額"
@@ -382,7 +392,7 @@ function calculatePlannedPremiumDisplay(
     dte,
     premiumJPY,
     premiumUSD,
-    annualReturnPct: longOptionOrderDisplay
+    annualReturnPct: longOptionOrderDisplay || isSyntheticForward
       ? undefined
       : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
         ? denominatorUSD && denominatorUSD > 0
@@ -391,7 +401,7 @@ function calculatePlannedPremiumDisplay(
         : denominatorJPY && denominatorJPY > 0
           ? calculateAnnualReturnPercentByCurrency({ netProfit: premiumJPY, denominator: denominatorJPY, dte })
           : undefined,
-    netAnnualReturnPct: longOptionOrderDisplay
+    netAnnualReturnPct: longOptionOrderDisplay || isSyntheticForward
       ? undefined
       : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
         ? denominatorUSD && denominatorUSD > 0
@@ -422,9 +432,14 @@ export function calculateDashboardPremiumDisplay(simulation: TradeSimulation): D
         : premiumJPY / (getFxRateOrZero(simulation) || 1);
     return {
       basis: "history",
-      label: "確定プレミアム",
+      annualReturnApplicability: simulation.strategyType === "synthetic_forward" ? "not_applicable_synthetic" : undefined,
+      label: simulation.strategyType === "synthetic_forward"
+        ? premiumUSD < 0 ? "確定ネット支払額" : "確定ネット受取額"
+        : "確定プレミアム",
       premiumDirection: premiumUSD < 0 ? "paid" : "received",
-      primaryAmountLabel: premiumUSD < 0 ? "支払済みプレミアム" : "受取プレミアム",
+      primaryAmountLabel: simulation.strategyType === "synthetic_forward"
+        ? premiumUSD < 0 ? "確定ネット支払額" : "確定ネット受取額"
+        : premiumUSD < 0 ? "支払済みプレミアム" : "受取プレミアム",
       denominatorLabel: "実績分母",
       hasPremiumInput: true,
       effectiveFxRateJPY: getEffectiveFxRateJPY(simulation),
@@ -452,15 +467,21 @@ export function calculateDashboardPremiumDisplay(simulation: TradeSimulation): D
   const feeUSD = calculateTotalFeesUSD(simulation);
   const feeJPY = calculateTotalFeesJPY(simulation);
   const longOptionOrderDisplay = calculateLongOptionOrderDisplay({ simulation, feeUSD, feeJPY });
+  const isSyntheticForward = simulation.strategyType === "synthetic_forward";
   const annualReturnPct =
-    !longOptionOrderDisplay && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" && denominatorUSD && denominatorUSD > 0
+    !longOptionOrderDisplay && !isSyntheticForward && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" && denominatorUSD && denominatorUSD > 0
       ? calculateAnnualReturnPercentByCurrency({ netProfit: premiumUSD, denominator: denominatorUSD, dte })
       : undefined;
   return {
     basis: "confirmed",
-    label: longOptionOrderDisplay ? "建玉時支払プレミアム" : "建玉時プレミアム",
+    annualReturnApplicability: isSyntheticForward ? "not_applicable_synthetic" : undefined,
+    label: isSyntheticForward
+      ? premiumUSD < 0 ? "建玉時ネット支払額" : "建玉時ネット受取額"
+      : longOptionOrderDisplay ? "建玉時支払プレミアム" : "建玉時プレミアム",
     premiumDirection: longOptionOrderDisplay ? "paid" : "received",
-    primaryAmountLabel: longOptionOrderDisplay ? "建玉時支払額" : "受取プレミアム",
+    primaryAmountLabel: isSyntheticForward
+      ? premiumUSD < 0 ? "建玉時ネット支払額" : "建玉時ネット受取額"
+      : longOptionOrderDisplay ? "建玉時支払額" : "受取プレミアム",
     denominatorLabel: longOptionOrderDisplay ? "建玉時支払額" : "使用分母",
     annualReturnLabel: longOptionOrderDisplay ? "反対売買で決済" : undefined,
     hasPremiumInput: true,

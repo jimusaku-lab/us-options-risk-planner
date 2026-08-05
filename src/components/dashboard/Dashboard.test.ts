@@ -113,6 +113,41 @@ describe("getSimulationTickerDisplayLabel", () => {
 });
 
 describe("Dashboard close decision actions", () => {
+  it("shows a synthetic forward's opening net cashflow and marks premium annual rate not applicable", () => {
+    const simulation = createSimulation({
+      ticker: "NVDA",
+      strategyType: "synthetic_forward",
+      entryDate: "2026-07-16",
+      expiryDate: "2026-12-18",
+      dte: 0,
+      optionLegs: [
+        { id: "call-leg", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18" },
+        { id: "put-leg", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18" },
+      ],
+      optionEntryExecutions: [
+        { id: "call-entry", legId: "call-leg", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 26.25, settlementCurrency: "USD", commissionUSD: 2.25, inputMode: "USD_EXECUTION_CALC", source: "manual", confirmed: true },
+        { id: "put-entry", legId: "put-leg", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 21.05, settlementCurrency: "USD", commissionUSD: 2.25, inputMode: "USD_EXECUTION_CALC", source: "manual", confirmed: true },
+      ],
+    });
+
+    render(createElement(Dashboard, {
+      simulations: [simulation],
+      selectedId: simulation.id,
+      onSelect: vi.fn(),
+      onEdit: vi.fn(),
+      onDelete: vi.fn(),
+      workspace: "live",
+      accountInputs,
+      historyOpen: false,
+      onHistoryOpenChange: vi.fn(),
+    }));
+
+    expect(screen.getByText("建玉時ネット支払額")).toBeTruthy();
+    expect(screen.getByText("適用外")).toBeTruthy();
+    expect(screen.getByText("シンセティックは建玉時ネット支払額をプレミアム年率として評価しません")).toBeTruthy();
+    expect(screen.queryByText("プレミアム年率")).toBeNull();
+  });
+
   it("opens the entry rationale journal from the dashboard status badge", () => {
     const onJournalAction = vi.fn();
     const onSelect = vi.fn();

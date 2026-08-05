@@ -225,8 +225,11 @@ export function Dashboard({
               const journalStatusLabel = getJournalStatusLabel(simulation.entryRationaleJournal, simulation.status);
               const journalStatusTone = getJournalStatusTone(journalStatusLabel);
               const isFirstHistory = !isJournalFocusMode && showHistory && index === currentSimulations.length && historySimulations.length > 0;
+              const isSyntheticAnnualRateNotApplicable = premiumDisplay.annualReturnApplicability === "not_applicable_synthetic";
               const annualReturnLabel =
-                !isHistoryRow && !premiumDisplay.hasPremiumInput
+                isSyntheticAnnualRateNotApplicable
+                  ? "適用外"
+                  : !isHistoryRow && !premiumDisplay.hasPremiumInput
                   ? "未入力"
                   : longOptionDisplay
                     ? longOptionDisplay.currentCloseAnnualizedReturnPct !== undefined
@@ -383,10 +386,17 @@ export function Dashboard({
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {!isHistoryRow && premiumDisplay.annualReturnPct !== undefined ? (
+                    {isSyntheticAnnualRateNotApplicable ? (
+                      <span className="block text-[11px] font-bold text-slate-500">年率</span>
+                    ) : !isHistoryRow && premiumDisplay.annualReturnPct !== undefined ? (
                       <span className="block text-[11px] font-bold text-slate-500">プレミアム年率</span>
                     ) : null}
                     {annualReturnLabel}
+                    {isSyntheticAnnualRateNotApplicable ? (
+                      <span className="mt-1 block text-left text-[11px] font-medium leading-4 text-slate-500">
+                        シンセティックは建玉時ネット支払額をプレミアム年率として評価しません
+                      </span>
+                    ) : null}
                     {longOptionDisplay ? (
                       <span className="mt-1 block rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-indigo-900">
                         <span className="block">

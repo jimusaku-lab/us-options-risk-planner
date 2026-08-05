@@ -476,6 +476,7 @@ export type DenominatorResult = {
   amountJPY: number;
   amountUSD?: number;
   annualReturnPct: number;
+  annualReturnApplicability?: "not_applicable_synthetic";
   netAnnualReturnPct?: number;
   isPrimary: boolean;
   explanation: string;

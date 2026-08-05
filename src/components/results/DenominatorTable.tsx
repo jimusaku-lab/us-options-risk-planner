@@ -65,7 +65,7 @@ export function DenominatorTable({
             <tr className="border-b border-slate-200 text-left text-slate-500">
               <th className="py-2 pr-3">分母モード</th>
               <th className="py-2 pr-3 text-right">分母</th>
-              <th className="py-2 pr-3 text-right">税前年率</th>
+              <th className="py-2 pr-3 text-right">年率</th>
               <th className="py-2 pr-3">構成</th>
             </tr>
           </thead>
@@ -80,7 +80,9 @@ export function DenominatorTable({
                   {formatDenominatorAmount(row)}
                 </td>
                 <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                  {hasDenominatorAmount(row) ? formatPct(row.annualReturnPct) : "対象外"}
+                  {row.annualReturnApplicability === "not_applicable_synthetic"
+                    ? "適用外"
+                    : hasDenominatorAmount(row) ? formatPct(row.annualReturnPct) : "対象外"}
                 </td>
                 <td className="py-3 pr-3 text-slate-600">
                   {row.components.map(formatComponent).join(" / ")}

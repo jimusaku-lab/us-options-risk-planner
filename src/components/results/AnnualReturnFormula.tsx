@@ -44,6 +44,16 @@ export function AnnualReturnFormula({
   taxResult,
 }: AnnualReturnFormulaProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
+  if (premiumDisplay.annualReturnApplicability === "not_applicable_synthetic") {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <h2 className="text-base font-bold text-slate-950">年率: 適用外</h2>
+        <p className="mt-1 text-sm leading-6 text-slate-600">
+          シンセティックは建玉時ネット支払額をプレミアム年率として評価しません。建玉時ネット額は現在損益ではありません。
+        </p>
+      </section>
+    );
+  }
   const usePremiumDisplay = premiumDisplay.basis !== "history";
   const premiumJPY = usePremiumDisplay ? premiumDisplay.premiumJPY : calculateNetInitialPremiumJPY(simulation);
   const premiumUSD = usePremiumDisplay ? premiumDisplay.premiumUSD : calculateNetInitialPremiumUSD(simulation);

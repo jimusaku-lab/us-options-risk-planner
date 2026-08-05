@@ -1611,8 +1611,11 @@ export default function App() {
   const denominators = historyPerformance.denominators;
   const primaryWithNet = historyPerformance.primaryDenominator;
   const denominatorPremiumDisplay = calculateDashboardPremiumDisplay(selectedWithAccount);
+  const isSyntheticAnnualRateNotApplicable = denominatorPremiumDisplay.annualReturnApplicability === "not_applicable_synthetic";
   const denominatorsForDisplay =
-    !historyResultMode && denominatorPremiumDisplay.annualReturnPct !== undefined
+    isSyntheticAnnualRateNotApplicable
+      ? denominators.map((row) => ({ ...row, annualReturnApplicability: "not_applicable_synthetic" as const }))
+      : !historyResultMode && denominatorPremiumDisplay.annualReturnPct !== undefined
       ? denominators.map((row) =>
           row.isPrimary ||
           (row.currency === "USD" &&

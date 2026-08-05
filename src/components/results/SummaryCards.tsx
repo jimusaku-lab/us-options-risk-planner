@@ -168,6 +168,7 @@ export function SummaryCards({
 }: SummaryCardsProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
   const usePremiumDisplay = !historyMode && premiumDisplay.basis !== "history";
+  const isSyntheticAnnualRateNotApplicable = premiumDisplay.annualReturnApplicability === "not_applicable_synthetic";
   const longOptionDisplay = usePremiumDisplay ? premiumDisplay.longOptionOrderDisplay : undefined;
   const premiumJPY = usePremiumDisplay ? premiumDisplay.premiumJPY : calculateNetInitialPremiumJPY(simulation);
   const premiumUSD = usePremiumDisplay ? premiumDisplay.premiumUSD : calculateNetInitialPremiumUSD(simulation);
@@ -256,7 +257,9 @@ export function SummaryCards({
         denominatorFormula,
       ].filter(Boolean).join(" / ");
   const annualCardValue =
-    longOptionDisplay
+    isSyntheticAnnualRateNotApplicable
+      ? "適用外"
+      : longOptionDisplay
       ? formatUSD(longOptionDisplay.breakevenUSD)
       : usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
       ? `予定 ${formatPct(premiumDisplay.annualReturnPct)}${
@@ -269,6 +272,8 @@ export function SummaryCards({
         `満期まで${premiumDisplay.dte}日。`,
         `利確/損切りライン ${formatUSD(longOptionDisplay.profitTargetPriceUSD)} / ${formatUSD(longOptionDisplay.stopLossPriceUSD)}。`,
       ].join(" ")
+    : isSyntheticAnnualRateNotApplicable
+    ? "シンセティックは建玉時ネット支払額をプレミアム年率として評価しません。現在損益ではありません。"
     : usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
     ? `プレミアム年率。${premiumDisplay.dte}日換算。権利行使時想定は別カードで確認します。`
     : historyMode
@@ -280,7 +285,7 @@ export function SummaryCards({
     {
       title: longOptionDisplay
         ? "反対売買損益分岐価格"
-        : historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
+        : isSyntheticAnnualRateNotApplicable ? premiumDisplay.label : historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
       value: longOptionDisplay
         ? `${formatUSD(longOptionDisplay.exitBreakevenPriceUSD)} / 株`
         : isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
@@ -353,7 +358,7 @@ export function SummaryCards({
     {
       title: longOptionDisplay
         ? "満期損益分岐点（参考）"
-        : historyMode ? "この履歴のオプション年率" : "年率",
+        : isSyntheticAnnualRateNotApplicable ? "年率" : historyMode ? "この履歴のオプション年率" : "年率",
       value: annualCardValue,
       note: annualCardNote,
     },
