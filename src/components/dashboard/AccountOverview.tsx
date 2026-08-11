@@ -98,7 +98,9 @@ export function AccountOverview({
                         ? formatSignedUSD(effect.amount)
                         : formatJPY(effect.amount, { signed: true })}
                   </div>
-                  {effect.amount === undefined ? (
+                  {effect.coverage === "same_day_uncertain" ? (
+                    <span className="text-xs font-semibold text-amber-950">Saxo残高を再取得して確認してください</span>
+                  ) : effect.amount === undefined ? (
                     <button
                       className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-950 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={!onResolveCashEffect}

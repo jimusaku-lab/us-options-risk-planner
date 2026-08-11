@@ -1,5 +1,5 @@
 import type { AccountInputs } from "@/store/useOptionsStore";
-import type { AccountCashAdjustment, Currency, OptionCloseExecution, OptionLeg, SaxoAccountCode, TradeSimulation } from "@/types/domain";
+import type { AccountCashAdjustment, AccountState, Currency, OptionCloseExecution, OptionLeg, SaxoAccountCode, TradeSimulation } from "@/types/domain";
 import { calculateOptionCloseExecutionResults } from "./optionCloseExecutions";
 
 export type PendingAccountCashEffect = {
@@ -13,8 +13,33 @@ export type PendingAccountCashEffect = {
   detail: string;
   closeDate: string;
   canApply: boolean;
+  coverage: "manual_apply" | "same_day_uncertain";
   missingReason?: string;
 };
+
+export type SaxoCashCoverage = "manual_apply" | "saxo_covered" | "same_day_uncertain";
+
+function formatTokyoCalendarDate(value: string): string | undefined {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+  const valueFor = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
+  const year = valueFor("year");
+  const month = valueFor("month");
+  const day = valueFor("day");
+  return year && month && day ? `${year}-${month}-${day}` : undefined;
+}
+
+/** Uses only applied Saxo cash snapshots and Tokyo dates; never amounts or balance deltas. */
+export function getSaxoCashCoverage(account: AccountState, closeDate: string): SaxoCashCoverage {
+  const snapshotDates = (account.saxoSyncHistory ?? [])
+    .filter((history) => history.source === "saxo_api" && history.appliedFields.includes("cashBalance"))
+    .map((history) => formatTokyoCalendarDate(history.fetchedAt))
+    .filter((date): date is string => Boolean(date));
+  if (snapshotDates.some((snapshotDate) => snapshotDate > closeDate)) return "saxo_covered";
+  if (snapshotDates.some((snapshotDate) => snapshotDate === closeDate)) return "same_day_uncertain";
+  return "manual_apply";
+}
 
 function getCashEffectId(simulationId: string, executionId: string): string {
   return `option-close-cash:${simulationId}:${executionId}`;
@@ -71,6 +96,8 @@ export function calculatePendingAccountCashEffects(
       if (!execution.confirmed) return [];
       const effectId = getCashEffectId(simulation.id, execution.id);
       if (isApplied(accountInputs, effectId, accountCode)) return [];
+      const coverage = getSaxoCashCoverage(accountInputs[accountCode], execution.closeDate);
+      if (coverage === "saxo_covered") return [];
 
       const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
       const result = results.find((item) => item.execution.id === execution.id);
@@ -98,8 +125,9 @@ export function calculatePendingAccountCashEffects(
           label,
           detail,
           closeDate: execution.closeDate,
-          canApply: cashEffect.amount !== undefined && !cashEffect.missingReason && Boolean(result || cashEffect.amount),
-          missingReason: cashEffect.missingReason,
+          canApply: coverage === "manual_apply" && cashEffect.amount !== undefined && !cashEffect.missingReason && Boolean(result || cashEffect.amount),
+          coverage,
+          missingReason: coverage === "same_day_uncertain" ? "同日のSaxo残高反映は時刻順序を確認できません。Saxo残高を再取得して確認してください。" : cashEffect.missingReason,
         },
       ];
     });

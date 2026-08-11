@@ -9007,3 +9007,41 @@ Vのロングコール1枚について、Saxo履歴候補へ不足値を手入�
 7. 正式保存後、ダッシュボードとSection 7のどちらにも `決済済みに変更` が表示されない。
 8. ローカル版はVの現在保存済みデータをreloadし、Vが現在管理中3件から外れて履歴へ移ること、実現損益・記帳額・取引費用・為替が保持されることを値の画面照合で確認する。
 9. ローカルの対象テスト、全回帰、build、5173の配信bundle、ブラウザDOMを確認後、公開版へ反映する。公開版も独立してtest/build/配信bundle/DOMを確認し、GitHub push完了を報告する。
+
+## 2026-08-11 現金反映UI是正: Saxo残高反映済みの決済を手動反映候補に出さない
+
+### 再現結果と確定原因
+
+Vの決済実績を正式保存して建玉が履歴へ移った後、P口座のSaxo取得残高は82,505円から597,936円へ更新されている。差額515,431円はV決済の記帳額と一致し、Saxo残高側には当該決済が既に含まれている。一方、口座概要には `未反映の現金増減` として同じ515,431円と `現金残高に反映` が黄色表示される。このボタンを押すと同額を二重加算する危険がある。
+
+原因は `calculatePendingAccountCashEffects()` が、confirmed close executionに対応する `cashAdjustments` のIDだけを既反映判定に使い、同口座の `saxoSyncHistory` に記録されたSaxo現金残高の取得・反映時点を見ていないことである。Saxo snapshotで `cashBalance` が置き換えられていても手動adjustment履歴がなければ、誤ってpending effectを生成する。
+
+成績集計は終了済み建玉のconfirmed close executionから算出され、口座現金adjustmentとは別経路である。したがってこの誤候補を非表示にしても決済損益・年次成績を削除または変更してはならない。
+
+### 現金反映の優先順位と判定契約
+
+1. Saxo APIから反映した現金残高を口座残高の正本とする。manual adjustmentは、Saxo残高を取得・反映していない期間だけの補助手段とする。
+2. 同口座の `saxoSyncHistory` に、`appliedFields` が `cashBalance` を含む成功履歴があり、そのSaxo snapshotの取得日が決済日より後なら、その決済はSaxo現金残高に包含済みとしてpending cash effectを生成しない。
+3. 日付比較はAsia/Tokyoの暦日で行う。snapshot取得日が決済日と同日の場合、時刻順序を確認できない限り包含済みと推定しない。ただし危険な手動反映ボタンをそのまま出さず、`Saxo残高を再取得して確認してください` という中立案内に切り替える。
+4. Saxo cash snapshotがない、cashBalanceを反映していない、またはsnapshot日が決済日より前の場合だけ、従来の手動 `現金残高に反映` 候補を出せる。
+5. 手動反映済みIDは従来どおり再表示しない。後からSaxo snapshotを反映した場合はsnapshot値で残高を置き換え、過去adjustmentを再加算しない。
+6. pending候補の非表示・案内変更は口座残高UIだけに作用する。close execution、実現損益、年次成績、税務集計、履歴表示を変更しない。
+7. 0補完、記帳額の推定、Saxo残高と決済額の差額だけによる紐付けは行わない。判定根拠は同口座・cashBalance反映済み・snapshot取得時点とする。
+
+### 実装境界
+
+- `accountCashEffects.ts` にSaxo現金snapshotの包含判定を純粋関数として追加し、P/N両口座で共通利用する。
+- `saxoSyncHistory` の `source: saxo_api`、`appliedFields: cashBalance`、`fetchedAt` を用いる。口座ID、raw応答、金額一致は判定に使用しない。
+- pending effectを `manual_apply`、`saxo_covered`、`same_day_uncertain` に分類する。`saxo_covered` は一覧から除外し、`same_day_uncertain` は適用ボタンを出さない。
+- 今回保存済みのVは、再読み込みだけで黄色カードが消えること。ユーザーに破棄や手動adjustmentを要求しない。
+- 公開版には同じ一般化コードと匿名fixtureだけを反映し、ローカル口座残高、Saxo識別子、OAuth、localStorage、バックアップを移送しない。
+
+### 回帰・実機受入条件
+
+1. 決済翌日に同口座cashBalanceをSaxo反映したfixtureでは、confirmed closeのpending cash effectを生成しない。
+2. 決済前のsnapshot、cashBalanceを含まないsync、別口座syncではpending manual effectを維持する。
+3. 決済日とsnapshot取得日が同日で時刻順序不明の場合、`現金残高に反映` を出さずSaxo再取得案内を出す。
+4. manual adjustment済みIDは再表示しない。後日のSaxo snapshot反映後も現金を二重加算しない。
+5. V相当fixtureをclosedへ保存した年次成績には実現損益が一度だけ入り、cash effectを非表示にしても同じ値を維持する。
+6. ローカル実機でP残高597,936円を変更せず、Vの黄色カードだけが消えることをDOMと画面で確認する。成績画面にV決済実績が一度だけ存在することを確認する。
+7. ローカル全回帰・build・5173配信bundle確認後だけ公開版へ反映する。公開版も独立test/build/配信DOMを確認し、GitHub push完了を報告する。

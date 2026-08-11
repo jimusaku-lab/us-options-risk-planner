@@ -4,6 +4,7 @@ import type { AccountInputs } from "@/store/useOptionsStore";
 import type { TradeSimulation } from "@/types/domain";
 import { calculatePendingAccountCashEffects } from "./accountCashEffects";
 import { sanitizeSaxoHistoryCloseExecutions } from "./optionCloseExecutions";
+import { calculateYearlyPerformanceSummary } from "./yearlyPerformance";
 
 const baseAccountInputs: AccountInputs = {
   P: {
@@ -72,6 +73,25 @@ function createClosedPutSimulation(overrides?: Partial<TradeSimulation>): TradeS
 }
 
 describe("account cash effects", () => {
+  it("suppresses a close after a later same-account Saxo cash snapshot without changing performance", () => {
+    const simulation = createClosedPutSimulation();
+    const withLaterSaxoCash = { ...baseAccountInputs, P: { ...baseAccountInputs.P, saxoSyncHistory: [{ id: "anonymous-next-day", source: "saxo_api" as const, accountKey: "anonymous", fetchedAt: "2026-06-03T01:00:00.000Z", appliedAt: "2026-06-03T01:00:00.000Z", appliedFields: ["cashBalance"] }] } };
+    const before = calculateYearlyPerformanceSummary([simulation], 2026);
+    expect(calculatePendingAccountCashEffects([simulation], withLaterSaxoCash)).toEqual([]);
+    expect(calculateYearlyPerformanceSummary([simulation], 2026)).toEqual(before);
+  });
+  it("keeps manual apply for older, other-account, or non-cash snapshots", () => {
+    const variants: AccountInputs[] = [
+      { ...baseAccountInputs, P: { ...baseAccountInputs.P, saxoSyncHistory: [{ id: "before", source: "saxo_api", accountKey: "anonymous", fetchedAt: "2026-06-01T01:00:00.000Z", appliedAt: "2026-06-01T01:00:00.000Z", appliedFields: ["cashBalance"] }] } },
+      { ...baseAccountInputs, N: { ...baseAccountInputs.N, saxoSyncHistory: [{ id: "other", source: "saxo_api", accountKey: "anonymous", fetchedAt: "2026-06-03T01:00:00.000Z", appliedAt: "2026-06-03T01:00:00.000Z", appliedFields: ["cashBalance"] }] } },
+      { ...baseAccountInputs, P: { ...baseAccountInputs.P, saxoSyncHistory: [{ id: "margin-only", source: "saxo_api", accountKey: "anonymous", fetchedAt: "2026-06-03T01:00:00.000Z", appliedAt: "2026-06-03T01:00:00.000Z", appliedFields: ["marginAvailable"] }] } },
+    ];
+    variants.forEach((accountInputs) => expect(calculatePendingAccountCashEffects([createClosedPutSimulation()], accountInputs)[0]).toMatchObject({ coverage: "manual_apply", canApply: true }));
+  });
+  it("blocks manual apply when the Saxo cash snapshot is on the close date", () => {
+    const accountInputs: AccountInputs = { ...baseAccountInputs, P: { ...baseAccountInputs.P, saxoSyncHistory: [{ id: "same-day", source: "saxo_api", accountKey: "anonymous", fetchedAt: "2026-06-02T01:00:00.000Z", appliedAt: "2026-06-02T01:00:00.000Z", appliedFields: ["cashBalance"] }] } };
+    expect(calculatePendingAccountCashEffects([createClosedPutSimulation()], accountInputs)[0]).toMatchObject({ coverage: "same_day_uncertain", canApply: false });
+  });
   it("does not duplicate a close cash effect when a legacy open record is normalized on reload", () => {
     const normalized = sanitizeSaxoHistoryCloseExecutions(createClosedPutSimulation({ status: "open" }));
     expect(normalized.status).toBe("closed");
