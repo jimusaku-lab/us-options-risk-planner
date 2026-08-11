@@ -507,6 +507,7 @@ async function getPositions(accountKey) {
   const payload = await saxoGet("port/v1/positions", {
     ...(clientKey ? { ClientKey: clientKey } : {}),
     ...(accountKey ? { AccountKey: accountKey } : {}),
+    FieldGroups: "Costs,PositionBase,PositionView",
   });
   const rawPositions = Array.isArray(payload.Data) ? payload.Data : Array.isArray(payload.Positions) ? payload.Positions : [];
   const accountsResponse = await getAccounts();
@@ -565,14 +566,15 @@ async function getOrdersSnapshot() {
 async function getClosedPositions({ fromDate, toDate }) {
   const client = await getClient();
   const clientKey = getClientKey(client);
-  const payload = await saxoGet("port/v1/closedpositions", {
-    ...(clientKey ? { ClientKey: clientKey } : {}),
+  if (!clientKey) {
+    throw new HttpError(422, "client_key_unavailable", "ClientKeyが未取得のため、閉鎖建玉履歴を取得できません。");
+  }
+  const payload = await saxoGet(`cs/v1/reports/closedPositions/${encodeURIComponent(clientKey)}/${encodeURIComponent(fromDate)}/${encodeURIComponent(toDate)}`, {
     $top: 100,
-    FieldGroups: "ClosedPosition,DisplayAndFormat",
   });
   const rawItems = Array.isArray(payload.Data) ? payload.Data : [];
   return {
-    endpoint: "port/v1/closedpositions",
+    endpoint: "cs/v1/reports/closedPositions/{ClientKey}/{FromDate}/{ToDate}",
     status: "available",
     fromDate,
     toDate,
@@ -611,7 +613,7 @@ async function getHistoryDiscovery({ fromDate, toDate }) {
     getTrades({ fromDate, toDate }),
   ]);
   const endpoints = [
-    normalizeDiscoveryResult("port/v1/closedpositions", "決済済み建玉候補", results[0]),
+    normalizeDiscoveryResult("cs/v1/reports/closedPositions/{ClientKey}/{FromDate}/{ToDate}", "決済済み建玉候補", results[0]),
     normalizeDiscoveryResult("cs/v1/reports/trades/{ClientKey}", "約定・取引履歴候補", results[1]),
   ];
   return {
@@ -1295,8 +1297,9 @@ function parseMoney(value) {
 
 function normalizeAccount(raw) {
   return {
-    accountKey: raw.AccountKey ?? raw.AccountId ?? raw.AccountNumber ?? "",
-    accountId: raw.AccountId ?? raw.AccountNumber,
+    accountKey: raw.AccountKey ?? "",
+    accountId: raw.AccountId,
+    accountNumber: raw.AccountNumber,
     displayName: raw.DisplayName ?? raw.Name ?? raw.AccountId ?? raw.AccountNumber,
     currency: raw.Currency ?? raw.AccountCurrency ?? raw.BaseCurrency,
     environment: getEnvironment(),
@@ -1314,6 +1317,7 @@ function normalizeAccountSnapshot(account, balance, margin) {
     cashBalance: firstNumber(balance, ["CashBalance", "Cash", "CashAvailableForTrading", "AccountBalance"]),
     buyingPower: firstNumber(balance, ["CashAvailableForTrading", "BuyingPower", "AvailableForTrading", "AvailableCash"]),
     accountValue: firstNumber(balance, ["AccountValue", "NetEquityForMargin", "TotalValue", "NetLiquidationValue"]),
+    saxoTotalValue: firstNumber(balance, ["TotalValue"]),
     marginAvailable: firstNumber(margin, ["MarginAvailable", "AvailableMargin", "MarginCollateralAvailable"]) ??
       firstNumber(balance, ["MarginAvailable", "AvailableMargin", "MarginAvailableForTrading"]),
     marginUsagePercent: firstNumber(margin, ["MarginUtilizationPct", "MarginUtilization", "MarginUsedByCurrentPositionsPct"]) ??
@@ -1365,6 +1369,14 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
   const underlyingAssetTypeMatch = firstStringMatch(raw, ["UnderlyingAssetType"]);
   const underlyingSymbol = normalizeUnderlyingSymbol(underlyingSymbolMatch?.value);
   const underlyingUic = underlyingUicMatch?.value;
+  const executionTimeOpen = firstStringMatch(raw, ["ExecutionTimeOpen"]);
+  const conversionRateOpen = firstNumberMatch(raw, ["ConversionRateOpen"]);
+  const marketValueOpenInBaseCurrency = firstNumberMatch(raw, ["MarketValueOpenInBaseCurrency"]);
+  const tradeCostsTotalInBaseCurrency = firstNumberMatch(raw, ["TradeCostsTotalInBaseCurrency"]);
+  const openCostComponents = ["AdditionalTransactionCosts", "Commission", "ExchangeFee", "ExternalCharges", "PerformanceFee", "StampDuty"];
+  const openCostValues = Object.fromEntries(openCostComponents.map((name) => [name, firstNumberMatch(raw?.Costs?.OpenCostInBaseCurrency, [name])]));
+  const openingCostComplete = Object.values(openCostValues).every((match) => match !== undefined);
+  const openingTransactionCost = openingCostComplete ? Object.values(openCostValues).reduce((sum, match) => sum + match.value, 0) : undefined;
   const missingFields = [];
   for (const [field, value] of Object.entries({
     accountKey,
@@ -1420,6 +1432,7 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     shareQuantity: kind === "stock" ? quantity : undefined,
     averageOpenPrice,
     currentStockPrice,
+    openingExecution: { executionTimeUtc: executionTimeOpen?.value, executionTimeSourceField: executionTimeOpen?.matchedName, openingFxRate: conversionRateOpen?.value, openingFxRateSourceField: conversionRateOpen?.matchedName, marketValueOpenInBaseCurrency: marketValueOpenInBaseCurrency?.value, marketValueOpenSourceField: marketValueOpenInBaseCurrency?.matchedName, tradeCostsTotalInBaseCurrency: tradeCostsTotalInBaseCurrency?.value, tradeCostsTotalSourceField: tradeCostsTotalInBaseCurrency?.matchedName, openingTransactionCostJpy: openingTransactionCost, openingTransactionCostCompleteness: openingCostComplete ? "component_aggregate" : "partial", openingTransactionCostSourceField: openingCostComplete ? "Costs.OpenCostInBaseCurrency" : undefined, capturedAt: fetchedAt },
     missingFields,
     fetchedAt,
     raw,
@@ -1533,16 +1546,24 @@ function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
 }
 
 function normalizeHistoryItem(raw, kind, index) {
-  const accountKey = firstString(raw, ["AccountKey", "AccountId", "AccountNumber"]);
+  const accountKey = firstString(raw, ["AccountKey"]);
+  const accountId = firstString(raw, ["AccountId"]);
+  const accountNumber = firstString(raw, ["AccountNumber"]);
   const sourceId = firstString(raw, ["ClosedPositionId", "TradeId", "PositionId", "OrderId", "Id"]);
   const orderId = firstString(raw, ["OrderId", "OrderID", "RelatedOrderId", "MultiLegOrderId"]);
   const profitLoss = firstNumber(raw, ["ClosedProfitLoss", "ProfitLossOnTrade", "RealizedPnl", "ProfitLoss"]);
-  const profitLossBase = firstNumber(raw, ["ClosedProfitLossInBaseCurrency", "ProfitLossOnTradeInBaseCurrency", "BookedAmountUSD", "BookedAmountAccountCurrency", "BookedAmount", "Amount"]);
+  const profitLossAccountCurrency = firstNumber(raw, ["PnLAccountCurrency"]);
+  const profitLossClientCurrency = firstNumber(raw, ["PnLClientCurrency"]);
+  const profitLossBaseCurrency = firstNumber(raw, ["ClosedProfitLossInBaseCurrency", "ProfitLossOnTradeInBaseCurrency", "PnLBaseCurrency"]);
+  const profitLossBase = profitLossBaseCurrency;
+  const accountCurrency = firstString(raw, ["AccountCurrency"]);
   const optionTypeRaw = firstString(raw, ["PutCall", "CallPut", "OptionType", "OptionRootType"]);
   const instrumentForOption = firstString(raw, ["Symbol", "DisplayAndFormat.Symbol", "InstrumentSymbol", "InstrumentCode", "Description", "InstrumentDescription"]);
   const inferredContract = parseSaxoOptionContract(instrumentForOption);
   const optionType = inferOptionTypeFromValue(optionTypeRaw) ?? inferOptionTypeFromInstrument(instrumentForOption);
-  const bookedAmountAliases = ["BookedAmountAccountCurrency", "BookedAmountUSD", "BookedAmountClientCurrency", "BookedAmount", "NetAmount", "SettlementAmount", "Amount"];
+  const bookedAmountAccountCurrency = firstNumber(raw, ["TotalBookedOnClosingLegAccountCurrency", "BookedAmountAccountCurrency"]);
+  const bookedAmountUSD = firstNumber(raw, ["BookedAmountUSD"]);
+  const bookedAmountAliases = ["TotalBookedOnClosingLegAccountCurrency", "BookedAmountAccountCurrency", "BookedAmountUSD", "BookedAmountClientCurrency", "BookedAmount", "NetAmount", "SettlementAmount"];
   const premiumAmountAliases = ["Premium", "PremiumAmount", "GrossAmount", "TradeAmount"];
   const transactionCostAliases = ["TransactionCost", "Costs", "Cost", "Commission", "Commissions", "SpreadCostAccountCurrency", "SpreadCostUSD", "SpreadCostClientCurrency"];
   const exchangeRateAliases = ["ExchangeRate", "FxRate", "ConversionRate"];
@@ -1560,6 +1581,8 @@ function normalizeHistoryItem(raw, kind, index) {
     kind,
     sourceIdMasked: sourceId ? maskSecret(sourceId) : undefined,
     accountKey: accountKey ? maskSecret(accountKey) : undefined,
+    accountId: accountId ? maskSecret(accountId) : undefined,
+    accountNumber: accountNumber ? maskSecret(accountNumber) : undefined,
     symbol: inferSymbol(raw),
     assetType: firstString(raw, ["AssetType", "InstrumentType", "ProductType"]),
     optionType,
@@ -1567,15 +1590,21 @@ function normalizeHistoryItem(raw, kind, index) {
     expiry: normalizeSaxoDate(firstString(raw, ["ExpiryDate", "Expiry", "ExpirationDate", "MaturityDate"])) ?? inferredContract?.expiry,
     instrumentCode: firstString(raw, ["InstrumentCode", "Symbol", "DisplayAndFormat.Symbol", "InstrumentSymbol"]),
     uic: firstNumber(raw, ["Uic", "UIC"]),
-    quantity: firstNumber(raw, ["Amount", "Quantity"]),
-    buySell: inferBuySell(raw),
+    quantity: firstNumber(raw, ["AmountClose", "Amount", "Quantity"]),
+    buySell: inferBuySell(raw, kind),
     openClose: inferOpenClose(raw),
-    price: firstNumber(raw, ["Price", "OpenPrice", "ClosePrice", "TradePrice"]),
-    tradeDate: normalizeSaxoDate(firstString(raw, ["TradeDate", "ExecutionTime", "ActivityTime", "ValueDate", "Date"])),
+    price: firstNumber(raw, ["ClosePrice", "Price", "OpenPrice", "TradePrice"]),
+    tradeDate: normalizeSaxoDate(firstString(raw, ["TradeDateClose", "TradeDate", "ExecutionTime", "ActivityTime", "ValueDate", "Date"])),
     currency: firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency"]),
+    accountCurrency,
     profitLoss,
     profitLossBase,
+    profitLossAccountCurrency,
+    profitLossClientCurrency,
+    profitLossBaseCurrency,
     bookedAmount: bookedAmountMatch?.value,
+    bookedAmountAccountCurrency,
+    bookedAmountUSD,
     premiumAmount: premiumAmountMatch?.value,
     transactionCost: transactionCostMatch?.value,
     feeAmount: firstNumber(raw, ["Fee", "Fees", "Commission", "Commissions"]),
@@ -1699,10 +1728,11 @@ function classifySaxoFailure(error) {
   return "取得失敗";
 }
 
-function inferBuySell(raw) {
-  const value = String(firstString(raw, ["BuySell", "BuyOrSell", "Side", "OrderSide"]) ?? "").toLowerCase();
+function inferBuySell(raw, kind) {
+  const value = String(firstString(raw, ["Direction", "BuySell", "BuyOrSell", "Side", "OrderSide"]) ?? "").toLowerCase();
   if (value.includes("buy")) return "buy";
   if (value.includes("sell")) return "sell";
+  if (kind === "closed_position") return "unknown";
   const amount = firstNumber(raw, ["Amount", "Quantity", "OrderAmount"]);
   if (amount !== undefined) return amount < 0 ? "sell" : "buy";
   return "unknown";
@@ -1713,6 +1743,7 @@ function inferOpenClose(raw) {
     firstString(raw, [
       "OpenClose",
       "OpenOrClose",
+      "ToOpenOrClose",
       "NewOrClose",
       "TradeOpenClose",
       "PositionEffect",

@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
-import type { SaxoSyntheticForwardHold, SaxoSyntheticForwardPair } from "./saxoAccountSync";
+import { createEffectiveHistoryEndpoints, ReflectionPendingSummary, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
+import type { ReflectionSummary } from "./SaxoReadOnlyPanel";
+import type { SaxoHistoryDiscoveryItem, SaxoSyntheticForwardHold, SaxoSyntheticForwardPair } from "./saxoAccountSync";
 
 afterEach(cleanup);
 
@@ -49,4 +50,40 @@ it("renders an unresolved pair without individual reflection controls", () => {
 
   expect(screen.getByText("統合保留")).toBeInTheDocument();
   expect(screen.queryByRole("button")).not.toBeInTheDocument();
+});
+
+const closeHistory: SaxoHistoryDiscoveryItem = { id: "anonymous-close", kind: "trade", accountCode: "N", symbol: "SAMPLE", assetType: "StockOption", optionType: "call", strike: 100, expiry: "2026-12-18", tradeDate: "2026-08-11", quantity: 1, buySell: "sell", openClose: "close", price: 12.5 };
+function summaryWithHistoryAction(action: ReflectionSummary["historyActions"][number]): ReflectionSummary {
+  return { accountLines: [], positionLine: { detail: "0件", actionable: false, actionLabel: "確認" }, orderLine: { detail: "0件", actionable: false }, historyLine: { detail: "決済1件", actionable: true, actionLabel: "履歴候補一覧を見る" }, historyActions: [action], requiredActionCount: 1, hasPending: true, hasNewPositionCandidates: false, historyIsSupplemental: false };
+}
+it("shows a close-specific direct CTA that only requests one Section 7 draft", () => {
+  const onOpenHistoryAction = vi.fn();
+  render(<ReflectionPendingSummary summary={summaryWithHistoryAction({ item: closeHistory, target: "close", mode: "create" })} onShowMapping={vi.fn()} onShowSnapshot={vi.fn()} onShowPositions={vi.fn()} onShowOrders={vi.fn()} onShowHistory={vi.fn()} onOpenHistoryAction={onOpenHistoryAction} />);
+  expect(screen.getByText(/SAMPLE \/ C \/ 行使価格 100 \/ 2026-12-18 \/ 2026-08-11 \/ 決済/)).toBeInTheDocument();
+  expect(screen.getByText("Section 7へ確認用下書きを作成して移動します。まだ正式保存されません。")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "SAMPLEの決済内容を確認する" }));
+  expect(onOpenHistoryAction).toHaveBeenCalledTimes(1);
+  expect(onOpenHistoryAction).toHaveBeenCalledWith(closeHistory);
+});
+it("uses a return CTA for an existing draft and no direct creation CTA for blocked history", () => {
+  const onOpenHistoryAction = vi.fn();
+  const { rerender } = render(<ReflectionPendingSummary summary={summaryWithHistoryAction({ item: closeHistory, target: "close", mode: "return" })} onShowMapping={vi.fn()} onShowSnapshot={vi.fn()} onShowPositions={vi.fn()} onShowOrders={vi.fn()} onShowHistory={vi.fn()} onOpenHistoryAction={onOpenHistoryAction} />);
+  fireEvent.click(screen.getByRole("button", { name: "SAMPLEの決済確認へ戻る" }));
+  expect(onOpenHistoryAction).toHaveBeenCalledTimes(1);
+  const onShowHistory = vi.fn();
+  rerender(<ReflectionPendingSummary summary={summaryWithHistoryAction({ item: { ...closeHistory, buySell: "unknown" }, target: "close", mode: "review", reason: "自動反映できません。履歴一覧で理由を確認してください。" })} onShowMapping={vi.fn()} onShowSnapshot={vi.fn()} onShowPositions={vi.fn()} onShowOrders={vi.fn()} onShowHistory={onShowHistory} onOpenHistoryAction={onOpenHistoryAction} />);
+  expect(screen.queryByRole("button", { name: /決済内容を確認する/ })).not.toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole("button", { name: "履歴候補一覧を見る" }).at(-1)!);
+  expect(onShowHistory).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a merged effective close candidate intact for the history display path", () => {
+  const trade = { ...closeHistory, id: "trade", accountCode: "P" as const, accountCurrency: "JPY", profitLoss: undefined, bookedAmountUSD: 3235.23 };
+  const merged = { ...trade, profitLossAccountCurrency: 119265, relatedCandidateKeys: ["closed"] };
+  const endpoints = createEffectiveHistoryEndpoints(
+    [{ endpoint: "trades", label: "約定", classification: "ok", itemCount: 1, message: "", items: [trade] }, { endpoint: "closed", label: "決済", classification: "ok", itemCount: 1, message: "", items: [{ ...closeHistory, id: "closed", accountCode: "P" as const, accountCurrency: "JPY", profitLossAccountCurrency: 119265 }] }],
+    [merged],
+  );
+  expect(endpoints).toHaveLength(1);
+  expect(endpoints[0].items).toEqual([merged]);
 });

@@ -9045,3 +9045,52 @@ Vの決済実績を正式保存して建玉が履歴へ移った後、P口座の
 5. V相当fixtureをclosedへ保存した年次成績には実現損益が一度だけ入り、cash effectを非表示にしても同じ値を維持する。
 6. ローカル実機でP残高597,936円を変更せず、Vの黄色カードだけが消えることをDOMと画面で確認する。成績画面にV決済実績が一度だけ存在することを確認する。
 7. ローカル全回帰・build・5173配信bundle確認後だけ公開版へ反映する。公開版も独立test/build/配信DOMを確認し、GitHub push完了を報告する。
+
+## 2026-08-11 決済損益是正: BookedAmountUSDをJPY実現損益として採用しない
+
+### 実データ再現と確定原因
+
+V 2026-11-20 340 C 1枚の2026-08-10決済について、SaxoTraderGOの損益詳細は実現損益119,265 JPYを表示する。アプリは同じ決済を3,235.23 JPYとして正式保存し、履歴・成績へ集計している。
+
+ローカルhelperの同契約・同日・同数量・同価格の実取得結果を値と項目意味で追跡すると、trade側には `BookedAmountUSD = 3235.23` と `BookedAmountAccountCurrency = 515431` があり、closed-position側のraw fieldには `PnLAccountCurrency` と `PnLClientCurrency` が存在する。現行normalizerは `profitLossBase` の候補に `BookedAmountUSD`、`BookedAmountAccountCurrency`、`BookedAmount`、`Amount` を混在させるため、tradeの `BookedAmountUSD = 3235.23` を損益として正規化する。さらにclose draft作成時に `brokerRealizedPnlJPY = item.profitLoss ?? item.profitLossBase` として、通貨を検証せずJPY欄へ格納する。
+
+cross-endpoint統合も `{ ...closedItem, ...trade }` の全面上書きであり、方向・価格に適したtrade優先が、損益項目まで一律に適用される。結果としてclosed-positionの直接損益項目を採らず、tradeのUSD記帳額をJPY損益として保存した。
+
+Saxo公式のHistorical Report Data ClosedPosition schemaでは `PnLAccountCurrency` はProfit and Loss in account currencyと定義される。`BookedAmountUSD` は記帳額であり損益ではない。よって3,235.23 JPYは誤りで、今回のP口座実現損益は直接取得した `PnLAccountCurrency` とSaxoTraderGO表示が一致する119,265 JPYを採用する。
+
+### 正規化契約
+
+1. `bookedAmount`、`bookedAmountUSD`、`profitLossAccountCurrency`、`profitLossClientCurrency`、`profitLossBaseCurrency`を意味と通貨を保持した別フィールドにする。同一のfallback列へ混ぜない。
+2. `profitLossBase` の候補から `BookedAmountUSD`、`BookedAmountAccountCurrency`、`BookedAmount`、`Amount`を除外する。これらを実現損益として使うことを禁止する。
+3. CS closed-positionの `PnLAccountCurrency` を口座通貨建て損益として直接正規化する。PORT closed-positionの `ClosedProfitLossInBaseCurrency` はそのendpointで定義されたbase currencyと取得口座通貨を確認できる場合だけ別フィールドへ保持する。
+4. P口座の `brokerRealizedPnlJPY` は、口座割当P、AccountCurrency JPY、直接の `PnLAccountCurrency` がすべて確認できる場合だけ自動入力する。通貨不明・不一致・項目なしはundefinedと理由を保持し、USD値をJPY欄へ入れない。
+5. `brokerBookedAmountJPY` はJPY口座の `BookedAmountAccountCurrency` または `TotalBookedOnClosingLegAccountCurrency`だけを使う。実現損益との代用を禁止する。
+6. cross-endpoint統合はfield-by-fieldで行う。売買方向・open/close・約定価格は明示tradeを優先し、口座通貨損益はdirect closed-positionを優先し、記帳額は通貨付きdirect fieldを優先する。全面spread mergeを使わない。
+7. 同一意味のdirect値が二経路で競合する場合は `source_conflict` とし、自動保存・上書きを禁止する。異なる意味のBookedAmountとPnLの差は競合ではなく、別項目として保持する。
+
+### 保存済み誤データの復旧契約
+
+1. sourceが `saxo_history`、確認済みclose execution、同じsource candidate群、保存済み `brokerRealizedPnlJPY` が再取得tradeの `BookedAmountUSD` と厳密一致し、対応closed-positionにdirect `PnLAccountCurrency` がある場合を、この既知不具合のlegacy誤保存として検出する。
+2. legacy誤保存だけは、再取得したdirect `PnLAccountCurrency`へ一度だけ置換し、修正元フィールド、修正先フィールド、修正日時を個人識別子なしでmemo/provenanceへ残す。金額差から推定してはならない。
+3. manual source、ユーザー上書き済み、direct PnLなし、通貨不明、候補競合、fingerprint不一致は自動修正しない。理由付きの再確認候補にする。
+4. Vの保存済み実績は、実APIの `PnLAccountCurrency = 119265` とSaxoTraderGO表示119,265 JPYの一致を値を露出しないdiagnosticでも確認してから修復する。3,235.23を119,265へ単純固定する実装は禁止する。
+5. 修復はclose executionの損益値だけを更新する。決済日、価格、数量、記帳額515,431、取引費用-5,563、為替157.395150、confirmed、closed status、cashBalance、cash adjustmentを変更しない。
+6. 修復後、履歴と成績は同じexecution IDから再計算し、V実現損益119,265 JPYを一度だけ集計する。旧3,235.23と新119,265を二重計上しない。
+
+### 回帰・実機受入条件
+
+1. 匿名fixtureでtrade `BookedAmountUSD=3235.23`、`BookedAmountAccountCurrency=515431`、closed `PnLAccountCurrency=119265`を与えると、effective candidateは記帳額515431 JPY、実現損益119265 JPYとなる。
+2. tradeにBookedAmountだけがありdirect PnLがない場合、実現損益はundefinedであり正式保存を止める。3235.23をJPY損益へ入れない。
+3. AccountCurrencyがUSDまたは不明の値をP口座JPY損益へ入れない。P/N割当競合はsource_conflictにする。
+4. field-by-field mergeでtradeのsell/close/32.77とclosedのPnLAccountCurrencyを同時に保持し、raw 2件を下書き2件へ増やさない。
+5. legacy誤保存fixtureはdirect fieldとの厳密なsource照合時だけ一度修復され、manual上書きfixtureは保持される。
+6. Vのローカル保存済み実績が119,265円へ修復され、履歴行と成績詳細が同額になる。P口座オプション損益は旧3,235円を除いて119,265円を一度加えた再計算値になる。
+7. P残高597,936円、黄色現金反映カード非表示、V closed statusを維持し、現金残高へ119,265円または差額を加算しない。
+8. ローカルの対象テスト・全回帰・build・5173配信bundle・ブラウザDOM・SaxoTraderGO画面照合が合格してから公開版へ一般化コードと匿名fixtureだけを反映する。公開版も独立test/build/配信DOM確認後にGitHub pushする。個人データ、OAuth、raw応答、localStorage、バックアップは移送しない。
+
+### 追加是正: effective候補を表示・復旧へ同じ実体で渡す
+
+1. raw endpointをfilterして残った元recordを表示用endpointに再利用してはならない。trade/closed-positionを統合したeffective candidate自体を、履歴表示、反映待ち集計、Section 7下書き、legacy P/L修復の全経路へ渡す。
+2. effective candidateのIDがtrade側であっても、closed-position由来のdirect `PnLAccountCurrency`、および両sourceの`relatedCandidateKeys`を保持する。元endpointのID一致だけでclosed-positionを脱落させない。
+3. P/JPYの損益表示はAccountCurrency=JPYかつdirect `profitLossAccountCurrency`だけを用いる。欠損なら未取得と表示し、`BookedAmountUSD`、`profitLossBase`、推定値へfallbackしない。
+4. 匿名dual-source fixtureで、統合済み候補が表示用endpointにも一件だけ残り、direct P/Lが表示・strict legacy repairの双方へ届くことを回帰確認する。

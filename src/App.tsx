@@ -9,6 +9,7 @@ import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import {
   createOptionCloseExecutionDraft,
   deriveSaxoHistoryRealizedPnlAutofill,
+  repairLegacySaxoHistoryRealizedPnl,
   sanitizeSaxoHistoryCloseExecutions,
 } from "@/domain/optionCloseExecutions";
 import {
@@ -40,6 +41,7 @@ import { SaxoReadOnlyPanel } from "@/features/saxo/SaxoReadOnlyPanel";
 import {
   describeBestSaxoHistoryOptionLegMismatch,
   findEntryHistoryMatches,
+  resolveOpeningExecution,
   findSaxoSyntheticForwardSimulationForPair,
   findSaxoAssignmentStockAcquisitionItem,
   resolveSaxoSyntheticForwardFillEvidence,
@@ -57,6 +59,7 @@ import {
   type SaxoApiOrderSnapshot,
   type SaxoApiPositionSnapshot,
   type SaxoHistoryDiscoveryItem,
+  createEffectiveSaxoHistoryCandidates,
 } from "@/features/saxo/saxoAccountSync";
 import {
   applySaxoStockSettlementToSimulation,
@@ -77,7 +80,7 @@ import { BackToTopButton } from "@/components/ui/BackToTopButton";
 import { SimulationEditor } from "@/components/wizard/SimulationEditor";
 import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
-import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
+import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker, type FxQuote } from "@/lib/marketData";
 import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 import { useCandidatesStore } from "@/store/useCandidatesStore";
@@ -92,6 +95,12 @@ function parseTickerFromSaxoSymbol(value: string | undefined): string {
   const leadingTicker = text.match(/^([A-Z][A-Z0-9.]{0,9})(?:[/:\s_-]|$)/i)?.[1] ?? "";
   const ticker = normalizeTicker(leadingTicker);
   return ticker && !["PUT", "CALL", "STOCKOPTION", "OPTION"].includes(ticker) ? ticker : "";
+}
+
+function formatTokyoDate(utc: string): string {
+  const date = new Date(utc);
+  if (Number.isNaN(date.getTime())) return formatLocalDate(new Date());
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
 
 function recoverSimulationTicker(simulation: TradeSimulation, stockTransfers: StockTransferEvent[]): string {
@@ -132,6 +141,7 @@ export default function App() {
   const [isSaxoDetailOpen, setIsSaxoDetailOpen] = useState(false);
   const [hasSaxoDetailUserState, setHasSaxoDetailUserState] = useState(false);
   const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
+  const [sameDayUsdJpyQuote, setSameDayUsdJpyQuote] = useState<FxQuote | null>(null);
   const candidatePanelRef = useRef<HTMLDivElement | null>(null);
   const {
     activeWorkspace,
@@ -170,10 +180,34 @@ export default function App() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
   useEffect(() => {
+    if (activeWorkspace !== "live") {
+      setSameDayUsdJpyQuote(null);
+      return;
+    }
+    let cancelled = false;
+    fetchUsdJpyRate()
+      .then((quote) => {
+        if (!cancelled) setSameDayUsdJpyQuote(quote);
+      })
+      .catch(() => {
+        if (!cancelled) setSameDayUsdJpyQuote(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspace]);
+  useEffect(() => {
     if (journalFocusSimulationId && !simulations.some((simulation) => simulation.id === journalFocusSimulationId)) {
       setJournalFocusSimulationId(null);
     }
   }, [journalFocusSimulationId, simulations]);
+  useEffect(() => {
+    if (saxoHistoryCandidates.length === 0) return;
+    simulations.forEach((simulation) => {
+      const repaired = repairLegacySaxoHistoryRealizedPnl(simulation, createEffectiveSaxoHistoryCandidates(saxoHistoryCandidates));
+      if (repaired !== simulation) upsertSimulation(repaired);
+    });
+  }, [saxoHistoryCandidates, simulations, upsertSimulation]);
   useEffect(() => {
     simulations.forEach((simulation) => {
       if (normalizeTicker(simulation.ticker)) return;
@@ -252,6 +286,7 @@ export default function App() {
     setQuoteStatus("USD/JPYを一括更新中...");
     try {
       const quote = await fetchUsdJpyRate();
+      setSameDayUsdJpyQuote(quote);
       simulations.forEach((simulation) => {
         upsertSimulation({ ...simulation, fxRateJPY: quote.rate });
       });
@@ -377,13 +412,14 @@ export default function App() {
     }
     const today = formatLocalDate(new Date());
     const expiryDate = position.expiry ?? today;
-    const entryDate = today;
+    const historyMatches = findEntryHistoryMatches(position, historyItems);
+    const opening = resolveOpeningExecution(position, historyMatches, true);
+    const entryDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : today;
     const dte = Math.max(0, Math.ceil((Date.parse(expiryDate) - Date.parse(entryDate)) / 86400000));
     const accountCode = position.accountAssignment;
     const isNAccount = accountCode === "N";
     const legId = `saxo-${position.id}-leg`;
     const quantity = position.quantity !== undefined ? Math.max(1, Math.abs(position.quantity)) : 1;
-    const historyMatches = findEntryHistoryMatches(position, historyItems);
     const bestHistory = historyMatches.length === 1 ? historyMatches[0].item : undefined;
     const historyTicker = bestHistory
       ? resolveSaxoHistoryUnderlyingSymbol(bestHistory) ?? normalizeTicker(bestHistory.symbol ?? bestHistory.instrumentCode ?? "")
@@ -391,7 +427,7 @@ export default function App() {
     const ticker = resolveSaxoPositionSymbol(position, simulations) ?? historyTicker;
     const fillPriceUSD = bestHistory?.price ?? position.premiumOpenPrice ?? position.currentOptionPrice ?? 0;
     const contracts = bestHistory?.quantity !== undefined ? Math.max(1, Math.abs(bestHistory.quantity)) : quantity;
-    const entryTradeDate = bestHistory?.tradeDate ?? entryDate;
+    const entryTradeDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : entryDate;
     const historyMissingItems =
       bestHistory === undefined
         ? []
@@ -406,13 +442,7 @@ export default function App() {
               bestHistory.transactionCost !== undefined ? undefined : "取引費用JPY",
               bestHistory.exchangeRate !== undefined ? undefined : "為替レート",
             ].filter((item): item is string => Boolean(item));
-    const historyCompletionStatus = historyMatches.length === 1
-      ? historyMissingItems.length > 0
-        ? "manual"
-        : "matched"
-      : historyMatches.length > 1
-        ? "multiple"
-        : "unmatched";
+    const historyCompletionStatus: OptionEntryExecution["historyCompletionStatus"] = historyMatches.length > 1 ? "multiple" : opening.historyStatus === "history_no_usable_match" ? "auto_filled_partial" : historyMissingItems.length > 0 ? "history_match_missing_fields" : "auto_filled_complete";
     const simulation: TradeSimulation = {
       id: `saxo-position-draft-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       status: "open",
@@ -464,12 +494,13 @@ export default function App() {
           contracts,
           fillPriceUSD,
           settlementCurrency: isNAccount ? "USD" : "JPY",
-          brokerBookedAmountJPY: !isNAccount ? bestHistory?.bookedAmount ?? bestHistory?.profitLossBase : undefined,
-          brokerPremiumJPY: !isNAccount ? bestHistory?.premiumAmount : undefined,
-          brokerTransactionCostJPY: !isNAccount ? bestHistory?.transactionCost : undefined,
+          brokerBookedAmountJPY: !isNAccount ? opening.openingBookedAmountJpy?.value : undefined,
+          brokerPremiumJPY: !isNAccount ? opening.openingPremiumJpy?.value : undefined,
+          brokerTransactionCostJPY: !isNAccount ? opening.openingTransactionCostJpy?.value : undefined,
           brokerFeeJPY: !isNAccount ? bestHistory?.feeAmount : undefined,
           brokerExchangeFeeJPY: !isNAccount ? bestHistory?.exchangeFee : undefined,
-          brokerExchangeRateJPY: !isNAccount ? bestHistory?.exchangeRate : undefined,
+          brokerExchangeRateJPY: !isNAccount ? opening.openingFxRate?.value : undefined,
+          openingFieldSources: !isNAccount ? { tradeDate: opening.executionTimeUtc?.source, brokerBookedAmountJPY: opening.openingBookedAmountJpy?.source, brokerPremiumJPY: opening.openingPremiumJpy?.source, brokerTransactionCostJPY: opening.openingTransactionCostJpy?.source, brokerExchangeRateJPY: opening.openingFxRate?.source } : undefined,
           brokerTaxIncludedFeeJPY: !isNAccount ? bestHistory?.taxIncludedFee : undefined,
           commissionUSD: isNAccount ? (bestHistory?.transactionCost !== undefined ? Math.abs(bestHistory.transactionCost) : getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD)) : undefined,
           commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
@@ -481,9 +512,9 @@ export default function App() {
           historyCandidateIds: historyMatches.map((match) => match.item.id),
           confirmed: false,
           memo:
-            historyCompletionStatus === "matched"
+            historyCompletionStatus === "auto_filled_complete"
               ? "入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 補完済み。正式保存前にSaxo履歴と照合してください。"
-              : historyCompletionStatus === "manual"
+              : historyCompletionStatus === "history_match_missing_fields" || historyCompletionStatus === "auto_filled_partial"
                 ? `入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 要手入力。不足項目: ${historyMissingItems.join("、")}`
               : historyCompletionStatus === "multiple"
                 ? "入力元: Saxo現在建玉 / 履歴補完: 要確認。Saxo取引履歴に複数候補があります。"
@@ -522,9 +553,9 @@ export default function App() {
       document.getElementById("option-entry-executions")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 150);
     setQuoteStatus(
-      historyCompletionStatus === "matched"
+      historyCompletionStatus === "auto_filled_complete"
         ? "Saxo現在建玉から下書きを作成し、Saxo取引履歴1件で建玉開始確認を補完しました。正式保存前に確認してください。"
-        : historyCompletionStatus === "manual"
+        : historyCompletionStatus === "history_match_missing_fields" || historyCompletionStatus === "auto_filled_partial"
           ? `Saxo現在建玉から下書きを作成し、Saxo取引履歴1件から一部補完しました。不足項目: ${historyMissingItems.join("、")}。`
         : historyCompletionStatus === "multiple"
           ? "Saxo現在建玉から下書きを作成しました。Saxo取引履歴に複数候補があります。3-Aで履歴候補を選んでください。"
@@ -607,6 +638,7 @@ export default function App() {
 
     const today = formatLocalDate(new Date());
     const historyMatches = findEntryHistoryMatches(position, historyItems);
+    const opening = resolveOpeningExecution(position, historyMatches, true);
     const bestHistory = historyMatches.length === 1 ? historyMatches[0].item : undefined;
     const actualExpiry = position.expiry ?? targetLeg.expiryDate ?? target.expiryDate;
     const actualStrike = position.strike ?? targetLeg.strikeUSD;
@@ -617,7 +649,7 @@ export default function App() {
         : position.quantity !== undefined
           ? Math.max(1, Math.abs(position.quantity))
           : targetLeg.quantity;
-    const actualTradeDate = bestHistory?.tradeDate ?? target.entryDate ?? today;
+    const actualTradeDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : bestHistory?.tradeDate ?? target.entryDate ?? today;
     const accountCode = position.accountAssignment === "P" || position.accountAssignment === "N" ? position.accountAssignment : target.accountCode;
     const isNAccount = accountCode === "N";
     const historyMissingItems =
@@ -634,14 +666,7 @@ export default function App() {
               bestHistory.transactionCost !== undefined ? undefined : "取引費用JPY",
               bestHistory.exchangeRate !== undefined ? undefined : "為替レート",
             ].filter((item): item is string => Boolean(item));
-    const historyCompletionStatus: OptionEntryExecution["historyCompletionStatus"] =
-      historyMatches.length === 1
-        ? historyMissingItems.length > 0
-          ? "manual"
-          : "matched"
-        : historyMatches.length > 1
-          ? "multiple"
-          : "unmatched";
+    const historyCompletionStatus: OptionEntryExecution["historyCompletionStatus"] = historyMatches.length > 1 ? "multiple" : "auto_filled_partial";
     const diffs = describeSaxoPositionLinkDiffs(position, target, targetLeg, actualPremium, actualQuantity);
     const historyTicker = bestHistory
       ? resolveSaxoHistoryUnderlyingSymbol(bestHistory) ?? normalizeTicker(bestHistory.symbol ?? bestHistory.instrumentCode ?? "")
@@ -659,19 +684,21 @@ export default function App() {
       marketPriceUSD: position.currentOptionPrice ?? targetLeg.marketPriceUSD,
       brokerSymbol: position.instrumentCode ?? bestHistory?.instrumentCode ?? bestHistory?.symbol ?? targetLeg.brokerSymbol,
     };
+    const existingEntry = (target.optionEntryExecutions ?? []).find((execution) => execution.legId === targetLeg.id);
     const entryExecution: OptionEntryExecution = {
+      ...existingEntry,
       id: `saxo-entry-${position.id}-${Date.now()}`,
       legId: targetLeg.id,
-      tradeDate: actualTradeDate,
+      tradeDate: existingEntry?.openingFieldSources?.tradeDate === "manual" ? existingEntry.tradeDate : actualTradeDate,
       contracts: actualQuantity,
       fillPriceUSD: actualPremium,
       settlementCurrency: isNAccount ? "USD" : "JPY",
-      brokerBookedAmountJPY: !isNAccount ? bestHistory?.bookedAmount ?? bestHistory?.profitLossBase : undefined,
-      brokerPremiumJPY: !isNAccount ? bestHistory?.premiumAmount : undefined,
-      brokerTransactionCostJPY: !isNAccount ? bestHistory?.transactionCost : undefined,
+      brokerBookedAmountJPY: !isNAccount ? existingEntry?.openingFieldSources?.brokerBookedAmountJPY === "manual" ? existingEntry.brokerBookedAmountJPY : opening.openingBookedAmountJpy?.value : undefined,
+      brokerPremiumJPY: !isNAccount ? existingEntry?.openingFieldSources?.brokerPremiumJPY === "manual" ? existingEntry.brokerPremiumJPY : opening.openingPremiumJpy?.value : undefined,
+      brokerTransactionCostJPY: !isNAccount ? existingEntry?.openingFieldSources?.brokerTransactionCostJPY === "manual" ? existingEntry.brokerTransactionCostJPY : opening.openingTransactionCostJpy?.value : undefined,
       brokerFeeJPY: !isNAccount ? bestHistory?.feeAmount : undefined,
       brokerExchangeFeeJPY: !isNAccount ? bestHistory?.exchangeFee : undefined,
-      brokerExchangeRateJPY: !isNAccount ? bestHistory?.exchangeRate : undefined,
+      brokerExchangeRateJPY: !isNAccount ? existingEntry?.openingFieldSources?.brokerExchangeRateJPY === "manual" ? existingEntry.brokerExchangeRateJPY : opening.openingFxRate?.value : undefined,
       brokerTaxIncludedFeeJPY: !isNAccount ? bestHistory?.taxIncludedFee : undefined,
       commissionUSD: isNAccount ? (bestHistory?.transactionCost !== undefined ? Math.abs(bestHistory.transactionCost) : getNOptionStandardCommissionUSD(actualQuantity, standardNOptionCommissionUSD)) : undefined,
       commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
@@ -680,17 +707,15 @@ export default function App() {
       source: "saxo_api_estimate",
       saxoSourceType: "current_position",
       historyCompletionStatus,
+      openingFieldSources: !isNAccount ? { ...existingEntry?.openingFieldSources, tradeDate: existingEntry?.openingFieldSources?.tradeDate === "manual" ? "manual" : opening.executionTimeUtc?.source, brokerBookedAmountJPY: existingEntry?.openingFieldSources?.brokerBookedAmountJPY === "manual" ? "manual" : opening.openingBookedAmountJpy?.source, brokerPremiumJPY: existingEntry?.openingFieldSources?.brokerPremiumJPY === "manual" ? "manual" : opening.openingPremiumJpy?.source, brokerTransactionCostJPY: existingEntry?.openingFieldSources?.brokerTransactionCostJPY === "manual" ? "manual" : opening.openingTransactionCostJpy?.source, brokerExchangeRateJPY: existingEntry?.openingFieldSources?.brokerExchangeRateJPY === "manual" ? "manual" : opening.openingFxRate?.source } : undefined,
       historyCandidateIds: historyMatches.map((match) => match.item.id),
-      confirmed: false,
+      confirmed: existingEntry?.confirmed ?? false,
       memo:
         diffs.length > 0
           ? `入力元: Saxo現在建玉。注文前入力との差分: ${diffs.join("、")}。正式保存時はSaxo実約定値を優先します。`
           : "入力元: Saxo現在建玉。正式保存時はSaxo実約定値を優先します。",
     };
-    const nextEntryExecutions = [
-      ...(target.optionEntryExecutions ?? []).filter((execution) => execution.legId !== targetLeg.id || execution.confirmed),
-      entryExecution,
-    ];
+    const nextEntryExecutions = existingEntry?.confirmed ? (target.optionEntryExecutions ?? []) : [...(target.optionEntryExecutions ?? []).filter((execution) => execution.legId !== targetLeg.id), entryExecution];
     const dte = Math.max(0, Math.ceil((Date.parse(actualExpiry) - Date.parse(actualTradeDate)) / 86400000));
     const nextSimulation: TradeSimulation = {
       ...target,
@@ -1088,8 +1113,8 @@ export default function App() {
           contracts: item.quantity !== undefined ? Math.max(1, Math.abs(item.quantity)) : draft.contracts,
           closePriceUSD: item.price ?? draft.closePriceUSD,
           settlementCurrency: target.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "USD" : "JPY",
-          brokerBookedAmountJPY: !isN ? item.bookedAmount ?? item.profitLossBase : undefined,
-          brokerRealizedPnlJPY: !isN ? item.profitLoss ?? item.profitLossBase : undefined,
+          brokerBookedAmountJPY: !isN && item.accountCurrency === "JPY" ? item.bookedAmountAccountCurrency : undefined,
+          brokerRealizedPnlJPY: !isN && item.accountCode === "P" && item.accountCurrency === "JPY" ? item.profitLossAccountCurrency : undefined,
           brokerTransactionCostJPY: !isN ? item.transactionCost : undefined,
           brokerPremiumJPY: !isN ? item.premiumAmount : undefined,
           brokerFeeJPY: !isN ? item.feeAmount : undefined,
@@ -1539,6 +1564,7 @@ export default function App() {
                 <AccountOverview
                   workspace={activeWorkspace}
                   accountInputs={accountInputs}
+                  referenceFxQuote={sameDayUsdJpyQuote}
                   pendingCashEffects={pendingCashEffects}
                   onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
                   onResolveCashEffect={goToPendingCashEffectSource}
@@ -1870,6 +1896,7 @@ export default function App() {
                 workspace={activeWorkspace}
                 accountInputs={accountInputs}
                 referenceFxRateJPY={selected.referenceFxRateJPY ?? selected.fxRateJPY}
+                referenceFxQuote={sameDayUsdJpyQuote}
                 pendingCashEffects={pendingCashEffects}
                 onApplyCashEffect={(effect) => applyAccountCashAdjustment(createAccountCashAdjustment(effect))}
                 onResolveCashEffect={goToPendingCashEffectSource}

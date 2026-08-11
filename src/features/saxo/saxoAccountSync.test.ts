@@ -5,6 +5,7 @@ import {
   createSaxoAccountDiffRows,
   createSaxoSetupGuidance,
   createSaxoPositionDraftSummary,
+  createEffectiveSaxoHistoryCandidates,
   findEntryHistoryMatches,
   findSaxoAssignmentStockAcquisitionItem,
   findSaxoSyntheticForwardPairing,
@@ -28,6 +29,7 @@ import {
   isForbiddenSaxoOrderRoute,
   isSaxoHistoryPutAssignmentOptionCandidate,
   isSaxoHistoryMatchingOptionLeg,
+  isSaxoHistoryAutoCreatableClose,
   maskSaxoIdentifier,
   SAXO_CLOSE_ACCOUNT_CONFIRMATION_WARNING,
   SAXO_READONLY_ENDPOINTS,
@@ -89,6 +91,8 @@ describe("Saxo read-only account sync", () => {
       currency: "JPY",
       values: {
         cashBalance: 110_000,
+        accountValue: 120_000,
+        saxoTotalValue: 130_000,
         marginAvailable: undefined,
       },
       missingFields: ["marginAvailable"],
@@ -98,6 +102,8 @@ describe("Saxo read-only account sync", () => {
     const patch = createAccountPatchFromSaxoSnapshot(snapshot);
 
     expect(patch.cashBalance).toBe(110_000);
+    expect(patch.accountValue).toBe(120_000);
+    expect(patch.saxoTotalValue).toBe(130_000);
     expect(patch.marginAvailable).toBeUndefined();
     expect(patch.updatedAt).toBe(snapshot.fetchedAt);
   });
@@ -571,7 +577,7 @@ describe("Saxo read-only account sync", () => {
         assetType: "StockOption",
         buySell: "buy",
       }),
-    ).toBe("entry");
+    ).toBe("unknown");
     expect(
       getSaxoHistoryCandidateTarget({
         id: "covered-call-unknown-close-buy",
@@ -583,7 +589,7 @@ describe("Saxo read-only account sync", () => {
         quantity: 1,
         price: 0.79,
       }),
-    ).toBe("close");
+    ).toBe("unknown");
     expect(
       getSaxoHistoryCandidateTarget({
         id: "unknown-sell-with-pnl",
@@ -592,7 +598,7 @@ describe("Saxo read-only account sync", () => {
         buySell: "sell",
         profitLoss: 120,
       }),
-    ).toBe("entry");
+    ).toBe("unknown");
     expect(
       getSaxoHistoryCandidateTarget({
         id: "covered-call-open-sell",
@@ -600,6 +606,7 @@ describe("Saxo read-only account sync", () => {
         assetType: "StockOption",
         symbol: "NVDA/10N26C225:XCBF",
         buySell: "sell",
+        openClose: "open",
         quantity: 1,
         price: 1.83,
         profitLoss: 183,
@@ -668,7 +675,7 @@ describe("Saxo read-only account sync", () => {
       instrumentCode: "NVDA/05M26P200:XCBF",
       tradeDate: "2026-06-02",
       buySell: "buy",
-      openClose: "close",
+      openClose: "open",
       quantity: 1,
       price: 0.13,
     } as const;
@@ -677,6 +684,47 @@ describe("Saxo read-only account sync", () => {
     expect(getSaxoHistoryStableKey(first)).toBe(getSaxoHistoryStableKey(second));
     expect(getSaxoHistoryCandidateKeys(second)).toContain("trade-2");
     expect(getSaxoHistoryCandidateKeys(second)).toContain(getSaxoHistoryStableKey(first));
+  });
+
+  it("merges one explicit trade close with its matching closed-position report", () => {
+    const base: SaxoHistoryDiscoveryItem = {
+      id: "closed-sample", kind: "closed_position", accountCode: "N", accountKey: "masked-key-a",
+      assetType: "StockOption", symbol: "SAMPLE", optionType: "call", strike: 100, expiry: "2026-12-18",
+      tradeDate: "2026-08-11", quantity: -1, price: 12.5, buySell: "unknown", openClose: "close",
+    };
+    const trade: SaxoHistoryDiscoveryItem = {
+      ...base, id: "trade-sample", kind: "trade", accountId: "masked-id-a", buySell: "sell", openClose: "close",
+    };
+    const effective = createEffectiveSaxoHistoryCandidates([base, trade]);
+    expect(effective).toHaveLength(1);
+    expect(effective[0]).toMatchObject({ id: "trade-sample", buySell: "sell", openClose: "close" });
+    expect(getSaxoHistoryCandidateKeys(effective[0])).toEqual(expect.arrayContaining(["closed-sample", "trade-sample"]));
+    expect(isSaxoHistoryAutoCreatableClose(effective[0])).toBe(true);
+  });
+
+  it("uses confirmed P/N assignment as the only cross-identity merge bridge", () => {
+    const base: SaxoHistoryDiscoveryItem = {
+      id: "closed-p", kind: "closed_position", accountCode: "P", accountKey: "masked-key-p", assetType: "StockOption",
+      symbol: "SAMPLE", optionType: "call", strike: 100, expiry: "2026-12-18", tradeDate: "2026-08-11", quantity: 1, price: 12.5, buySell: "unknown", openClose: "close",
+    };
+    const mappedTrade = { ...base, id: "trade-p", kind: "trade" as const, accountKey: undefined, accountId: "masked-id-p", buySell: "sell" as const };
+    expect(createEffectiveSaxoHistoryCandidates([base, mappedTrade])).toHaveLength(1);
+    const wrongAccount = { ...mappedTrade, id: "trade-n", accountCode: "N" as const };
+    expect(createEffectiveSaxoHistoryCandidates([base, wrongAccount])).toHaveLength(2);
+    const unassigned = { ...mappedTrade, id: "trade-unassigned", accountCode: undefined };
+    expect(createEffectiveSaxoHistoryCandidates([{ ...base, accountCode: undefined }, unassigned])).toHaveLength(2);
+  });
+
+  it("keeps unknown closed-position reports audit-only and blocks ambiguous or conflicting duplicates", () => {
+    const closed: SaxoHistoryDiscoveryItem = {
+      id: "closed-only", kind: "closed_position", accountCode: "N", assetType: "StockOption", symbol: "SAMPLE",
+      optionType: "call", strike: 100, expiry: "2026-12-18", tradeDate: "2026-08-11", quantity: 1, price: 12.5, buySell: "unknown", openClose: "close",
+    };
+    expect(isSaxoHistoryAutoCreatableClose(closed)).toBe(false);
+    const conflicting = createEffectiveSaxoHistoryCandidates([closed, { ...closed, id: "trade-conflict", kind: "trade", buySell: "sell", price: 13 }]);
+    expect(conflicting.every((item) => item.duplicateResolution === "source_conflict")).toBe(true);
+    const ambiguous = createEffectiveSaxoHistoryCandidates([closed, { ...closed, id: "trade-a", kind: "trade", buySell: "sell" }, { ...closed, id: "trade-b", kind: "trade", buySell: "sell" }]);
+    expect(ambiguous.every((item) => item.duplicateResolution === "ambiguous_duplicate")).toBe(true);
   });
 
   it("classifies zero-price put close as assignment instead of buyback close", () => {
@@ -713,7 +761,7 @@ describe("Saxo read-only account sync", () => {
       assetType: "StockOption",
       quantity: 1,
       buySell: "buy",
-      openClose: "unknown",
+      openClose: "close",
       price: 0,
       tradeDate: "2026-06-12",
       currency: "USD",
@@ -796,7 +844,7 @@ describe("Saxo read-only account sync", () => {
       assetType: "StockOption",
       instrumentCode: "NVDA/10N26C225:XCBF",
       buySell: "buy",
-      openClose: "unknown",
+      openClose: "close",
       quantity: 1,
       price: 0.79,
       tradeDate: "2026-06-23",
@@ -863,7 +911,7 @@ describe("Saxo read-only account sync", () => {
       assetType: "StockOption",
       instrumentCode: "V/20X26C340:XCBF",
       buySell: "buy",
-      openClose: "unknown",
+      openClose: "open",
       quantity: 1,
       price: 24.1,
       tradeDate: "2026-06-30",
@@ -882,8 +930,8 @@ describe("Saxo read-only account sync", () => {
         { id: "synthetic-put", type: "put", side: "sell", strikeUSD: 205, premiumUSD: 7, quantity: 1, expiryDate: "2026-09-18" },
       ],
     });
-    const callEntry: SaxoHistoryDiscoveryItem = { id: "synthetic-call-entry", kind: "trade", accountCode: "N", symbol: "NVDA/18U26C205:XCBF", assetType: "StockOption", buySell: "buy", openClose: "unknown", quantity: 1, price: 8, tradeDate: "2026-07-16" };
-    const callClose: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-call-close", buySell: "sell", price: 9, tradeDate: "2026-07-17" };
+    const callEntry: SaxoHistoryDiscoveryItem = { id: "synthetic-call-entry", kind: "trade", accountCode: "N", symbol: "NVDA/18U26C205:XCBF", assetType: "StockOption", buySell: "buy", openClose: "open", quantity: 1, price: 8, tradeDate: "2026-07-16" };
+    const callClose: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-call-close", buySell: "sell", openClose: "close", price: 9, tradeDate: "2026-07-17" };
     const putEntry: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-put-entry", symbol: "NVDA/18U26P205:XCBF", buySell: "sell", price: 7 };
 
     expect(getSaxoHistoryCandidateTargetForSimulations(callEntry, [simulation])).toBe("entry");
@@ -903,7 +951,7 @@ describe("Saxo read-only account sync", () => {
       assetType: "StockOption",
       instrumentCode: "NVDA/10N26C225:XCBF",
       buySell: "buy",
-      openClose: "unknown",
+      openClose: "close",
       quantity: 1,
       price: 0.79,
       tradeDate: "2026-06-23",
@@ -921,7 +969,7 @@ describe("Saxo read-only account sync", () => {
       symbol: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
-      openClose: "unknown",
+      openClose: "close",
       quantity: 1,
       price: 0.79,
     };
@@ -942,7 +990,7 @@ describe("Saxo read-only account sync", () => {
       instrumentCode: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
-      openClose: "unknown",
+      openClose: "close",
       quantity: 1,
       price: 0.79,
       tradeDate: "2026-06-23",
@@ -971,7 +1019,7 @@ describe("Saxo read-only account sync", () => {
       symbol: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
-      openClose: "unknown",
+      openClose: "close",
       quantity: 1,
       price: 0.79,
     };
@@ -997,7 +1045,7 @@ describe("Saxo read-only account sync", () => {
       symbol: "NVDA/10N26C220:XCBF",
       assetType: "StockOption",
       buySell: "buy",
-      openClose: "unknown",
+      openClose: "close",
       quantity: 1,
       price: 0.79,
     };
@@ -1017,7 +1065,7 @@ describe("Saxo read-only account sync", () => {
       symbol: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
-      openClose: "unknown",
+      openClose: "close",
       quantity: 1,
       price: 0.79,
     };

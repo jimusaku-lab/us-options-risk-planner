@@ -3,6 +3,7 @@ import { formatLocalDate } from "@/lib/date";
 import { calculateAnnualReturnPercentByCurrency } from "./calculations";
 import { calculateDenominators, getPrimaryDenominator } from "./denominators";
 import { getEntryExecutionCostForLegJPY, getEntryExecutionCostForLegUSD } from "./optionEntryExecutions";
+import type { SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 
 const CONTRACT_SIZE = 100;
 
@@ -92,6 +93,18 @@ export function normalizeOptionCloseCompletionStatus(simulation: TradeSimulation
   if (simulation.status !== "open") return simulation;
   const completion = getOptionCloseCompletion(simulation);
   return completion.state === "complete" && completion.terminalStatus ? { ...simulation, status: completion.terminalStatus } : simulation;
+}
+
+export function repairLegacySaxoHistoryRealizedPnl(simulation: TradeSimulation, candidates: SaxoHistoryDiscoveryItem[]): TradeSimulation {
+  let changed = false;
+  const executions = getOptionCloseExecutions(simulation).map((execution) => {
+    if (execution.source !== "saxo_history" || !execution.confirmed || execution.brokerRealizedPnlJPY === undefined) return execution;
+    const related = candidates.find((candidate) => [candidate.id, ...(candidate.relatedCandidateKeys ?? [])].includes(execution.sourceCandidateId ?? "") || [candidate.id, ...(candidate.relatedCandidateKeys ?? [])].includes(execution.sourceTradeId ?? ""));
+    if (!related || related.accountCode !== "P" || related.accountCurrency !== "JPY" || related.profitLossAccountCurrency === undefined || related.bookedAmountUSD === undefined || execution.brokerRealizedPnlJPY !== related.bookedAmountUSD || execution.memo?.includes("PnLAccountCurrency修復済み")) return execution;
+    changed = true;
+    return { ...execution, brokerRealizedPnlJPY: related.profitLossAccountCurrency, memo: `${execution.memo ?? ""}${execution.memo ? " " : ""}Saxo履歴のPnLAccountCurrency修復済み。` };
+  });
+  return changed ? { ...simulation, optionCloseExecutions: executions } : simulation;
 }
 
 export function validateSaxoHistoryCloseExecution(
