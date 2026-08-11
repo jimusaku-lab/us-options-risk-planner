@@ -1,8 +1,7 @@
 import type { TradeSimulation, WorkflowTask } from "@/types/domain";
 import { getLongOptionLegs, getShortCallLegs, getShortOptionLegs, getShortPutLegs } from "./calculations";
 import {
-  hasConfirmedBuybackCloseExecution,
-  hasConfirmedExpiredCloseExecution,
+  getOptionCloseCompletion,
   hasUnconfirmedCloseExecutionDraft,
 } from "./optionCloseExecutions";
 import { hasUnconfirmedOptionEntryExecutions } from "./optionEntryExecutions";
@@ -14,6 +13,7 @@ function task(simulation: TradeSimulation, task: Omit<WorkflowTask, "simulationI
 export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
   const shortLegs = getShortOptionLegs(simulation);
   const longLegs = getLongOptionLegs(simulation);
+  const closeCompletion = getOptionCloseCompletion(simulation);
   const tasks: WorkflowTask[] = [];
 
   if (simulation.status === "planned") {
@@ -50,29 +50,17 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
           focusField: "brokerBookedAmountJPY",
         }),
       );
-    } else if (hasConfirmedBuybackCloseExecution(simulation)) {
+    } else if (closeCompletion.state === "partial") {
       tasks.push(
         task(simulation, {
-          id: `${simulation.id}-mark-closed`,
+          id: `${simulation.id}-partial-close`,
           type: "enter_close_execution",
           severity: "warning",
-          label: "決済済みに変更",
-          detail: "決済実績が入力されています。建玉状態を決済済みに変更できます。",
+          label: "一部決済済み",
+          detail: `残り${closeCompletion.remainingContracts}枚の決済実績を確認してください。`,
           actionLabel: "決済実績へ進む",
           targetAnchor: "option-close-executions",
           focusField: "broker-realized-pnl-jpy",
-        }),
-      );
-    } else if (hasConfirmedExpiredCloseExecution(simulation)) {
-      tasks.push(
-        task(simulation, {
-          id: `${simulation.id}-mark-expired`,
-          type: "confirm_expiry",
-          severity: "warning",
-          label: "満期終了に変更",
-          detail: "満期終了の記録が入力されています。建玉状態を満期終了に変更できます。",
-          actionLabel: "満期終了履歴へ",
-          targetAnchor: "option-close-executions",
         }),
       );
     } else if (hasUnconfirmedCloseExecutionDraft(simulation)) {
@@ -113,7 +101,7 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
   }
 
   if (simulation.status === "closed") {
-    if (!hasConfirmedBuybackCloseExecution(simulation)) {
+    if (closeCompletion.state !== "complete" || closeCompletion.terminalStatus !== "closed") {
       return [
         task(simulation, {
           id: `${simulation.id}-enter-close`,
@@ -131,7 +119,7 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
   }
 
   if (simulation.status === "expired") {
-    if (!hasConfirmedExpiredCloseExecution(simulation)) {
+    if (closeCompletion.state !== "complete" || closeCompletion.terminalStatus !== "expired") {
       return [
         task(simulation, {
           id: `${simulation.id}-confirm-expiry`,

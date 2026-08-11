@@ -3,6 +3,7 @@ import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import type { TradeSimulation } from "@/types/domain";
 import { calculatePendingAccountCashEffects } from "./accountCashEffects";
+import { sanitizeSaxoHistoryCloseExecutions } from "./optionCloseExecutions";
 
 const baseAccountInputs: AccountInputs = {
   P: {
@@ -71,6 +72,13 @@ function createClosedPutSimulation(overrides?: Partial<TradeSimulation>): TradeS
 }
 
 describe("account cash effects", () => {
+  it("does not duplicate a close cash effect when a legacy open record is normalized on reload", () => {
+    const normalized = sanitizeSaxoHistoryCloseExecutions(createClosedPutSimulation({ status: "open" }));
+    expect(normalized.status).toBe("closed");
+    expect(normalized.optionCloseExecutions).toHaveLength(1);
+    expect(calculatePendingAccountCashEffects([normalized], baseAccountInputs)).toHaveLength(1);
+    expect(calculatePendingAccountCashEffects([sanitizeSaxoHistoryCloseExecutions(normalized)], baseAccountInputs)).toHaveLength(1);
+  });
   it("uses the P account broker booked amount for cash balance reflection, not realized P/L", () => {
     const [effect] = calculatePendingAccountCashEffects([createClosedPutSimulation()], baseAccountInputs);
 

@@ -3,6 +3,7 @@ import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import type { TradeSimulation } from "@/types/domain";
 import {
   deriveSaxoHistoryRealizedPnlAutofill,
+  getOptionCloseCompletion,
   sanitizeSaxoHistoryCloseExecutions,
   validateSaxoHistoryCloseExecution,
 } from "./optionCloseExecutions";
@@ -33,6 +34,23 @@ function openPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulatio
 }
 
 describe("Saxo history close execution validation", () => {
+  it("closes only after every leg is fully confirmed and is idempotent on reload", () => {
+    const partial = openPutSimulation({ optionLegs: [{ ...putLeg, id: "two", quantity: 2 }], optionCloseExecutions: [{ id: "first", legId: "two", closeKind: "buyback", confirmed: true, closeDate: "2026-06-02", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
+    expect(getOptionCloseCompletion(partial)).toMatchObject({ state: "partial", remainingContracts: 1 });
+    const full = { ...partial, optionCloseExecutions: [...partial.optionCloseExecutions!, { id: "second", legId: "two", closeKind: "buyback" as const, confirmed: true, closeDate: "2026-06-03", contracts: 1, settlementCurrency: "JPY" as const, source: "manual" as const }] };
+    expect(getOptionCloseCompletion(full)).toMatchObject({ state: "complete", terminalStatus: "closed" });
+    const normalized = sanitizeSaxoHistoryCloseExecutions(full);
+    expect(normalized.status).toBe("closed");
+    expect(sanitizeSaxoHistoryCloseExecutions(normalized)).toBe(normalized);
+  });
+
+  it("requires each leg and rejects over-close while distinguishing expiry and mixed closes", () => {
+    const twoLegs = openPutSimulation({ optionLegs: [{ ...putLeg, id: "a", quantity: 1 }, { ...putLeg, id: "b", type: "call", quantity: 1 }], optionCloseExecutions: [{ id: "a-close", legId: "a", closeKind: "expired", confirmed: true, closeDate: "2026-06-05", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
+    expect(getOptionCloseCompletion(twoLegs)).toMatchObject({ state: "partial", remainingContracts: 1 });
+    expect(getOptionCloseCompletion({ ...twoLegs, optionCloseExecutions: [{ ...twoLegs.optionCloseExecutions![0], contracts: 2 }] })).toMatchObject({ state: "invalid" });
+    const completeExpired = openPutSimulation({ optionCloseExecutions: [{ id: "expire", legId: "put-p200", closeKind: "expired", confirmed: true, closeDate: "2026-06-05", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
+    expect(getOptionCloseCompletion(completeExpired)).toMatchObject({ state: "complete", terminalStatus: "expired" });
+  });
   it("autofills deterministic N account short put close P/L from the shared calculation", () => {
     const simulation = openPutSimulation({
       accountCode: "N",

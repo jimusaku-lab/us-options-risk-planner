@@ -71,13 +71,14 @@ describe("SimulationEditor", () => {
 
     await waitFor(() => expect(screen.getByLabelText("対象脚")).toHaveValue("saxo-visa-c340-leg"));
     expect(screen.queryByText("対象脚未選択")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "確認して正式保存する" }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Saxo取引履歴から補完" }));
 
     await waitFor(() => expect(screen.getByDisplayValue("-396166")).toBeInTheDocument());
     expect(screen.getByDisplayValue("-395797")).toBeInTheDocument();
     expect(screen.getByDisplayValue("-4288")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("164.23105")).toBeInTheDocument();
+    expect(screen.getAllByDisplayValue("164.23105").length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText(/不足項目: 記帳額JPY/)).not.toBeInTheDocument();
   });
 
@@ -127,7 +128,7 @@ describe("SimulationEditor", () => {
     await waitFor(() => expect(screen.getByDisplayValue("-396166")).toBeInTheDocument());
     expect(screen.getByDisplayValue("-395797")).toBeInTheDocument();
     expect(screen.getByDisplayValue("-4288")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("164.23105")).toBeInTheDocument();
+    expect(screen.getAllByDisplayValue("164.23105").length).toBeGreaterThanOrEqual(2);
   });
 
   it("backfills a missing N-account fee as a standard value without a missing-fee warning", async () => {
@@ -183,6 +184,37 @@ describe("SimulationEditor", () => {
     expect(screen.queryByRole("button", { name: "下書きを破棄" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "建玉ダッシュボードで確認" }));
     expect(onOpenDashboard).toHaveBeenCalledOnce();
+  });
+
+  it.each(["call", "put"] as const)("shows an anonymous long-%s Saxo close target in the same UI and save set", (type) => {
+    const simulation = buildSampleLongOptionCloseSimulation(type);
+    render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} />);
+    expect(screen.getAllByText(`${type === "call" ? "C" : "P"}買い 100 / 2026-12-18 / 1枚`).length).toBeGreaterThan(0);
+    expect(screen.queryByText("対象脚未選択")).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText("対象脚").some((select) => (select as HTMLSelectElement).value === "sample-long-leg")).toBe(true);
+    expect(screen.getByRole("button", { name: "確認して正式保存" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "この決済実績を確認する" })).not.toBeInTheDocument();
+  });
+
+  it("confirms a full close and changes status atomically without a legacy status CTA", () => {
+    const onChange = vi.fn();
+    const simulation = buildSampleLongOptionCloseSimulation("call");
+    render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: "確認して正式保存" }));
+    const next = onChange.mock.calls[0][0] as TradeSimulation;
+    expect(next.status).toBe("closed");
+    expect(next.optionCloseExecutions?.[0]).toMatchObject({ confirmed: true, confirmationStatus: "confirmed" });
+    expect(screen.queryByRole("button", { name: "決済済みに変更" })).not.toBeInTheDocument();
+  });
+
+  it("blocks an invalid Saxo history close leg before it can change confirmation state", () => {
+    const onChange = vi.fn();
+    render(<SimulationEditor simulation={buildSampleLongOptionCloseSimulation("call", "missing-leg")} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={onChange} />);
+    expect(screen.getByText("対象脚が現在の建玉から見つかりません。正式保存できません。")).toBeInTheDocument();
+    const saveButton = screen.getByRole("button", { name: "確認して正式保存" });
+    expect(saveButton).toBeDisabled();
+    fireEvent.click(saveButton);
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
 
@@ -279,5 +311,16 @@ function buildVisaLongCallSimulation(patch: Partial<TradeSimulation> = {}): Trad
       saxoInstrumentCode: "V/20X26C340:XCBF",
     },
     ...patch,
+  };
+}
+
+function buildSampleLongOptionCloseSimulation(type: "call" | "put", executionLegId = "sample-long-leg"): TradeSimulation {
+  const simulationId = "sample-long-option";
+  return {
+    id: simulationId, status: "open", name: "SAMPLE", ticker: "SAMPLE", strategyType: type === "call" ? "long_call" : "long_put", currentPriceUSD: 100, fxRateJPY: 150, accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", entryDate: "2026-08-01", expiryDate: "2026-12-18", dte: 139, referenceFxRateJPY: 150, stockPosition: null,
+    optionLegs: [{ id: "sample-long-leg", type, side: "buy", strikeUSD: 100, premiumUSD: 10, quantity: 1, expiryDate: "2026-12-18", isCovered: false, assignmentPolicy: "unknown" }],
+    optionEntryExecutions: [{ id: "sample-entry", legId: "sample-long-leg", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 10, commissionUSD: 1, settlementCurrency: "USD", inputMode: "USD_EXECUTION_CALC", source: "manual", confirmed: true }],
+    optionCloseExecutions: [{ id: "sample-close", legId: executionLegId, closeDate: "2026-08-10", contracts: 1, closePriceUSD: 12, commissionUSD: 1, settlementCurrency: "USD", source: "saxo_history", sourceCandidateId: "anonymous-candidate", sourceTradeId: "anonymous-trade", targetPositionId: simulationId, confirmationStatus: "pending", confirmed: false }],
+    brokerMarginJPY: 0, brokerMarginUSD: 0, marginBufferMultiplier: 1, marginUsagePercent: 0, availableCashJPY: 0, denominatorMode: "custom", taxProfileId: "japan_derivative_separate_tax_user_confirm", nisaExpectedAnnualReturnPct: 8, brokerCommissionUSD: 1,
   };
 }

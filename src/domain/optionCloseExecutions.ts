@@ -56,6 +56,44 @@ export type SaxoHistoryCloseExecutionValidation = {
   reason?: string;
 };
 
+export type OptionCloseCompletion = {
+  state: "none" | "partial" | "complete" | "invalid";
+  terminalStatus?: "closed" | "expired";
+  remainingContracts: number;
+  reason?: string;
+};
+
+/** Determines terminal status only from valid confirmed quantities per option leg. */
+export function getOptionCloseCompletion(simulation: TradeSimulation): OptionCloseCompletion {
+  const legs = simulation.optionLegs;
+  if (legs.length === 0 || legs.some((leg) => !Number.isFinite(leg.quantity) || leg.quantity <= 0)) {
+    return { state: "invalid", remainingContracts: 0, reason: "対象脚または建玉数量が不正です。" };
+  }
+  const closedByLeg = new Map<string, number>();
+  const confirmed = getOptionCloseExecutions(simulation).filter((execution) => execution.confirmed);
+  for (const execution of confirmed) {
+    if (execution.confirmationStatus === "invalid") return { state: "invalid", remainingContracts: 0, reason: "無効な確認済み決済実績があります。" };
+    const leg = legs.find((item) => item.id === execution.legId);
+    if (!leg || !Number.isFinite(execution.contracts) || execution.contracts <= 0) {
+      return { state: "invalid", remainingContracts: 0, reason: "確認済み決済実績の対象脚または数量が不正です。" };
+    }
+    const next = (closedByLeg.get(leg.id) ?? 0) + execution.contracts;
+    if (next > leg.quantity) return { state: "invalid", remainingContracts: 0, reason: "確認済み決済実績が建玉数量を超えています。" };
+    closedByLeg.set(leg.id, next);
+  }
+  const remainingContracts = legs.reduce((total, leg) => total + Math.max(0, leg.quantity - (closedByLeg.get(leg.id) ?? 0)), 0);
+  if (remainingContracts === legs.reduce((total, leg) => total + leg.quantity, 0)) return { state: "none", remainingContracts };
+  if (remainingContracts > 0) return { state: "partial", remainingContracts };
+  const terminalStatus = confirmed.length > 0 && confirmed.every((execution) => execution.closeKind === "expired") ? "expired" : "closed";
+  return { state: "complete", terminalStatus, remainingContracts: 0 };
+}
+
+export function normalizeOptionCloseCompletionStatus(simulation: TradeSimulation): TradeSimulation {
+  if (simulation.status !== "open") return simulation;
+  const completion = getOptionCloseCompletion(simulation);
+  return completion.state === "complete" && completion.terminalStatus ? { ...simulation, status: completion.terminalStatus } : simulation;
+}
+
 export function validateSaxoHistoryCloseExecution(
   simulation: TradeSimulation,
   execution: OptionCloseExecution,
@@ -103,7 +141,6 @@ export function validateSaxoHistoryCloseExecution(
 
 export function sanitizeSaxoHistoryCloseExecutions(simulation: TradeSimulation): TradeSimulation {
   const executions = simulation.optionCloseExecutions ?? [];
-  if (executions.length === 0) return simulation;
   let changed = false;
   const next = executions.flatMap((execution) => {
     const validation = validateSaxoHistoryCloseExecution(simulation, execution);
@@ -123,7 +160,7 @@ export function sanitizeSaxoHistoryCloseExecutions(simulation: TradeSimulation):
     }
     return [execution];
   });
-  return changed ? { ...simulation, optionCloseExecutions: next } : simulation;
+  return normalizeOptionCloseCompletionStatus(changed ? { ...simulation, optionCloseExecutions: next } : simulation);
 }
 
 function isStaleSaxoHistoryPlaceholderCloseExecution(execution: OptionCloseExecution): boolean {

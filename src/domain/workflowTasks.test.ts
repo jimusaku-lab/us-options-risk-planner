@@ -121,7 +121,7 @@ describe("workflow tasks", () => {
     expect(task.focusField).toBe("close-decision-call-long-call");
   });
 
-  it("prioritizes marking closed when a buyback close execution is valid", () => {
+  it("does not offer a second status-change task when a full close is confirmed", () => {
     const sim = createOpenSimulation({
       optionCloseExecutions: [
         {
@@ -139,7 +139,7 @@ describe("workflow tasks", () => {
       ],
     });
 
-    expect(getPrimaryWorkflowTask(sim).label).toBe("決済済みに変更");
+    expect(getPrimaryWorkflowTask(sim).label).not.toBe("決済済みに変更");
   });
 
   it("keeps buyback close execution drafts as confirmation tasks", () => {
@@ -163,7 +163,7 @@ describe("workflow tasks", () => {
     expect(getPrimaryWorkflowTask(sim).label).toBe("決済実績を確認");
   });
 
-  it("shows marking expired when an expiry execution is valid", () => {
+  it("shows the remaining quantity rather than a second expiry status-change task", () => {
     const sim = createOpenSimulation({
       optionCloseExecutions: [
         {
@@ -179,7 +179,7 @@ describe("workflow tasks", () => {
       ],
     });
 
-    expect(getPrimaryWorkflowTask(sim).label).toBe("満期終了に変更");
+    expect(getPrimaryWorkflowTask(sim).label).toBe("一部決済済み");
   });
 
   it("asks for stock acquisition when an assigned short put has no stock acquisition", () => {
