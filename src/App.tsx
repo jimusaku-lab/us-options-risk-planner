@@ -55,6 +55,7 @@ import {
   resolveSaxoHistoryUnderlyingSymbol,
   resolveSaxoHistoryOptionLegMatch,
   resolveSaxoPositionSymbol,
+  resolveSaxoPositionSymbolResolution,
   type SaxoSyntheticForwardPair,
   type SaxoApiOrderSnapshot,
   type SaxoApiPositionSnapshot,
@@ -408,6 +409,10 @@ export default function App() {
     }
     if (position.kind !== "option" || (position.optionType !== "put" && position.optionType !== "call")) {
       setQuoteStatus("現在は米国株オプション建玉だけを建玉入力へ反映できます。株式や種別不明の建玉は手入力で確認してください。");
+      return;
+    }
+    if (resolveSaxoPositionSymbolResolution(position, simulations).sourceConflict) {
+      setQuoteStatus("Saxoの銘柄取得元が競合しているため、自動下書きは作成しません。Saxo画面で銘柄を確認してください。");
       return;
     }
     const today = formatLocalDate(new Date());

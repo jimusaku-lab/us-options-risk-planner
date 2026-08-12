@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { createEffectiveHistoryEndpoints, ReflectionPendingSummary, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
+import { createEffectiveHistoryEndpoints, getDisplayPositionMissingFields, ReflectionPendingSummary, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
 import type { ReflectionSummary } from "./SaxoReadOnlyPanel";
 import type { SaxoHistoryDiscoveryItem, SaxoSyntheticForwardHold, SaxoSyntheticForwardPair } from "./saxoAccountSync";
 
@@ -86,4 +86,8 @@ it("keeps a merged effective close candidate intact for the history display path
   );
   expect(endpoints).toHaveLength(1);
   expect(endpoints[0].items).toEqual([merged]);
+});
+
+it("does not show symbol as missing when an underlying ticker has been resolved", () => {
+  expect(getDisplayPositionMissingFields({ id: "anonymous", accountKey: "masked", accountAssignment: "P", kind: "option", side: "long", underlyingSymbol: "ABC", missingFields: ["symbol", "currency"], fetchedAt: "2026-08-12T00:00:00.000Z" }, "ABC")).toEqual(["currency"]);
 });

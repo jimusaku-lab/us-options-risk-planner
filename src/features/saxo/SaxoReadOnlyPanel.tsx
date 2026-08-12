@@ -43,6 +43,7 @@ import {
   resolveSaxoHistoryOptionLegMatch,
   resolveSaxoHistoryUnderlyingSymbol,
   resolveSaxoPositionSymbol,
+  resolveSaxoPositionSymbolResolution,
   type SaxoAccountMapping,
   type SaxoApiAccount,
   type SaxoApiAccountSnapshot,
@@ -1980,7 +1981,7 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
     <div ref={ref} className={`rounded-md border p-3 ${summary.hasPending ? "border-teal-200 bg-teal-50" : "border-slate-200 bg-slate-50"}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-bold text-slate-950">{summary.hasPending ? "反映待ちがあります" : "追加で処理する候補はありません"}</h3>
-        <span className="text-xs font-semibold text-slate-600">処理が必要 {summary.requiredActionCount}件</span>
+        <span className="text-xs font-semibold text-slate-600">口座・履歴を含む全体の反映待ち {summary.requiredActionCount}件</span>
       </div>
       {summary.nextActionDetail ? (
         <div
@@ -2492,15 +2493,14 @@ function PositionsPreview({
   const linkedRegularRows = standaloneRegularRows.filter((row) => row.position && resolveLinkedSimulation(row).status === "linked");
   const actionRequiredRegularRows = standaloneRegularRows.filter((row) => {
     if (!row.position) return false;
-    return resolveLinkedSimulation(row).status !== "linked";
+    const linked = resolveLinkedSimulation(row).status;
+    const symbolConflict = resolveSaxoPositionSymbolResolution(row.position, simulations).sourceConflict;
+    return linked === "unlinked" && (row.status === "app_missing" || row.status === "unknown" || row.status === "quantity_diff" || row.status === "price_diff" || symbolConflict);
   });
-  const savedSyntheticPairIds = new Set(syntheticForwardPairs.filter((pair) => {
-    const evidence = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems);
-    const existing = findSaxoSyntheticForwardSimulationForPair(pair, simulations, evidence.parentHistory?.orderId);
-    return Boolean(existing && isSyntheticForwardEntrySaved(existing));
-  }).map((pair) => pair.id));
-  const actionRequiredRows = actionRequiredRegularRows.length + syntheticForwardPairs.filter((pair) => !savedSyntheticPairIds.has(pair.id)).length + syntheticForwardHolds.length + pendingStockTransferRows.length;
-  const confirmedCurrentHoldingRows = linkedRegularRows.length + recordedStockTransferRows.length;
+  const existingSyntheticPairIds = new Set(syntheticForwardPairs.filter((pair) => Boolean(findSaxoSyntheticForwardSimulationForPair(pair, simulations, resolveSaxoSyntheticForwardFillEvidence(pair, historyItems).parentHistory?.orderId))).map((pair) => pair.id));
+  const displaySyntheticForwardPairs = syntheticForwardPairs.filter((pair) => !existingSyntheticPairIds.has(pair.id));
+  const actionRequiredRows = actionRequiredRegularRows.length + displaySyntheticForwardPairs.length + syntheticForwardHolds.length + pendingStockTransferRows.length;
+  const confirmedCurrentHoldingRows = linkedRegularRows.length + recordedStockTransferRows.length + existingSyntheticPairIds.size;
   const draft = draftPosition ? createSaxoPositionDraftSummary(draftPosition, simulations) : null;
   useEffect(() => {
     if (!onRecoverSyntheticForwardDraft) return;
@@ -2542,7 +2542,7 @@ function PositionsPreview({
           {actionRequiredRows > 0
             ? `今回処理が必要なのは、Saxoで約定済みまたは未反映の建玉${actionRequiredRows}件です。`
             : "今回追加で反映が必要なSaxo建玉はありません。"}
-          {syntheticForwardPairs.length > 0
+          {displaySyntheticForwardPairs.length > 0
             ? " C買い/P売りのペアは、個別には反映せず「2脚をシンセティックとして下書き反映」から3-Aへ進んでください。"
             : syntheticForwardHolds.length > 0
               ? " C買い/P売りの候補は原資産照合を保留しています。単脚の下書き反映はできません。Saxo接続を確認して再取得してください。"
@@ -2568,7 +2568,7 @@ function PositionsPreview({
         </p>
       ) : null}
       <div className="mt-3 overflow-x-auto">
-          {standaloneRegularRows.length === 0 && syntheticForwardPairs.length === 0 && syntheticForwardHolds.length === 0 ? (
+          {actionRequiredRegularRows.length === 0 && displaySyntheticForwardPairs.length === 0 && syntheticForwardHolds.length === 0 ? (
           <p className="text-sm text-slate-500">
             {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : "通常のオプション建玉候補はありません。N口座の現物株確認は下の専用カードで確認してください。"}
           </p>
@@ -2586,14 +2586,14 @@ function PositionsPreview({
               </tr>
             </thead>
             <tbody>
-              {syntheticForwardPairs.map((pair) => {
+              {displaySyntheticForwardPairs.map((pair) => {
                 const evidence = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems); const existingSynthetic = findSaxoSyntheticForwardSimulationForPair(pair, simulations, evidence.parentHistory?.orderId); const drafted = draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id); const saved = Boolean(existingSynthetic && isSyntheticForwardEntrySaved(existingSynthetic));
                 return <SyntheticForwardPairRow key={pair.id} pair={pair} filled={evidence.status === "filled"} integrated={Boolean(existingSynthetic)} saved={saved} drafted={drafted} recoveryRequired={drafted && !existingSynthetic} onCreateDraft={onCreateSyntheticForwardDraft} onOpenDashboard={existingSynthetic ? () => onOpenSyntheticForwardDashboard?.(existingSynthetic.id) : undefined} />;
               })}
               {syntheticForwardHolds.map((hold) => (
                 <SyntheticForwardHoldRow key={hold.id} hold={hold} />
               ))}
-              {standaloneRegularRows.map((row) => (
+              {actionRequiredRegularRows.map((row) => (
                 <PositionRow
                   key={row.id}
                   row={row}
@@ -2614,6 +2614,7 @@ function PositionsPreview({
                   actionError={row.position ? positionActionErrors[row.position.id] : undefined}
                   actionNotice={row.position ? positionActionNotices[row.position.id] : undefined}
                   historyMatchCount={row.position ? findEntryHistoryMatches(row.position, historyItems).length : 0}
+                  simulations={simulations}
                 />
               ))}
             </tbody>
@@ -3645,6 +3646,7 @@ function PositionRow({
   actionError,
   actionNotice,
   historyMatchCount,
+  simulations,
 }: {
   row: SaxoPositionReconciliationRow;
   linkedResolution: LinkedSimulationResolution;
@@ -3664,10 +3666,13 @@ function PositionRow({
   actionError?: string;
   actionNotice?: string;
   historyMatchCount: number;
+  simulations: TradeSimulation[];
 }) {
   const position = row.position;
+  const symbolResolution = position ? resolveSaxoPositionSymbolResolution(position, simulations) : { sourceConflict: false };
+  const resolvedSymbol = symbolResolution.symbol;
   const label = position
-    ? formatPositionLabel(position)
+    ? formatPositionLabel(position, simulations)
     : row.leg && row.simulation
       ? `${row.simulation.ticker} ${row.leg.type.toUpperCase()} ${row.leg.strikeUSD} / ${row.leg.expiryDate}`
       : "判定不可";
@@ -3678,8 +3683,8 @@ function PositionRow({
   const linkedNeedsEntryConfirmation = linkedResolution.status === "linked" ? needsOptionEntryConfirmation(linkedResolution.simulation) : true;
   const draftSimulationName = linkedResolution.status === "draft" && linkedResolution.simulation ? linkedResolution.simulation.name : undefined;
   const hasDraftBody = linkedResolution.status === "draft" && Boolean(linkedResolution.simulation);
-  const canCreateDraft = Boolean(position && position.accountAssignment === "P" || position && position.accountAssignment === "N");
-  const createDraftLabel = isNewCandidate ? "建玉入力へ下書き反映" : "新規建玉として下書き作成";
+  const canCreateDraft = Boolean((position?.accountAssignment === "P" || position?.accountAssignment === "N") && !symbolResolution.sourceConflict && resolvedSymbol);
+  const createDraftLabel = "確認して建玉入力へ";
   const isPlannedCoveredCallLink = Boolean(
     position &&
       row.simulation &&
@@ -3698,6 +3703,7 @@ function PositionRow({
   const saxoActualDiffs = position && row.simulation && row.leg ? getSaxoPositionPlannedDiffs(position, row.simulation, row.leg) : [];
   const currentPositionInfo = position
     ? [
+        ["銘柄", resolvedSymbol ?? "未取得"],
         ["口座割当", formatPositionAccount(position)],
         ["数量", formatMaybeValue(position.quantity)],
         ["売買方向", position.side],
@@ -3711,6 +3717,7 @@ function PositionRow({
     : [];
   const inputUsableInfo = position
     ? [
+        ["銘柄", resolvedSymbol ?? "未取得"],
         ["口座区分", formatPositionAccount(position)],
         ["数量", formatMaybeValue(position.quantity)],
         ["売買方向", position.side],
@@ -3724,7 +3731,22 @@ function PositionRow({
     position?.accountAssignment === "N"
       ? ["プレミアムUSD", "取引費用USD", "USD実績値"]
       : ["記帳額JPY", "プレミアムJPY", "取引費用JPY", "為替レート"];
-  const actionButtons = position ? (
+  const isDirectNewCandidate = Boolean(position && isNewCandidate && linkStatus === "unlinked" && !isReviewCandidate && !symbolResolution.sourceConflict);
+  const actionButtons = position ? isDirectNewCandidate ? (
+    <div className="flex min-w-[260px] flex-wrap items-start gap-1">
+      <button className="inline-flex items-center gap-1 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => onCreateDraft(position)} disabled={drafted || !canCreateDraft}>
+        <FilePlus2 size={13} />
+        {drafted ? "下書き反映済み" : "確認して建玉入力へ"}
+      </button>
+      <details className="rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600">
+        <summary className="cursor-pointer font-semibold">取得根拠・その他</summary>
+        <div className="mt-2 flex flex-wrap gap-1">
+          <button className="rounded border border-slate-300 px-2 py-1 font-bold text-slate-700" onClick={() => onToggleDetails(position.id)}>取得内容を見る</button>
+          <button className="rounded border border-slate-300 px-2 py-1 font-bold text-slate-700" onClick={() => onIgnore(position)}>今回は無視</button>
+        </div>
+      </details>
+    </div>
+  ) : (
     <div className="flex min-w-[260px] flex-wrap gap-1">
       {linkStatus === "linked" ? (
         <>
@@ -4024,7 +4046,7 @@ function PositionRow({
             <div className="mt-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-600">
               <div className="font-bold text-slate-800">未取得項目の意味</div>
               <p className="mt-1">
-                {position.missingFields.length > 0 ? position.missingFields.join("、") : "未取得項目はありません。"}
+                {getDisplayPositionMissingFields(position, resolvedSymbol).length > 0 ? getDisplayPositionMissingFields(position, resolvedSymbol).join("、") : "未取得項目はありません。"}
               </p>
               <p className="mt-1">
                 `現在値 未取得`、`評価損益 未取得`、`Contract size 未取得` などは、Saxo現在建玉APIでは未取得という意味です。建玉入力に最低限必要な項目ではありません。反対売買判断や評価損益確認には、別途価格取得またはSaxo画面確認が必要です。
@@ -4059,14 +4081,19 @@ function DraftRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatPositionLabel(position: SaxoApiPositionSnapshot): string {
+function formatPositionLabel(position: SaxoApiPositionSnapshot, simulations: TradeSimulation[] = []): string {
+  const symbol = resolveSaxoPositionSymbol(position, simulations) ?? "未取得";
   if (position.kind === "option") {
-    return `${position.symbol ?? "未取得"} ${position.optionType === "call" ? "C" : position.optionType === "put" ? "P" : "?"} ${position.strike ?? "?"} / ${position.expiry ?? "満期未取得"} / ${position.side}`;
+    return `${symbol} ${position.optionType === "call" ? "C" : position.optionType === "put" ? "P" : "?"} ${position.strike ?? "?"} / ${position.expiry ?? "満期未取得"} / ${position.side}`;
   }
   if (position.kind === "stock") {
-    return `${position.symbol ?? "未取得"} / 株式`;
+    return `${symbol} / 株式`;
   }
-  return `${position.symbol ?? "未取得"} / ${position.assetType ?? "種別未取得"}`;
+  return `${symbol} / ${position.assetType ?? "種別未取得"}`;
+}
+
+export function getDisplayPositionMissingFields(position: SaxoApiPositionSnapshot, resolvedSymbol = resolveSaxoPositionSymbol(position)): string[] {
+  return resolvedSymbol ? position.missingFields.filter((field) => field !== "symbol") : position.missingFields;
 }
 
 function getSaxoStockShares(position: SaxoApiPositionSnapshot): number {
@@ -4799,7 +4826,7 @@ function createReflectionSummary({
   const hasNewPositionCandidates = newPositions > 0;
   const positionNeedsAction = newPositions > 0 || unknownPositions > 0 || pendingStockTransferCandidateRows.length > 0;
   const positionHasOptionalReview = matchedPositions > 0 || recordedStockTransferCandidateRows.length > 0 || positionRows.length > 0;
-  const positionActionable = positionNeedsAction || positionHasOptionalReview;
+  const positionActionable = positionNeedsAction;
   const historyIsSupplemental = positionNeedsAction && historyItems.length > 0;
   const accountActionCount = accountLines.filter((line) => line.actionable).length;
   const positionRequiredCount = newPositions + unknownPositions + pendingStockTransferCandidateRows.length;
@@ -4827,9 +4854,7 @@ function createReflectionSummary({
         ? "建玉候補を確認して反映"
         : positionNeedsAction
           ? "建玉照合を確認"
-          : positionHasOptionalReview
-            ? "照合済みの建玉を確認"
-            : "建玉照合を確認",
+          : "建玉照合を確認",
       tone: hasNewPositionCandidates ? "primary" : positionNeedsAction ? undefined : "muted",
     },
     orderLine: {

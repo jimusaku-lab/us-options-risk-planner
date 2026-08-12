@@ -893,19 +893,23 @@ function hasOptionShapeDiff(position: SaxoApiPositionSnapshot, leg: OptionLeg): 
   return false;
 }
 
-export function resolveSaxoPositionSymbol(position: SaxoApiPositionSnapshot, simulations: TradeSimulation[] = []): string | undefined {
+export type SaxoPositionSymbolResolution = { symbol?: string; sourceConflict: boolean };
+
+export function resolveSaxoPositionSymbolResolution(position: SaxoApiPositionSnapshot, simulations: TradeSimulation[] = []): SaxoPositionSymbolResolution {
   const directText = position.symbol?.trim() ?? "";
   const directTicker = directText ? parseLikelyTicker(directText) : undefined;
-  if (directTicker) return directTicker;
   const direct = normalizeSymbol(directText);
-  if (direct && /^[A-Z][A-Z0-9.]{0,9}$/.test(direct)) return direct;
+  const normalizedDirect = directTicker ?? (direct && /^[A-Z][A-Z0-9.]{0,9}$/.test(direct) ? direct : undefined);
 
   const textCandidates = [position.underlyingSymbol, position.instrumentCode, position.underlyingName, position.displayName].filter(
     (value): value is string => Boolean(value?.trim()),
   );
+  const resolvedTextCandidates = textCandidates.map((candidate) => parseLikelyTicker(candidate)).filter((value): value is string => Boolean(value));
+  if (normalizedDirect && resolvedTextCandidates.some((candidate) => candidate !== normalizedDirect)) return { sourceConflict: true };
+  if (normalizedDirect) return { symbol: normalizedDirect, sourceConflict: false };
   for (const candidate of textCandidates) {
     const parsed = parseLikelyTicker(candidate);
-    if (parsed) return parsed;
+    if (parsed) return { symbol: parsed, sourceConflict: false };
   }
 
   const matchingTickers = new Set(
@@ -916,7 +920,11 @@ export function resolveSaxoPositionSymbol(position: SaxoApiPositionSnapshot, sim
       .filter(Boolean),
   );
 
-  return matchingTickers.size === 1 ? [...matchingTickers][0] : undefined;
+  return matchingTickers.size === 1 ? { symbol: [...matchingTickers][0], sourceConflict: false } : { sourceConflict: matchingTickers.size > 1 };
+}
+
+export function resolveSaxoPositionSymbol(position: SaxoApiPositionSnapshot, simulations: TradeSimulation[] = []): string | undefined {
+  return resolveSaxoPositionSymbolResolution(position, simulations).symbol;
 }
 
 export function createSaxoPositionDraftSummary(position: SaxoApiPositionSnapshot, simulations: TradeSimulation[] = []): {

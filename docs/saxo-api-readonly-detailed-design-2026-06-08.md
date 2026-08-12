@@ -9094,3 +9094,84 @@ Saxo公式のHistorical Report Data ClosedPosition schemaでは `PnLAccountCurre
 2. effective candidateのIDがtrade側であっても、closed-position由来のdirect `PnLAccountCurrency`、および両sourceの`relatedCandidateKeys`を保持する。元endpointのID一致だけでclosed-positionを脱落させない。
 3. P/JPYの損益表示はAccountCurrency=JPYかつdirect `profitLossAccountCurrency`だけを用いる。欠損なら未取得と表示し、`BookedAmountUSD`、`profitLossBase`、推定値へfallbackしない。
 4. 匿名dual-source fixtureで、統合済み候補が表示用endpointにも一件だけ残り、direct P/Lが表示・strict legacy repairの双方へ届くことを回帰確認する。
+
+## 2026-08-12 現在建玉の銘柄表示是正: 補助取得済みunderlyingSymbolを「未取得」にしない
+
+### 実データ再現と確定原因
+
+P口座の新規ロングコール1枚について、Saxo `port/v1/positions`の実取得データは `PositionBase.Uic`、`AssetType=StockOption`、数量、建値、`OptionsData.PutCall`、権利行使価格、満期日、現在価、評価損益を含む。一方、返却された現在建玉本体に `DisplayAndFormat`はなく、direct `Symbol`と `Currency`は存在しない。
+
+local helperはこの建玉のUICから `ref/v1/instruments/details/{Uic}/StockOption`を取得し、`RelatedInstruments`の原資産UICを経由して原資産銘柄を `underlyingSymbol`に補助取得できている。正規化後は `underlyingIdentity` と `underlyingIdentitySource=ref/v1/instruments/details/...:RelatedInstruments` もあり、銘柄がAPI全体で未取得なのではない。
+
+しかし画面の `formatPositionLabel()`、詳細表示の `symbol`行、および「未取得項目」表示は direct `position.symbol`と、補助取得前に作られた `missingFields`を使い続けている。一方、下書き作成側は `resolveSaxoPositionSymbol()`で `underlyingSymbol`を読む。その結果、同一候補が画面上は「未取得」だが、下書きでは銘柄解決可能という矛盾状態になる。原因はSaxoの銘柄取得失敗ではなく、正規化後のcanonical tickerを表示と未取得判定へ渡していないUI projectionの不備である。
+
+### 銘柄解決と表示の契約
+
+1. 現在建玉候補のcanonical tickerは `resolveSaxoPositionSymbol(position, simulations)` の一経路で決定する。優先順位はdirect `symbol` -> 補助取得済み `underlyingSymbol` -> 明示的な `instrumentCode` / `underlyingName` -> 一意の既存建玉形状照合とする。
+2. 候補行のタイトル、詳細の銘柄行、「建玉入力に使える情報」、下書き名、照合キーは同じcanonical tickerを使う。表示だけdirect `position.symbol`に戻さない。
+3. direct `Symbol`がなくても、ref details由来の `underlyingSymbol`とprovenanceがあれば、ユーザー向けに「symbol未取得」と表示しない。必要な場合は「原資産銘柄: instrument detailsから補完」と取得元を示す。
+4. raw positionsにdirect symbolがない事実はdiagnosticとして保持できるが、「銘柄が未取得」と「direct symbol fieldが非返却」を混同しない。
+5. `missingFields`は補助取得後の候補で再評価するか、UIでcanonical tickerの存在を考慮して表示用の未取得項目を導出する。古い `missingFields: symbol` をそのまま出さない。
+6. direct symbol、underlyingSymbol、履歴の銘柄、既存建玉が異なる場合は `source_conflict`とし、自動下書きを禁止する。形状一致だけで銘柄を推定しない。
+7. 通貨、contract size、記帳額、プレミアム、取引費用、為替はそれぞれ独立した取得契約を維持する。銘柄が解決できたことを理由に金額や通貨を推定・0補完しない。
+
+### ローカル版・公開版の実装境界
+
+- `formatPositionLabel()`と詳細カードにresolved tickerを渡す。コンポーネント内で `position.symbol ?? "未取得"` を独立判定に使わない。
+- 表示用未取得項目を導出する共通関数を追加し、underlyingSymbolが有効なオプション候補から `symbol` 警告を除く。
+- Appの下書き作成は既存のresolved ticker経路を維持し、表示と同じ値が下書きへ入ることを回帰テストする。
+- 公開版には一般化したresolver利用と匿名fixtureだけを反映する。実銘柄、Position ID、Account Key、UIC、raw応答、OAuth、localStorage、バックアップを移送しない。
+
+### 回帰テスト・実機受入条件
+
+1. direct `symbol=undefined`、`underlyingSymbol=ABC`、原資産identity/provenanceありの匿名オプションfixtureを与えると、候補名、詳細の銘柄、下書きtickerがすべて `ABC`になる。
+2. 同fixtureの「未取得項目」に `symbol` を出さない。`currency`や`contractSize`が実際に未取得なら、それらは別項目として維持する。
+3. direct symbolとunderlyingSymbolが一致するケースは正常、不一致はconflictとなり下書き作成を停止する。
+4. underlyingSymbolもない場合だけ「銘柄未取得」を表示し、下書きの銘柄を空欄のまま正式保存できない。
+5. ローカル実機で対象のP口座ロングコールがresolved ticker付きで表示され、数量1、call、権利行使価格160、満期2027-01-15、建値23.85が変更されないことをDOMで確認する。
+6. 修正前の候補は下書き反映せず、修正後に画面上の銘柄と下書きへ入る銘柄が一致することを確認してから反映する。
+7. ローカルの対象テスト・全回帰・build・5173配信bundle・ブラウザDOMに合格してから、公開版へ一般化コードと匿名fixtureだけを反映する。公開版も独立test/build/Pages配信bundle/DOMを確認後にGitHub pushする。
+
+## 2026-08-12 取込導線の簡素化: 新規候補だけを通常表示する
+
+### 実機再現と確定原因
+
+「まとめて取得」後の建玉候補表に、今回未反映の新規ロングコールと並んで、既存単脚建玉と、親シンセティック建玉へ統合済みの二脚ペアが緑色行で再表示される。各行には「確認済みの3-Aを開く」系の操作があり、ユーザーは再反映が必要か判断できない。
+
+原因は以下の三点である。
+
+1. `standaloneRegularRows`と `syntheticForwardPairs`を新規・照合済みに分けず、同じ候補tableへ全件描画している。
+2. 二脚ペアの「新規反映が必要か」と「既存親建玉の入力事実が完全か」を同じ `isSyntheticForwardEntrySaved()` で判定している。親建玉が既に存在しても、親情報の完全性がfalseなら `actionRequiredRows`に加算される。
+3. reflection summaryで `positionHasOptionalReview` を `positionActionable` に含めている。任意確認と必須処理が同じ「処理が必要」導線に入る。
+
+このため、画面の「処理が必要」は未反映件数ではなく、照合済みや任意確認を混ぜた件数になっている。これは重複反映を防ぐための説明を追加するだけでは解決せず、表示集合とアクション件数の契約を分ける必要がある。
+
+### 通常表示と任意確認の分離契約
+
+1. 「建玉候補」の通常表示に出すのは、今回のSaxo取得でアプリに対応する正式建玉・下書き・親複合建玉がない `new` / `broken_recovery` / `source_conflict` 候補だけとする。
+2. 既存建玉と安全条件で一致した `linked`、正式保存済み、記録済み現物移管、既存親建玉があるシンセティック二脚は通常tableから除外する。
+3. 照合済み保有は「照合済みN件・追加操作なし」という1行の要約だけにする。通常は畳み、明示的に開いたときだけ読み取り専用で詳細を表示する。その中に下書き作成・再反映ボタンを置かない。
+4. 既存シンセティック親建玉に未入力事実がある場合は、「新規取込候補」ではなく、建玉ダッシュボードの当該既存建玉に「確認項目あり」として表示する。不足項目がなければ何も表示しない。
+5. `actionRequiredRows`と上部の「処理が必要」は、ユーザー操作なしで完了できない未反映候補だけを数える。optional review、linked、saved、official、ignoredを加算しない。
+6. 取得総数、P/N口座別件数、照合済み件数はdiagnosticとして保持できるが、新規取込の主要情報より強く表示しない。
+
+### 最小操作フロー
+
+1. ユーザーは「まとめて取得」を1回押す。残高、現在建玉、注文、履歴、instrument detailsの取得とeffective照合を一連のread-only処理で完了させる。
+2. 取得後は「今回の新規建玉N件」だけを表示する。各候補に銘柄、口座、売買、Put/Call、権利行使価格、満期、数量、建値、自動補完できた約定事実を一枚で見せる。
+3. 候補ごとの主要操作は「確認して建玉入力へ」の1つにする。常時表示の「詳細を見る」「今回は無視」「既存3-Aを開く」を並列の主要操作にしない。取得根拠は同一カード内の折りたたみにする。
+4. 主要操作で建玉入力を開く時点で、照合済みの現在建玉・履歴・instrument detailsから得られた値を同じ3-A下書きへ渡す。履歴候補画面へ戻って選び直す操作を要求しない。
+5. 3-Aでは自動取得できた値を表示し、実際にAPIにない必須項目だけを明示する。再取得が必要な場合も同じ3-A内の「Saxoから再取得」1操作で更新し、候補一覧へ戻さない。
+6. ユーザーが契約内容と取得元を確認したら「確認して正式保存」の1回で完了する。保存後はダッシュボードへ戻し、対象候補を新規一覧から即時消す。終了後に同義の追加確認ボタンを出さない。
+7. 自動反映は行わない。read-only取得、安全照合、下書き作成、ユーザーの最終確認という境界は維持する。クリックを減らすために未確認値を正式保存しない。
+
+### 実装境界と回帰受入条件
+
+- 候補のclassificationを `new_actionable` / `broken_recovery` / `conflict_review` / `linked_no_action` / `saved_no_action` / `optional_existing_review` に分け、表示・件数・CTAを同じclassificationから導出する。
+- 既存シンセティックは「親建玉の存在」で新規取込を除外し、親情報のcomplete判定は既存建玉側のoptional taskにだけ使う。
+- reflection summaryの `positionActionable` から `positionHasOptionalReview` を外す。照合済みだけのときは「追加処理0件」とし、主操作を出さない。
+- 匿名fixtureで、新規単脚1件、linked単脚1件、既存親あり二脚ペア1組を与えた場合、通常tableと「処理が必要」は新要単脚1件だけになる。
+- 照合済みの折りたたみを開いても再反映CTAがなく、正式建玉数や下書き数が変わらない。
+- 新規候補の主操作から3-Aへ直接進み、履歴候補の自動照合結果が同じ下書きに含まれる。3-A保存後は該当候補が消え、再取得してもlinked/savedとして非表示のままである。
+- 実機受入では、今回の新規ロングコールだけが通常tableに表示され、既存単脚と既存シンセティック二脚が非表示であることをDOMで確認する。新要候補のresolved ticker、契約条件、下書きtickerが一致することも同時に確認する。
+- ローカル全回帰・build・5173bundle・実機DOM合格後だけ公開版へ反映する。公開版も独立test/build/Pages bundle/DOM確認後にGitHub pushする。実口座データ、実銘柄、OAuth、raw応答、localStorage、バックアップを公開版へ移送しない。

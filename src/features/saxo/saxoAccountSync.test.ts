@@ -24,6 +24,7 @@ import {
   reconcileSaxoPositions,
   resolveSaxoHistoryOptionLegMatch,
   resolveSaxoPositionSymbol,
+  resolveSaxoPositionSymbolResolution,
   hasAppliedSaxoSnapshot,
   hasConfirmedMappingForAccount,
   isForbiddenSaxoOrderRoute,
@@ -54,6 +55,16 @@ const pAccount: AccountState = {
 };
 
 describe("Saxo read-only account sync", () => {
+  it("uses an instrument-details underlying symbol as the canonical ticker without a symbol missing warning", () => {
+    const position = { id: "anonymous-option", accountKey: "masked", accountAssignment: "P" as const, kind: "option" as const, side: "long" as const, optionType: "call" as const, quantity: 1, strike: 160, expiry: "2027-01-15", underlyingSymbol: "ABC", underlyingIdentity: "uic:anonymous", missingFields: ["symbol", "currency"], fetchedAt: "2026-08-12T00:00:00.000Z" } satisfies SaxoApiPositionSnapshot;
+    expect(resolveSaxoPositionSymbol(position)).toBe("ABC");
+    expect(createSaxoPositionDraftSummary(position).ticker).toBe("ABC");
+  });
+
+  it("blocks automatic draft resolution when direct and underlying symbols conflict", () => {
+    const position = { id: "anonymous-conflict", accountKey: "masked", accountAssignment: "P" as const, kind: "option" as const, side: "long" as const, optionType: "call" as const, symbol: "AAA", underlyingSymbol: "BBB", missingFields: [], fetchedAt: "2026-08-12T00:00:00.000Z" } satisfies SaxoApiPositionSnapshot;
+    expect(resolveSaxoPositionSymbolResolution(position)).toEqual({ sourceConflict: true });
+  });
   it("only allows read-only local order endpoints", () => {
     expect(SAXO_READONLY_ENDPOINTS).toContain("GET /api/saxo/orders");
     expect(SAXO_READONLY_ENDPOINTS).toContain("GET /api/saxo/orders/snapshot");
