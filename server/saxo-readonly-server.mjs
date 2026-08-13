@@ -1563,9 +1563,12 @@ function normalizeHistoryItem(raw, kind, index) {
   const optionType = inferOptionTypeFromValue(optionTypeRaw) ?? inferOptionTypeFromInstrument(instrumentForOption);
   const bookedAmountAccountCurrency = firstNumber(raw, ["TotalBookedOnClosingLegAccountCurrency", "BookedAmountAccountCurrency"]);
   const bookedAmountUSD = firstNumber(raw, ["BookedAmountUSD"]);
+  const spreadCostAccountCurrency = firstNumber(raw, ["SpreadCostAccountCurrency"]);
+  const spreadCostClientCurrency = firstNumber(raw, ["SpreadCostClientCurrency"]);
+  const spreadCostUSD = firstNumber(raw, ["SpreadCostUSD"]);
   const bookedAmountAliases = ["TotalBookedOnClosingLegAccountCurrency", "BookedAmountAccountCurrency", "BookedAmountUSD", "BookedAmountClientCurrency", "BookedAmount", "NetAmount", "SettlementAmount"];
   const premiumAmountAliases = ["Premium", "PremiumAmount", "GrossAmount", "TradeAmount"];
-  const transactionCostAliases = ["TransactionCost", "Costs", "Cost", "Commission", "Commissions", "SpreadCostAccountCurrency", "SpreadCostUSD", "SpreadCostClientCurrency"];
+  const transactionCostAliases = ["TransactionCost", "TotalTransactionCost", "TotalCost", "Costs", "Cost"];
   const exchangeRateAliases = ["ExchangeRate", "FxRate", "ConversionRate"];
   const bookedAmountMatch = firstNumberMatch(raw, bookedAmountAliases);
   const premiumAmountMatch = firstNumberMatch(raw, premiumAmountAliases);
@@ -1609,6 +1612,9 @@ function normalizeHistoryItem(raw, kind, index) {
     transactionCost: transactionCostMatch?.value,
     feeAmount: firstNumber(raw, ["Fee", "Fees", "Commission", "Commissions"]),
     exchangeFee: firstNumber(raw, ["ExchangeFee", "CurrencyConversionFee", "FxConversionCost", "ExchangeCommission"]),
+    spreadCostAccountCurrency,
+    spreadCostClientCurrency,
+    spreadCostUSD,
     exchangeRate: exchangeRateMatch?.value,
     taxIncludedFee: firstNumber(raw, ["TaxIncludedFee", "CommissionTax", "FeeTax", "ConsumptionTax"]),
     rawFieldNames: collectRawFieldNames(raw).slice(0, 120),
@@ -1616,6 +1622,7 @@ function normalizeHistoryItem(raw, kind, index) {
       createFieldDiagnostic("記帳額", bookedAmountAliases, bookedAmountMatch),
       createFieldDiagnostic("プレミアム", premiumAmountAliases, premiumAmountMatch),
       createFieldDiagnostic("取引費用", transactionCostAliases, transactionCostMatch),
+      createFieldDiagnostic("スプレッド費用", ["SpreadCostAccountCurrency", "SpreadCostClientCurrency", "SpreadCostUSD"], firstNumberMatch(raw, ["SpreadCostAccountCurrency", "SpreadCostClientCurrency", "SpreadCostUSD"])),
       createFieldDiagnostic("為替", exchangeRateAliases, exchangeRateMatch),
     ],
     sourceStatus: "draft_candidate",

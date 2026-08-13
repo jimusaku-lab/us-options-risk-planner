@@ -3,9 +3,9 @@ import { createOptionCloseExecutionDraft } from "@/domain/optionCloseExecutions"
 import {
   createAccountPatchFromSaxoSnapshot,
   createSaxoAccountDiffRows,
+  createEffectiveSaxoHistoryCandidates,
   createSaxoSetupGuidance,
   createSaxoPositionDraftSummary,
-  createEffectiveSaxoHistoryCandidates,
   findEntryHistoryMatches,
   findSaxoAssignmentStockAcquisitionItem,
   findSaxoSyntheticForwardPairing,
@@ -16,21 +16,23 @@ import {
   findOrderCandidatesForLeg,
   getSaxoHistoryCandidateKeys,
   getSaxoHistoryCandidateTarget,
+  isSaxoHistoryAutoCreatableClose,
   getSaxoHistoryCandidateTargetForSimulations,
   getSaxoHistoryContractsForLeg,
   getSaxoHistoryOptionLegMatchDiagnostics,
   getSaxoHistoryStableKey,
   getSaxoAccountReflectionBlockReason,
+  mergeOpeningExecutionIntoEntryExecution,
   reconcileSaxoPositions,
   resolveSaxoHistoryOptionLegMatch,
   resolveSaxoPositionSymbol,
   resolveSaxoPositionSymbolResolution,
+  resolveOpeningExecution,
   hasAppliedSaxoSnapshot,
   hasConfirmedMappingForAccount,
   isForbiddenSaxoOrderRoute,
   isSaxoHistoryPutAssignmentOptionCandidate,
   isSaxoHistoryMatchingOptionLeg,
-  isSaxoHistoryAutoCreatableClose,
   maskSaxoIdentifier,
   SAXO_CLOSE_ACCOUNT_CONFIRMATION_WARNING,
   SAXO_READONLY_ENDPOINTS,
@@ -55,14 +57,256 @@ const pAccount: AccountState = {
 };
 
 describe("Saxo read-only account sync", () => {
+  it("uses only direct P/JPY opening evidence and cross-validates explicit OpenCost components", () => {
+    const position = {
+      id: "anonymous-opening-position", accountKey: "masked", accountAssignment: "P" as const,
+      kind: "option" as const, side: "long" as const, optionType: "call" as const,
+      symbol: "SAMPLE", quantity: 1, strike: 100, expiry: "2027-01-15", missingFields: [],
+      fetchedAt: "2026-08-12T00:00:00.000Z",
+      openingExecution: {
+        executionTimeUtc: "2026-08-12T01:23:45.000Z", executionTimeSourceField: "ExecutionTimeOpen",
+        openingFxRate: 150.25, openingFxRateSourceField: "ConversionRateOpen",
+        marketValueOpenInBaseCurrency: -10_040, marketValueOpenSourceField: "MarketValueOpenInBaseCurrency",
+        // These are the only returned components.  The other three names must
+        // remain absent, not become synthetic zero entries.
+        openingTransactionCostComponents: { Commission: 8, ExchangeFee: 1, StampDuty: 1 },
+        openingTransactionCostCompleteness: "component_aggregate",
+        openingTransactionCostSourceField: "Costs.OpenCostInBaseCurrency",
+        tradeCostsTotalInBaseCurrency: -99_999,
+        tradeCostsTotalSourceField: "TradeCostsTotalInBaseCurrency",
+        capturedAt: "2026-08-12T00:00:00.000Z",
+      },
+    } satisfies SaxoApiPositionSnapshot;
+    const history = [{
+      item: {
+        id: "anonymous-open", kind: "trade" as const, accountCode: "P" as const, accountCurrency: "JPY", symbol: "SAMPLE",
+        assetType: "StockOption", optionType: "call" as const, strike: 100, expiry: "2027-01-15", quantity: 1,
+        buySell: "buy" as const, openClose: "open" as const, price: 1, tradeDate: "2026-08-12",
+        bookedAmountAccountCurrency: -10_050,
+      }, score: 10, reasons: ["匿名fixture"],
+    }];
+    const resolution = resolveOpeningExecution(position, history);
+    expect(resolution.historyStatus).toBe("history_match_complete");
+    expect(resolution.openingBookedAmountJpy?.value).toBe(-10_050);
+    expect(resolution.openingPremiumJpy?.value).toBe(-10_040);
+    expect(resolution.openingTransactionCostJpy).toMatchObject({ value: 10, completeness: "cross_validated_component_aggregate", components: { Commission: 8, ExchangeFee: 1, StampDuty: 1 } });
+    expect(resolution.openingTransactionCostJpy?.components).not.toHaveProperty("PerformanceFee");
+    expect(resolution.openingTransactionCostJpy?.value).not.toBe(-99_999);
+  });
+
+  it("blocks P/JPY opening completion when direct opening values conflict", () => {
+    const position = {
+      id: "anonymous-opening-conflict", accountKey: "masked", accountAssignment: "P" as const,
+      kind: "option" as const, side: "long" as const, optionType: "put" as const,
+      quantity: 1, strike: 100, expiry: "2027-01-15", missingFields: [], fetchedAt: "2026-08-12T00:00:00.000Z",
+      openingExecution: {
+        marketValueOpenInBaseCurrency: -100, marketValueOpenSourceField: "MarketValueOpenInBaseCurrency",
+        openingTransactionCostComponents: { Commission: 4 }, openingTransactionCostCompleteness: "component_aggregate",
+        openingTransactionCostSourceField: "Costs.OpenCostInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z",
+      },
+    } satisfies SaxoApiPositionSnapshot;
+    const resolution = resolveOpeningExecution(position, [{ item: { id: "anonymous-history", kind: "trade", bookedAmountAccountCurrency: -80 }, score: 10, reasons: [] }]);
+    expect(resolution.historyStatus).toBe("source_conflict");
+    expect(resolution.openingTransactionCostJpy).toBeUndefined();
+  });
+
+  it("distinguishes history fetch failure from no usable opening history", () => {
+    const position = {
+      id: "anonymous-opening-fetch-state", accountKey: "masked", accountAssignment: "P" as const,
+      kind: "option" as const, side: "long" as const, optionType: "call" as const,
+      quantity: 1, strike: 100, expiry: "2027-01-15", missingFields: [], fetchedAt: "2026-08-12T00:00:00.000Z",
+      openingExecution: {
+        executionTimeUtc: "2026-08-12T01:23:45.000Z",
+        executionTimeSourceField: "ExecutionTimeOpen",
+        openingFxRate: 160.8,
+        openingFxRateSourceField: "ConversionRateOpen",
+        capturedAt: "2026-08-12T00:00:00.000Z",
+      },
+    } satisfies SaxoApiPositionSnapshot;
+    expect(resolveOpeningExecution(position, [], "fetch_failed").historyStatus).toBe("history_fetch_failed");
+    expect(resolveOpeningExecution(position, [], "fetched").historyStatus).toBe("history_no_usable_match");
+  });
+
+  it("accepts mapped P history even when the current-position snapshot is still unassigned", () => {
+    const position = {
+      id: "anonymous-opening-unassigned", accountKey: "masked", accountAssignment: "unassigned" as const,
+      kind: "option" as const, side: "long" as const, optionType: "call" as const,
+      quantity: 1, strike: 160, expiry: "2027-01-15", missingFields: [], fetchedAt: "2026-08-12T00:00:00.000Z",
+      openingExecution: {
+        executionTimeUtc: "2026-08-11T15:08:30.104000Z",
+        executionTimeSourceField: "ExecutionTimeOpen",
+        openingFxRate: 123.456789,
+        openingFxRateSourceField: "ConversionRateOpen",
+        marketValueOpenInBaseCurrency: -152500,
+        marketValueOpenSourceField: "MarketValueOpenInBaseCurrency",
+        openingTransactionCostComponents: { Commission: 300, ExchangeFee: 12, StampDuty: 5 },
+        openingTransactionCostCompleteness: "component_aggregate",
+        openingTransactionCostSourceField: "Costs.OpenCostInBaseCurrency",
+        capturedAt: "2026-08-12T00:00:00.000Z",
+      },
+    } satisfies SaxoApiPositionSnapshot;
+    const history = [{
+      item: {
+        id: "anonymous-qcom-open", kind: "trade" as const, accountCode: "P" as const, accountCurrency: "JPY",
+        symbol: "ALFA", assetType: "StockOption", optionType: "call" as const, strike: 125, expiry: "2027-01-15",
+        quantity: 1, buySell: "buy" as const, openClose: "open" as const, price: 12.34, tradeDate: "2026-08-11",
+        bookedAmountAccountCurrency: -152817,
+      }, score: 10, reasons: ["匿名fixture"],
+    }];
+    const resolution = resolveOpeningExecution(position, history);
+    expect(resolution.historyStatus).toBe("history_match_complete");
+    expect(resolution.openingBookedAmountJpy?.value).toBe(-152817);
+    expect(resolution.openingPremiumJpy?.value).toBe(-152500);
+    expect(resolution.openingTransactionCostJpy?.value).toBe(317);
+    expect(resolution.openingFxRate?.value).toBe(123.456789);
+  });
+
+  it("falls back to explicit raw OpenCostInBaseCurrency components when the normalized projection is absent", () => {
+    const position = {
+      id: "anonymous-opening-raw-fallback",
+      accountKey: "masked",
+      accountAssignment: "P" as const,
+      kind: "option" as const,
+      side: "long" as const,
+      optionType: "call" as const,
+      quantity: 1,
+      strike: 160,
+      expiry: "2027-01-15",
+      missingFields: [],
+      fetchedAt: "2026-08-12T00:00:00.000Z",
+      openingExecution: {
+        executionTimeUtc: "2026-08-11T15:08:30.104000Z",
+        executionTimeSourceField: "ExecutionTimeOpen",
+        openingFxRate: 123.456789,
+        openingFxRateSourceField: "ConversionRateOpen",
+        marketValueOpenInBaseCurrency: -152500,
+        marketValueOpenSourceField: "MarketValueOpenInBaseCurrency",
+        capturedAt: "2026-08-12T00:00:00.000Z",
+      },
+      raw: {
+        Costs: {
+          OpenCostInBaseCurrency: {
+            Commission: 300,
+            ExchangeFee: "12",
+            StampDuty: 5,
+          },
+        },
+      },
+    } satisfies SaxoApiPositionSnapshot;
+    const history = [{
+      item: {
+        id: "anonymous-alfa-open-raw", kind: "trade" as const, accountCode: "P" as const, accountCurrency: "JPY",
+        symbol: "ALFA", assetType: "StockOption", optionType: "call" as const, strike: 125, expiry: "2027-01-15",
+        quantity: 1, buySell: "buy" as const, openClose: "open" as const, price: 12.34, tradeDate: "2026-08-11",
+        bookedAmountAccountCurrency: -152817,
+      }, score: 10, reasons: ["匿名fixture"],
+    }];
+    const resolution = resolveOpeningExecution(position, history);
+    expect(resolution.historyStatus).toBe("history_match_complete");
+    expect(resolution.openingTransactionCostJpy).toMatchObject({
+      value: 317,
+      completeness: "cross_validated_component_aggregate",
+      components: { Commission: 300, ExchangeFee: 12, StampDuty: 5 },
+    });
+  });
+
+  it("merges later opening history only into blank non-manual fields", () => {
+    const resolution = {
+      executionTimeUtc: { value: "2026-08-12", source: "trade_history" as const, sourceField: "tradeDate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingFxRate: { value: 123.456789, source: "trade_history" as const, sourceField: "exchangeRate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingPremiumJpy: { value: -152500, source: "position" as const, sourceField: "MarketValueOpenInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingTransactionCostJpy: { value: 317, source: "position" as const, sourceField: "Costs.OpenCostInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "cross_validated_component_aggregate" as const },
+      openingBookedAmountJpy: { value: -152817, source: "trade_history" as const, sourceField: "BookedAmountAccountCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      historyStatus: "history_match_complete" as const,
+    };
+    const execution = {
+      id: "entry",
+      legId: "leg",
+      tradeDate: "",
+      contracts: 1,
+      fillPriceUSD: 12.34,
+      settlementCurrency: "JPY" as const,
+      brokerPremiumJPY: -383000,
+      brokerExchangeRateJPY: 150,
+      openingFieldSources: {
+        brokerPremiumJPY: "manual" as const,
+        brokerExchangeRateJPY: "manual" as const,
+      },
+      source: "saxo_api_estimate" as const,
+      saxoSourceType: "current_position" as const,
+      historyCompletionStatus: "history_not_fetched" as const,
+      confirmed: false,
+    };
+    expect(mergeOpeningExecutionIntoEntryExecution(execution, resolution)).toMatchObject({
+      tradeDate: "2026-08-12",
+      brokerBookedAmountJPY: -152817,
+      brokerPremiumJPY: -383000,
+      brokerTransactionCostJPY: 317,
+      brokerExchangeRateJPY: 150,
+      historyCompletionStatus: "history_match_complete",
+      openingFieldSources: {
+        tradeDate: "trade_history",
+        brokerBookedAmountJPY: "trade_history",
+        brokerPremiumJPY: "manual",
+        brokerTransactionCostJPY: "position",
+        brokerExchangeRateJPY: "manual",
+      },
+    });
+  });
+
+  it("does not overwrite a manual Saxo total transaction cost during late merge", () => {
+    const resolution = {
+      executionTimeUtc: { value: "2026-08-12", source: "trade_history" as const, sourceField: "tradeDate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingFxRate: { value: 123.456789, source: "trade_history" as const, sourceField: "exchangeRate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingPremiumJpy: { value: -152500, source: "position" as const, sourceField: "MarketValueOpenInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingTransactionCostJpy: { value: 317, source: "position" as const, sourceField: "Costs.OpenCostInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "cross_validated_component_aggregate" as const },
+      openingBookedAmountJpy: { value: -152817, source: "trade_history" as const, sourceField: "BookedAmountAccountCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      totalTransactionCostJpy: { value: 0, source: "trade_history" as const, sourceField: "TransactionCost", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      historyStatus: "history_match_complete" as const,
+    };
+    const execution = {
+      id: "entry-total",
+      legId: "leg",
+      tradeDate: "2026-08-12",
+      contracts: 1,
+      fillPriceUSD: 23.85,
+      settlementCurrency: "JPY" as const,
+      brokerCurrencyConversionCostJPY: -2000,
+      brokerTotalTransactionCostJPY: -2317,
+      openingFieldSources: {
+        brokerCurrencyConversionCostJPY: "manual" as const,
+        brokerTotalTransactionCostJPY: "manual" as const,
+      },
+      source: "saxo_api_estimate" as const,
+      saxoSourceType: "current_position" as const,
+      historyCompletionStatus: "history_not_fetched" as const,
+      confirmed: false,
+    };
+
+    expect(mergeOpeningExecutionIntoEntryExecution(execution, resolution)).toMatchObject({
+      brokerCurrencyConversionCostJPY: -2000,
+      brokerTotalTransactionCostJPY: -2317,
+      openingFieldSources: {
+        brokerCurrencyConversionCostJPY: "manual",
+        brokerTotalTransactionCostJPY: "manual",
+      },
+    });
+  });
   it("uses an instrument-details underlying symbol as the canonical ticker without a symbol missing warning", () => {
-    const position = { id: "anonymous-option", accountKey: "masked", accountAssignment: "P" as const, kind: "option" as const, side: "long" as const, optionType: "call" as const, quantity: 1, strike: 160, expiry: "2027-01-15", underlyingSymbol: "ABC", underlyingIdentity: "uic:anonymous", missingFields: ["symbol", "currency"], fetchedAt: "2026-08-12T00:00:00.000Z" } satisfies SaxoApiPositionSnapshot;
+    const position = {
+      id: "anonymous-option", accountKey: "masked", accountAssignment: "P" as const, kind: "option" as const,
+      side: "long" as const, optionType: "call" as const, quantity: 1, strike: 160, expiry: "2027-01-15",
+      underlyingSymbol: "ABC", underlyingIdentity: "uic:anonymous", missingFields: ["symbol", "currency"], fetchedAt: "2026-08-12T00:00:00.000Z",
+    } satisfies SaxoApiPositionSnapshot;
     expect(resolveSaxoPositionSymbol(position)).toBe("ABC");
     expect(createSaxoPositionDraftSummary(position).ticker).toBe("ABC");
   });
 
   it("blocks automatic draft resolution when direct and underlying symbols conflict", () => {
-    const position = { id: "anonymous-conflict", accountKey: "masked", accountAssignment: "P" as const, kind: "option" as const, side: "long" as const, optionType: "call" as const, symbol: "AAA", underlyingSymbol: "BBB", missingFields: [], fetchedAt: "2026-08-12T00:00:00.000Z" } satisfies SaxoApiPositionSnapshot;
+    const position = {
+      id: "anonymous-conflict", accountKey: "masked", accountAssignment: "P" as const, kind: "option" as const,
+      side: "long" as const, optionType: "call" as const, symbol: "AAA", underlyingSymbol: "BBB", missingFields: [], fetchedAt: "2026-08-12T00:00:00.000Z",
+    } satisfies SaxoApiPositionSnapshot;
     expect(resolveSaxoPositionSymbolResolution(position)).toEqual({ sourceConflict: true });
   });
   it("only allows read-only local order endpoints", () => {
@@ -240,6 +484,7 @@ describe("Saxo read-only account sync", () => {
         hasToken: false,
         readOnly: true,
         orderEndpointsEnabled: false,
+        bindAddress: "127.0.0.1",
         oauthConfigured: false,
       }).code,
     ).toBe("missing_client_id");
@@ -253,6 +498,7 @@ describe("Saxo read-only account sync", () => {
         hasToken: false,
         readOnly: true,
         orderEndpointsEnabled: false,
+        bindAddress: "127.0.0.1",
         oauthConfigured: true,
       }).code,
     ).toBe("missing_environment");
@@ -336,14 +582,21 @@ describe("Saxo read-only account sync", () => {
   });
 
   it("requires the parent and both leg trades before treating a synthetic forward as filled", () => {
-    const base = { accountKey: "n-account-1234", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "NVDA", underlyingSymbol: "NVDA", underlyingIdentity: "uic:12345:stock", assetType: "StockOption", kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z" };
+    const base = {
+      accountKey: "n-account-1234", accountAssignment: "N" as const, accountCode: "N" as const,
+      symbol: "NVDA", underlyingSymbol: "NVDA", underlyingIdentity: "uic:12345:stock", assetType: "StockOption",
+      kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z",
+    };
     const call: SaxoApiPositionSnapshot = { ...base, id: "call", positionId: "call-position", quantity: 1, side: "long", optionType: "call", premiumOpenPrice: 26.25 };
     const put: SaxoApiPositionSnapshot = { ...base, id: "put", positionId: "put-position", quantity: -1, side: "short", optionType: "put", premiumOpenPrice: 21.05 };
     const pair = findSaxoSyntheticForwardPairs([call, put])[0];
     const parent: SaxoHistoryDiscoveryItem = { id: "parent-trade", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", quantity: 1, buySell: "buy", price: 5.2, tradeDate: "2026-07-16", currency: "USD" };
     const callTrade: SaxoHistoryDiscoveryItem = { id: "call-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "call", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "buy", openClose: "open", price: 26.25, tradeDate: "2026-07-16", currency: "USD" };
     const putTrade: SaxoHistoryDiscoveryItem = { id: "put-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "put", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "sell", openClose: "open", price: 21.05, tradeDate: "2026-07-16", currency: "USD" };
-    expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade, putTrade])).toMatchObject({ status: "filled", parentHistory: { orderId: "5425367936", price: 5.2 }, callHistory: { price: 26.25 }, putHistory: { price: 21.05 }, missing: [] });
+
+    expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade, putTrade])).toMatchObject({
+      status: "filled", parentHistory: { orderId: "5425367936", price: 5.2 }, callHistory: { price: 26.25 }, putHistory: { price: 21.05 }, missing: [],
+    });
     expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade])).toMatchObject({ status: "incomplete", missing: ["put"] });
   });
 
@@ -670,11 +923,197 @@ describe("Saxo read-only account sync", () => {
         buySell: "sell",
         quantity: 100,
         price: 202.76,
-        bookedAmount: 20257.74,
+        bookedAmount: 20_257.74,
         transactionCost: -18.26,
         tradeDate: "2026-06-23",
       }),
     ).toBe("stock_settlement");
+    expect(
+      getSaxoHistoryCandidateTarget({
+        id: "p-transfer-counter-sale",
+        kind: "trade",
+        assetType: "Stock",
+        symbol: "NVIDIA Corp.",
+        buySell: "sell",
+        quantity: 100,
+        price: 207.5,
+        bookedAmount: 0,
+        tradeDate: "2026-06-15",
+      }),
+    ).toBe("unknown");
+  });
+
+  it("collapses one explicit close trade and one matching closed-position report into one effective candidate", () => {
+    const shared = {
+      accountCode: "N" as const,
+      assetType: "StockOption",
+      symbol: "SAMPLE",
+      optionType: "call" as const,
+      strike: 100,
+      expiry: "2026-12-18",
+      tradeDate: "2026-08-11",
+      quantity: 1,
+      price: 2.5,
+    };
+    const closedPosition: SaxoHistoryDiscoveryItem = {
+      id: "closed-report-anonymous",
+      kind: "closed_position",
+      ...shared,
+      buySell: "unknown",
+      openClose: "unknown",
+    };
+    const trade: SaxoHistoryDiscoveryItem = {
+      id: "trade-report-anonymous",
+      kind: "trade",
+      ...shared,
+      buySell: "sell",
+      openClose: "close",
+    };
+
+    const effective = createEffectiveSaxoHistoryCandidates([closedPosition, trade]);
+
+    expect(effective).toHaveLength(1);
+    expect(effective[0]).toMatchObject({ id: trade.id, kind: "trade", buySell: "sell", openClose: "close" });
+    expect(getSaxoHistoryCandidateKeys(effective[0])).toEqual(expect.arrayContaining([closedPosition.id, trade.id]));
+  });
+
+  it("keeps account-currency PnL separate from USD booked amount when merging a close", () => {
+    const shared = { accountCode: "P" as const, accountKey: "anonymous", accountCurrency: "JPY", assetType: "StockOption", symbol: "SAMPLE", optionType: "call" as const, strike: 100, expiry: "2026-12-18", tradeDate: "2026-08-10", quantity: 1, price: 32.77 };
+    const effective = createEffectiveSaxoHistoryCandidates([
+      { id: "closed", kind: "closed_position", ...shared, buySell: "unknown", openClose: "unknown", profitLossAccountCurrency: 119_265, bookedAmountAccountCurrency: 515_431 },
+      { id: "trade", kind: "trade", ...shared, buySell: "sell", openClose: "close", bookedAmountUSD: 3_235.23, bookedAmountAccountCurrency: 515_431 },
+    ]);
+    expect(effective).toHaveLength(1);
+    expect(effective[0]).toMatchObject({ buySell: "sell", openClose: "close", price: 32.77, profitLossAccountCurrency: 119_265, bookedAmountAccountCurrency: 515_431, bookedAmountUSD: 3_235.23 });
+    expect(effective[0].profitLossBase).toBeUndefined();
+  });
+
+  it("keeps the same-account boundary when a history report has not yet been enriched with P/N", () => {
+    const shared = {
+      accountKey: "anonymous-account-key",
+      assetType: "StockOption",
+      symbol: "SAMPLE",
+      optionType: "call" as const,
+      strike: 100,
+      expiry: "2026-12-18",
+      tradeDate: "2026-08-11",
+      quantity: 1,
+      price: 2.5,
+    };
+    const effective = createEffectiveSaxoHistoryCandidates([
+      { id: "closed-without-assignment", kind: "closed_position", ...shared, buySell: "unknown", openClose: "unknown" },
+      { id: "trade-without-assignment", kind: "trade", ...shared, buySell: "sell", openClose: "close" },
+    ]);
+
+    expect(effective).toHaveLength(1);
+    expect(effective[0]).toMatchObject({ kind: "trade", buySell: "sell", openClose: "close" });
+  });
+
+  it("merges different account identity fields only after both resolve to the same confirmed P/N", () => {
+    const shared = {
+      accountCode: "P" as const,
+      assetType: "StockOption",
+      symbol: "SAMPLE",
+      optionType: "call" as const,
+      strike: 100,
+      expiry: "2026-12-18",
+      tradeDate: "2026-08-11",
+      quantity: 1,
+      price: 2.5,
+    };
+    const effective = createEffectiveSaxoHistoryCandidates([
+      { id: "trade-account-key", kind: "trade", ...shared, accountKey: "masked-key", buySell: "sell", openClose: "close" },
+      { id: "closed-account-id", kind: "closed_position", ...shared, accountId: "masked-id", buySell: "unknown", openClose: "unknown" },
+    ]);
+
+    expect(effective).toHaveLength(1);
+    expect(effective[0]).toMatchObject({ kind: "trade", buySell: "sell", openClose: "close" });
+  });
+
+  it("does not merge close reports across P/N, account keys, or a one-sided missing assignment", () => {
+    const shared = {
+      assetType: "StockOption",
+      symbol: "SAMPLE",
+      optionType: "call" as const,
+      strike: 100,
+      expiry: "2026-12-18",
+      tradeDate: "2026-08-11",
+      quantity: 1,
+      price: 2.5,
+    };
+    const close = (id: string, accountCode?: "P" | "N", accountKey?: string): SaxoHistoryDiscoveryItem => ({
+      id,
+      kind: "trade",
+      ...shared,
+      accountCode,
+      accountKey,
+      buySell: "sell",
+      openClose: "close",
+    });
+    const closed = (id: string, accountCode?: "P" | "N", accountKey?: string): SaxoHistoryDiscoveryItem => ({
+      id,
+      kind: "closed_position",
+      ...shared,
+      accountCode,
+      accountKey,
+      buySell: "unknown",
+      openClose: "unknown",
+    });
+
+    expect(createEffectiveSaxoHistoryCandidates([close("trade-p", "P", "account-a"), closed("closed-n", "N", "account-a")])).toHaveLength(2);
+    expect(createEffectiveSaxoHistoryCandidates([close("trade-a", undefined, "account-a"), closed("closed-b", undefined, "account-b")])).toHaveLength(2);
+    expect(createEffectiveSaxoHistoryCandidates([close("trade-mapped", "P", "account-a"), closed("closed-unmapped", undefined, "account-a")])).toHaveLength(2);
+  });
+
+  it("keeps a closed-position-only close candidate direction unknown", () => {
+    const item: SaxoHistoryDiscoveryItem = {
+      id: "closed-only-anonymous",
+      kind: "closed_position",
+      accountCode: "N",
+      assetType: "StockOption",
+      symbol: "SAMPLE",
+      optionType: "call",
+      strike: 100,
+      expiry: "2026-12-18",
+      tradeDate: "2026-08-11",
+      quantity: -1,
+      price: 2.5,
+      buySell: "unknown",
+      openClose: "unknown",
+    };
+
+    const effective = createEffectiveSaxoHistoryCandidates([item]);
+
+    expect(getSaxoHistoryCandidateTarget(effective[0])).toBe("close");
+    expect(effective[0].buySell).toBe("unknown");
+    expect(isSaxoHistoryAutoCreatableClose(effective[0])).toBe(false);
+  });
+
+  it("blocks ambiguous or conflicting duplicate close reports from automatic creation", () => {
+    const shared = {
+      accountCode: "N" as const,
+      assetType: "StockOption",
+      symbol: "SAMPLE",
+      optionType: "call" as const,
+      strike: 100,
+      expiry: "2026-12-18",
+      tradeDate: "2026-08-11",
+      quantity: 1,
+      price: 2.5,
+      buySell: "sell" as const,
+      openClose: "close" as const,
+    };
+    const ambiguous = createEffectiveSaxoHistoryCandidates([
+      { id: "trade-a", kind: "trade", ...shared },
+      { id: "trade-b", kind: "trade", ...shared },
+    ]);
+    const conflict = createEffectiveSaxoHistoryCandidates([
+      { id: "trade", kind: "trade", ...shared },
+      { id: "closed", kind: "closed_position", ...shared, buySell: "unknown", openClose: "unknown", price: 2.6 },
+    ]);
+
+    expect(ambiguous.every((item) => item.duplicateResolution === "ambiguous_duplicate")).toBe(true);
+    expect(conflict.every((item) => item.duplicateResolution === "source_conflict")).toBe(true);
   });
 
   it("creates a stable Saxo history key independent of list index ids", () => {
@@ -695,47 +1134,6 @@ describe("Saxo read-only account sync", () => {
     expect(getSaxoHistoryStableKey(first)).toBe(getSaxoHistoryStableKey(second));
     expect(getSaxoHistoryCandidateKeys(second)).toContain("trade-2");
     expect(getSaxoHistoryCandidateKeys(second)).toContain(getSaxoHistoryStableKey(first));
-  });
-
-  it("merges one explicit trade close with its matching closed-position report", () => {
-    const base: SaxoHistoryDiscoveryItem = {
-      id: "closed-sample", kind: "closed_position", accountCode: "N", accountKey: "masked-key-a",
-      assetType: "StockOption", symbol: "SAMPLE", optionType: "call", strike: 100, expiry: "2026-12-18",
-      tradeDate: "2026-08-11", quantity: -1, price: 12.5, buySell: "unknown", openClose: "close",
-    };
-    const trade: SaxoHistoryDiscoveryItem = {
-      ...base, id: "trade-sample", kind: "trade", accountId: "masked-id-a", buySell: "sell", openClose: "close",
-    };
-    const effective = createEffectiveSaxoHistoryCandidates([base, trade]);
-    expect(effective).toHaveLength(1);
-    expect(effective[0]).toMatchObject({ id: "trade-sample", buySell: "sell", openClose: "close" });
-    expect(getSaxoHistoryCandidateKeys(effective[0])).toEqual(expect.arrayContaining(["closed-sample", "trade-sample"]));
-    expect(isSaxoHistoryAutoCreatableClose(effective[0])).toBe(true);
-  });
-
-  it("uses confirmed P/N assignment as the only cross-identity merge bridge", () => {
-    const base: SaxoHistoryDiscoveryItem = {
-      id: "closed-p", kind: "closed_position", accountCode: "P", accountKey: "masked-key-p", assetType: "StockOption",
-      symbol: "SAMPLE", optionType: "call", strike: 100, expiry: "2026-12-18", tradeDate: "2026-08-11", quantity: 1, price: 12.5, buySell: "unknown", openClose: "close",
-    };
-    const mappedTrade = { ...base, id: "trade-p", kind: "trade" as const, accountKey: undefined, accountId: "masked-id-p", buySell: "sell" as const };
-    expect(createEffectiveSaxoHistoryCandidates([base, mappedTrade])).toHaveLength(1);
-    const wrongAccount = { ...mappedTrade, id: "trade-n", accountCode: "N" as const };
-    expect(createEffectiveSaxoHistoryCandidates([base, wrongAccount])).toHaveLength(2);
-    const unassigned = { ...mappedTrade, id: "trade-unassigned", accountCode: undefined };
-    expect(createEffectiveSaxoHistoryCandidates([{ ...base, accountCode: undefined }, unassigned])).toHaveLength(2);
-  });
-
-  it("keeps unknown closed-position reports audit-only and blocks ambiguous or conflicting duplicates", () => {
-    const closed: SaxoHistoryDiscoveryItem = {
-      id: "closed-only", kind: "closed_position", accountCode: "N", assetType: "StockOption", symbol: "SAMPLE",
-      optionType: "call", strike: 100, expiry: "2026-12-18", tradeDate: "2026-08-11", quantity: 1, price: 12.5, buySell: "unknown", openClose: "close",
-    };
-    expect(isSaxoHistoryAutoCreatableClose(closed)).toBe(false);
-    const conflicting = createEffectiveSaxoHistoryCandidates([closed, { ...closed, id: "trade-conflict", kind: "trade", buySell: "sell", price: 13 }]);
-    expect(conflicting.every((item) => item.duplicateResolution === "source_conflict")).toBe(true);
-    const ambiguous = createEffectiveSaxoHistoryCandidates([closed, { ...closed, id: "trade-a", kind: "trade", buySell: "sell" }, { ...closed, id: "trade-b", kind: "trade", buySell: "sell" }]);
-    expect(ambiguous.every((item) => item.duplicateResolution === "ambiguous_duplicate")).toBe(true);
   });
 
   it("classifies zero-price put close as assignment instead of buyback close", () => {

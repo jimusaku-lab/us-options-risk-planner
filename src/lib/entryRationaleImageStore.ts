@@ -102,3 +102,26 @@ export async function readJournalImage(ref: string | undefined): Promise<string 
     return undefined;
   }
 }
+
+export async function deleteJournalImageRefs(refs: Array<string | undefined>): Promise<void> {
+  const uniqueRefs = Array.from(new Set(refs.filter((ref): ref is string => Boolean(ref))));
+  if (uniqueRefs.length === 0) return;
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    for (const ref of uniqueRefs) store.delete(ref);
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error ?? new Error("画像ストア削除に失敗しました。"));
+    };
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error ?? new Error("画像ストア削除に失敗しました。"));
+    };
+  });
+}

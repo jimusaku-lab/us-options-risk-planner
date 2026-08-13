@@ -18,6 +18,7 @@ import {
   createOptionEntryExecutionDraft,
   getNOptionStandardCommissionUSD,
 } from "@/domain/optionEntryExecutions";
+import { getStockSettlementHistoryKeys, normalizeStockSettlement } from "@/domain/stockSettlementState";
 import { getWorkflowTargetAnchorId } from "@/domain/workflowTasks";
 import { calculatePayoffSeries } from "@/domain/payoff";
 import { generateChecklist, generateRiskWarnings } from "@/domain/riskRules";
@@ -40,7 +41,10 @@ import { UserGuide } from "@/components/help/UserGuide";
 import { SaxoReadOnlyPanel } from "@/features/saxo/SaxoReadOnlyPanel";
 import {
   describeBestSaxoHistoryOptionLegMismatch,
+  createEffectiveSaxoHistoryCandidates,
   findEntryHistoryMatches,
+  mapOpeningExecutionHistoryStatusToEntryCompletionStatus,
+  mergeOpeningExecutionIntoEntryExecution,
   resolveOpeningExecution,
   findSaxoSyntheticForwardSimulationForPair,
   findSaxoAssignmentStockAcquisitionItem,
@@ -56,11 +60,11 @@ import {
   resolveSaxoHistoryOptionLegMatch,
   resolveSaxoPositionSymbol,
   resolveSaxoPositionSymbolResolution,
+  type OpeningHistoryFetchState,
   type SaxoSyntheticForwardPair,
   type SaxoApiOrderSnapshot,
   type SaxoApiPositionSnapshot,
   type SaxoHistoryDiscoveryItem,
-  createEffectiveSaxoHistoryCandidates,
 } from "@/features/saxo/saxoAccountSync";
 import {
   applySaxoStockSettlementToSimulation,
@@ -118,6 +122,127 @@ function recoverSimulationTicker(simulation: TradeSimulation, stockTransfers: St
   return "";
 }
 
+function getOpeningEntryMissingItems(entry: OptionEntryExecution, isNAccount: boolean): string[] {
+  if (isNAccount) {
+    const items: string[] = [];
+    if (!entry.tradeDate) items.push("取引日");
+    if (!Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD <= 0) items.push("約定価格USD");
+    if (!Number.isFinite(entry.contracts) || entry.contracts <= 0) items.push("数量");
+    if (entry.commissionUSD === undefined || !Number.isFinite(entry.commissionUSD)) items.push("取引費用USD");
+    return items;
+  }
+  const items: string[] = [];
+  if (!entry.tradeDate) items.push("取引日");
+  if (!Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD <= 0) items.push("約定価格USD");
+  if (!Number.isFinite(entry.contracts) || entry.contracts <= 0) items.push("数量");
+  if (entry.brokerBookedAmountJPY === undefined || !Number.isFinite(entry.brokerBookedAmountJPY)) items.push("記帳額JPY");
+  if (entry.brokerPremiumJPY === undefined || !Number.isFinite(entry.brokerPremiumJPY)) items.push("プレミアムJPY");
+  if (entry.brokerTransactionCostJPY === undefined || !Number.isFinite(entry.brokerTransactionCostJPY)) items.push("開始現金費用JPY");
+  if (entry.brokerExchangeRateJPY === undefined || !Number.isFinite(entry.brokerExchangeRateJPY)) items.push("為替レート");
+  return items;
+}
+
+function toOpeningFieldEvidence(evidence: {
+  source: "position" | "trade_history" | "manual";
+  sourceField: string;
+  capturedAt: string;
+  completeness: "direct" | "component_aggregate" | "partial" | "cross_validated_component_aggregate";
+  components?: Record<string, number>;
+} | undefined) {
+  if (!evidence) return undefined;
+  return {
+    source: evidence.source,
+    sourceField: evidence.sourceField,
+    capturedAt: evidence.capturedAt,
+    completeness: evidence.completeness,
+    ...(evidence.components ? { components: evidence.components } : {}),
+  };
+}
+
+function buildOpeningEntryMemo(execution: OptionEntryExecution, isNAccount: boolean): string {
+  const missingItems = getOpeningEntryMissingItems(execution, isNAccount);
+  switch (execution.historyCompletionStatus) {
+    case "history_match_complete":
+      return "入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 補完済み。正式保存前にSaxo履歴と照合してください。";
+    case "history_match_missing_fields":
+      return missingItems.length > 0
+        ? `入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 要手入力。不足項目: ${missingItems.join("、")}`
+        : "入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 要確認。";
+    case "source_conflict":
+      return "入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 出所間の値が競合しています。正式保存前にSaxo画面で確認してください。";
+    case "history_fetch_failed":
+      return "入力元: Saxo現在建玉 / 履歴補完: 取得失敗。同じ画面で再取得するか、不足項目だけ手入力してください。";
+    case "history_no_usable_match":
+      return "入力元: Saxo現在建玉 / 履歴補完: 一致履歴なし。不足項目だけ手入力してください。";
+    case "history_not_fetched":
+      return "入力元: Saxo現在建玉 / 履歴補完: 未取得。Saxoに再接続して同じ画面で再取得してください。";
+    default:
+      return "入力元: Saxo現在建玉 / 履歴補完: 要確認。不足項目だけ手入力してください。";
+  }
+}
+
+function getOpeningEntryStatusMessage(execution: OptionEntryExecution, isNAccount: boolean): string {
+  const missingItems = getOpeningEntryMissingItems(execution, isNAccount);
+  switch (execution.historyCompletionStatus) {
+    case "history_match_complete":
+      return "Saxo現在建玉から下書きを作成し、Saxo取引履歴1件で建玉開始確認を補完しました。正式保存前に確認してください。";
+    case "history_match_missing_fields":
+      return missingItems.length > 0
+        ? `Saxo現在建玉から下書きを作成し、Saxo取引履歴1件から一部補完しました。不足項目: ${missingItems.join("、")}。`
+        : "Saxo現在建玉から下書きを作成しました。Saxo取引履歴の補完結果を確認してください。";
+    case "source_conflict":
+      return "Saxoの開始時実値の出所が競合しているため、下書きは正式保存できません。Saxo画面で確認してください。";
+    case "history_fetch_failed":
+      return "Saxo現在建玉から下書きを作成しました。履歴取得に失敗したため、同じ画面で再取得するか、不足項目だけ手入力してください。";
+    case "history_no_usable_match":
+      return "Saxo現在建玉から下書きを作成しました。一致する取引履歴がないため、不足項目だけ手入力してください。";
+    case "history_not_fetched":
+      return "Saxo現在建玉から下書きを作成しました。履歴取得前のため、同じ画面で再取得してください。";
+    default:
+      return "Saxo現在建玉から下書きを作成しました。内容を確認してください。";
+  }
+}
+
+function isSameOptionSide(position: SaxoApiPositionSnapshot, leg: OptionLeg): boolean {
+  const expectedSide = position.side === "long" ? "buy" : position.side === "short" ? "sell" : undefined;
+  return Boolean(expectedSide && leg.side === expectedSide);
+}
+
+function findOpeningPositionForEntryExecution(
+  simulation: TradeSimulation,
+  execution: OptionEntryExecution,
+  positions: SaxoApiPositionSnapshot[],
+): SaxoApiPositionSnapshot | undefined {
+  const leg = simulation.optionLegs.find((candidate) => candidate.id === execution.legId);
+  if (!leg) return undefined;
+  const exactPositionId = simulation.fixtureMeta?.saxoPositionId;
+  const exactAccountKey = simulation.fixtureMeta?.saxoAccountKey;
+  const exact = positions.find((position) =>
+    position.kind === "option" &&
+    (position.positionId ?? position.id) === exactPositionId &&
+    (
+      position.accountAssignment === simulation.accountCode ||
+      (position.accountAssignment === "unassigned" && Boolean(exactAccountKey) && position.accountKey === exactAccountKey)
+    ),
+  );
+  if (exact) return exact;
+  const matches = positions.filter((position) =>
+    position.kind === "option" &&
+    (
+      position.accountAssignment === simulation.accountCode ||
+      (position.accountAssignment === "unassigned" && Boolean(exactAccountKey) && position.accountKey === exactAccountKey)
+    ) &&
+    position.optionType === leg.type &&
+    isSameOptionSide(position, leg) &&
+    position.expiry === leg.expiryDate &&
+    position.strike !== undefined &&
+    Math.abs(position.strike - leg.strikeUSD) <= 0.001 &&
+    position.quantity !== undefined &&
+    Math.abs(Math.abs(position.quantity) - execution.contracts) <= 0.0001,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export default function App() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
@@ -143,6 +268,7 @@ export default function App() {
   const [hasSaxoDetailUserState, setHasSaxoDetailUserState] = useState(false);
   const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
   const [sameDayUsdJpyQuote, setSameDayUsdJpyQuote] = useState<FxQuote | null>(null);
+  const [saxoHistoryFetchState, setSaxoHistoryFetchState] = useState<OpeningHistoryFetchState>("not_fetched");
   const candidatePanelRef = useRef<HTMLDivElement | null>(null);
   const {
     activeWorkspace,
@@ -175,7 +301,6 @@ export default function App() {
     clearCandidates,
     markCandidateWatchOnly,
     updateCandidateJournal,
-    updateCandidateChecklist,
     updateCandidatePositionDraftReview,
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -209,6 +334,7 @@ export default function App() {
       if (repaired !== simulation) upsertSimulation(repaired);
     });
   }, [saxoHistoryCandidates, simulations, upsertSimulation]);
+  const selectedStockSettlementReflected = Boolean(selected && isStockSettlementComplete(selected));
   useEffect(() => {
     simulations.forEach((simulation) => {
       if (normalizeTicker(simulation.ticker)) return;
@@ -217,6 +343,42 @@ export default function App() {
       upsertSimulation({ ...simulation, ticker, underlyingName: simulation.underlyingName?.trim() || ticker });
     });
   }, [simulations, stockTransfers, upsertSimulation]);
+  useEffect(() => {
+    if (!selectedStockSettlementReflected) return;
+    setQuoteStatus((current) =>
+      current.includes("株式譲渡") && current.includes("6-B") && current.includes("確認")
+        ? "株式譲渡記録は成績に反映済みです。成績タブでN口座株式譲渡損益を確認できます。"
+        : current,
+    );
+  }, [selectedStockSettlementReflected, selected?.id, selected?.stockSettlement]);
+  useEffect(() => {
+    simulations.forEach((simulation) => {
+      const executions = simulation.optionEntryExecutions ?? [];
+      if (executions.length === 0) return;
+      let changed = false;
+      const nextExecutions = executions.map((execution) => {
+        if (execution.confirmed || execution.saxoSourceType !== "current_position") return execution;
+        const position = findOpeningPositionForEntryExecution(simulation, execution, saxoPositionCandidates);
+        if (!position) return execution;
+        const normalizedPosition = position.accountAssignment === simulation.accountCode
+          ? position
+          : { ...position, accountAssignment: simulation.accountCode };
+        const historyMatches = findEntryHistoryMatches(normalizedPosition, saxoHistoryCandidates);
+        const resolution = resolveOpeningExecution(normalizedPosition, historyMatches, saxoHistoryFetchState);
+        const merged = mergeOpeningExecutionIntoEntryExecution(execution, resolution);
+        const nextExecution = {
+          ...merged,
+          memo: buildOpeningEntryMemo(merged, simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"),
+          historyCandidateIds: historyMatches.map((match) => match.item.id),
+        };
+        if (JSON.stringify(nextExecution) !== JSON.stringify(execution)) changed = true;
+        return nextExecution;
+      });
+      if (changed) {
+        upsertSimulation({ ...simulation, optionEntryExecutions: nextExecutions });
+      }
+    });
+  }, [saxoHistoryCandidates, saxoHistoryFetchState, saxoPositionCandidates, simulations, upsertSimulation]);
   const selectedStockTransfer = selected ? getStockTransferForSimulation(selected, stockTransfers) : undefined;
   const selectedStockTransferRecorded = Boolean(selectedStockTransfer);
   const selectedLinkedWheelCycle = selected
@@ -236,7 +398,7 @@ export default function App() {
   const pendingCashEffects = calculatePendingAccountCashEffects(simulations, accountInputs);
   const yearlyPerformanceSummary = calculateYearlyPerformanceSummary(simulations, performanceYear);
   const canUseExternalQuotes = true;
-  const externalQuoteModeLabel = "株価更新では、利用者PC上のRead-only補助ツールへ銘柄ティッカーとUSD/JPY取得リクエストだけを送信します。";
+  const externalQuoteModeLabel = "株価更新では銘柄ティッカー、為替更新ではUSD/JPY取得リクエストだけを外部サービスへ送信します。";
   const refreshAllQuotes = async () => {
     const tickers = Array.from(new Set(simulations.map((simulation) => normalizeTicker(simulation.ticker)).filter(Boolean)));
     if (tickers.length === 0) {
@@ -402,7 +564,11 @@ export default function App() {
       candidatePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
   };
-  const createSimulationFromSaxoPosition = (position: SaxoApiPositionSnapshot, historyItems: SaxoHistoryDiscoveryItem[] = saxoHistoryCandidates) => {
+  const createSimulationFromSaxoPosition = (
+    position: SaxoApiPositionSnapshot,
+    historyItems: SaxoHistoryDiscoveryItem[] = saxoHistoryCandidates,
+    historyFetchState: OpeningHistoryFetchState = saxoHistoryFetchState,
+  ) => {
     if (position.accountAssignment !== "P" && position.accountAssignment !== "N") {
       setQuoteStatus("P/N未割当のSaxo建玉は建玉入力へ反映できません。先にP口座 / N口座 / 使わないを確認してください。");
       return;
@@ -418,7 +584,7 @@ export default function App() {
     const today = formatLocalDate(new Date());
     const expiryDate = position.expiry ?? today;
     const historyMatches = findEntryHistoryMatches(position, historyItems);
-    const opening = resolveOpeningExecution(position, historyMatches, true);
+    const opening = resolveOpeningExecution(position, historyMatches, historyFetchState);
     const entryDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : today;
     const dte = Math.max(0, Math.ceil((Date.parse(expiryDate) - Date.parse(entryDate)) / 86400000));
     const accountCode = position.accountAssignment;
@@ -433,21 +599,56 @@ export default function App() {
     const fillPriceUSD = bestHistory?.price ?? position.premiumOpenPrice ?? position.currentOptionPrice ?? 0;
     const contracts = bestHistory?.quantity !== undefined ? Math.max(1, Math.abs(bestHistory.quantity)) : quantity;
     const entryTradeDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : entryDate;
-    const historyMissingItems =
-      bestHistory === undefined
-        ? []
-        : isNAccount
-          ? [
-              fillPriceUSD > 0 ? undefined : "プレミアムUSD",
-              bestHistory.transactionCost !== undefined ? undefined : "取引費用USD",
-            ].filter((item): item is string => Boolean(item))
-          : [
-              bestHistory.bookedAmount !== undefined || bestHistory.profitLossBase !== undefined ? undefined : "記帳額JPY",
-              bestHistory.premiumAmount !== undefined ? undefined : "プレミアムJPY",
-              bestHistory.transactionCost !== undefined ? undefined : "取引費用JPY",
-              bestHistory.exchangeRate !== undefined ? undefined : "為替レート",
-            ].filter((item): item is string => Boolean(item));
-    const historyCompletionStatus: OptionEntryExecution["historyCompletionStatus"] = historyMatches.length > 1 ? "multiple" : opening.historyStatus === "history_no_usable_match" ? "auto_filled_partial" : historyMissingItems.length > 0 ? "history_match_missing_fields" : "auto_filled_complete";
+    const draftExecution: OptionEntryExecution = {
+      id: `saxo-entry-${position.id}-${Date.now()}`,
+      legId,
+      tradeDate: entryTradeDate,
+      contracts,
+      fillPriceUSD,
+      settlementCurrency: isNAccount ? "USD" : "JPY",
+      brokerBookedAmountJPY: !isNAccount ? opening.openingBookedAmountJpy?.value : undefined,
+      brokerPremiumJPY: !isNAccount ? opening.openingPremiumJpy?.value : undefined,
+      brokerTransactionCostJPY: !isNAccount ? opening.openingTransactionCostJpy?.value : undefined,
+      brokerCurrencyConversionCostJPY: undefined,
+      brokerTotalTransactionCostJPY: undefined,
+      brokerFeeJPY: !isNAccount ? opening.openingTransactionCostJpy?.components?.Commission ?? bestHistory?.feeAmount : undefined,
+      brokerExchangeFeeJPY: !isNAccount ? opening.openingTransactionCostJpy?.components?.ExchangeFee ?? bestHistory?.exchangeFee : undefined,
+      brokerOtherTransactionCostJPY: !isNAccount
+        ? (opening.openingTransactionCostJpy?.components?.AdditionalTransactionCosts ?? 0) +
+          (opening.openingTransactionCostJpy?.components?.ExternalCharges ?? 0) +
+          (opening.openingTransactionCostJpy?.components?.PerformanceFee ?? 0)
+        : undefined,
+      brokerExchangeRateJPY: !isNAccount ? opening.openingFxRate?.value : undefined,
+      openingFieldSources: !isNAccount ? {
+        tradeDate: opening.executionTimeUtc?.source,
+        brokerBookedAmountJPY: opening.openingBookedAmountJpy?.source,
+        brokerPremiumJPY: opening.openingPremiumJpy?.source,
+        brokerTransactionCostJPY: opening.openingTransactionCostJpy?.source,
+        brokerExchangeRateJPY: opening.openingFxRate?.source,
+      } : undefined,
+      openingFieldEvidence: !isNAccount ? {
+        tradeDate: toOpeningFieldEvidence(opening.executionTimeUtc),
+        brokerBookedAmountJPY: toOpeningFieldEvidence(opening.openingBookedAmountJpy),
+        brokerPremiumJPY: toOpeningFieldEvidence(opening.openingPremiumJpy),
+        brokerTransactionCostJPY: toOpeningFieldEvidence(opening.openingTransactionCostJpy),
+        brokerExchangeRateJPY: toOpeningFieldEvidence(opening.openingFxRate),
+      } : undefined,
+      brokerTaxIncludedFeeJPY: !isNAccount ? opening.openingTransactionCostJpy?.components?.StampDuty ?? bestHistory?.taxIncludedFee : undefined,
+      commissionUSD: isNAccount
+        ? bestHistory?.transactionCost !== undefined
+          ? Math.abs(bestHistory.transactionCost)
+          : getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD)
+        : undefined,
+      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
+      referenceFxRateJPY: bestHistory?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
+      inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
+      source: "saxo_api_estimate",
+      saxoSourceType: "current_position",
+      historyCompletionStatus: mapOpeningExecutionHistoryStatusToEntryCompletionStatus(opening.historyStatus),
+      historyCandidateIds: historyMatches.map((match) => match.item.id),
+      confirmed: false,
+    };
+    const finalizedDraftExecution = { ...draftExecution, memo: buildOpeningEntryMemo(draftExecution, isNAccount) };
     const simulation: TradeSimulation = {
       id: `saxo-position-draft-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       status: "open",
@@ -492,39 +693,7 @@ export default function App() {
         },
       ],
       optionEntryExecutions: [
-        {
-          id: `saxo-entry-${position.id}-${Date.now()}`,
-          legId,
-          tradeDate: entryTradeDate,
-          contracts,
-          fillPriceUSD,
-          settlementCurrency: isNAccount ? "USD" : "JPY",
-          brokerBookedAmountJPY: !isNAccount ? opening.openingBookedAmountJpy?.value : undefined,
-          brokerPremiumJPY: !isNAccount ? opening.openingPremiumJpy?.value : undefined,
-          brokerTransactionCostJPY: !isNAccount ? opening.openingTransactionCostJpy?.value : undefined,
-          brokerFeeJPY: !isNAccount ? bestHistory?.feeAmount : undefined,
-          brokerExchangeFeeJPY: !isNAccount ? bestHistory?.exchangeFee : undefined,
-          brokerExchangeRateJPY: !isNAccount ? opening.openingFxRate?.value : undefined,
-          openingFieldSources: !isNAccount ? { tradeDate: opening.executionTimeUtc?.source, brokerBookedAmountJPY: opening.openingBookedAmountJpy?.source, brokerPremiumJPY: opening.openingPremiumJpy?.source, brokerTransactionCostJPY: opening.openingTransactionCostJpy?.source, brokerExchangeRateJPY: opening.openingFxRate?.source } : undefined,
-          brokerTaxIncludedFeeJPY: !isNAccount ? bestHistory?.taxIncludedFee : undefined,
-          commissionUSD: isNAccount ? (bestHistory?.transactionCost !== undefined ? Math.abs(bestHistory.transactionCost) : getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD)) : undefined,
-          commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
-          referenceFxRateJPY: bestHistory?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
-          inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
-          source: "saxo_api_estimate",
-          saxoSourceType: "current_position",
-          historyCompletionStatus,
-          historyCandidateIds: historyMatches.map((match) => match.item.id),
-          confirmed: false,
-          memo:
-            historyCompletionStatus === "auto_filled_complete"
-              ? "入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 補完済み。正式保存前にSaxo履歴と照合してください。"
-              : historyCompletionStatus === "history_match_missing_fields" || historyCompletionStatus === "auto_filled_partial"
-                ? `入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 要手入力。不足項目: ${historyMissingItems.join("、")}`
-              : historyCompletionStatus === "multiple"
-                ? "入力元: Saxo現在建玉 / 履歴補完: 要確認。Saxo取引履歴に複数候補があります。"
-                : "入力元: Saxo現在建玉 / 履歴補完: 未照合。Saxo取引履歴から補完するか、不足項目を手入力してください。",
-        },
+        finalizedDraftExecution,
       ],
       optionCloseExecutions: [],
       brokerMarginJPY: 0,
@@ -558,13 +727,7 @@ export default function App() {
       document.getElementById("option-entry-executions")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 150);
     setQuoteStatus(
-      historyCompletionStatus === "auto_filled_complete"
-        ? "Saxo現在建玉から下書きを作成し、Saxo取引履歴1件で建玉開始確認を補完しました。正式保存前に確認してください。"
-        : historyCompletionStatus === "history_match_missing_fields" || historyCompletionStatus === "auto_filled_partial"
-          ? `Saxo現在建玉から下書きを作成し、Saxo取引履歴1件から一部補完しました。不足項目: ${historyMissingItems.join("、")}。`
-        : historyCompletionStatus === "multiple"
-          ? "Saxo現在建玉から下書きを作成しました。Saxo取引履歴に複数候補があります。3-Aで履歴候補を選んでください。"
-          : "Saxo現在建玉から下書きを作成しました。Saxo取引履歴から補完できませんでした。履歴を再取得するか、不足項目だけ手入力してください。",
+      getOpeningEntryStatusMessage(finalizedDraftExecution, isNAccount),
     );
   };
 
@@ -577,21 +740,40 @@ export default function App() {
     const parentOrderId = parentHistory?.orderId ?? parentHistory?.id;
     const parentNetFill = parentHistory?.price;
     const parentCommission = parentHistory?.transactionCost === undefined ? undefined : Math.abs(parentHistory.transactionCost);
-    const createEntryExecution = (legId: string, history: NonNullable<typeof fillEvidence.callHistory>, fallbackQuantity: number): OptionEntryExecution => ({
-      id: `saxo-synthetic-entry-${legId}-${history.id}`, legId, tradeDate: history.tradeDate ?? entryDate,
-      contracts: history.quantity === undefined ? fallbackQuantity : Math.max(1, Math.abs(history.quantity)), fillPriceUSD: history.price ?? 0,
-      settlementCurrency: pair.accountCode === "N" ? "USD" as const : "JPY" as const,
-      brokerBookedAmountJPY: pair.accountCode === "P" ? history.bookedAmount ?? history.profitLossBase : undefined, brokerPremiumJPY: pair.accountCode === "P" ? history.premiumAmount : undefined,
-      brokerTransactionCostJPY: pair.accountCode === "P" ? history.transactionCost : undefined, brokerFeeJPY: pair.accountCode === "P" ? history.feeAmount : undefined,
-      brokerExchangeFeeJPY: pair.accountCode === "P" ? history.exchangeFee : undefined, brokerExchangeRateJPY: pair.accountCode === "P" ? history.exchangeRate : undefined,
-      brokerTaxIncludedFeeJPY: pair.accountCode === "P" ? history.taxIncludedFee : undefined,
-      commissionUSD: pair.accountCode === "N" ? (history.transactionCost !== undefined ? Math.abs(history.transactionCost) : getNOptionStandardCommissionUSD(history.quantity === undefined ? fallbackQuantity : Math.max(1, Math.abs(history.quantity)), standardNOptionCommissionUSD)) : undefined,
-      commissionSource: pair.accountCode === "N" ? (history.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
-      referenceFxRateJPY: history.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY, inputMode: pair.accountCode === "N" ? "USD_EXECUTION_CALC" as const : "P_JPY_BROKER_STATEMENT" as const,
-      source: "saxo_api_estimate" as const, saxoSourceType: "history" as const, historyCompletionStatus: "matched" as const, historyCandidateIds: [history.id], confirmed: false,
-      memo: "入力元: Saxo SyntheticUnderlying親注文 + Saxo取引履歴。親注文のネット約定価格を一次根拠として、3-Aで二脚の約定実績を確認してください。",
-    });
-    const createPositionEntry = (legId: string, position: SaxoApiPositionSnapshot, contracts: number): OptionEntryExecution => ({ id: `saxo-synthetic-entry-${legId}-${position.id}`, legId, tradeDate: entryDate, contracts, fillPriceUSD: position.premiumOpenPrice ?? position.currentOptionPrice ?? 0, settlementCurrency: pair.accountCode === "N" ? "USD" as const : "JPY" as const, commissionUSD: pair.accountCode === "N" ? getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD) : undefined, commissionSource: pair.accountCode === "N" ? "standard_default" : undefined, referenceFxRateJPY: selected?.referenceFxRateJPY ?? selected?.fxRateJPY, inputMode: pair.accountCode === "N" ? "USD_EXECUTION_CALC" as const : "P_JPY_BROKER_STATEMENT" as const, source: "saxo_api_estimate" as const, saxoSourceType: "current_position" as const, historyCompletionStatus: "unmatched" as const, historyCandidateIds: [], confirmed: false, memo: "入力元: Saxo現在建玉の二脚。取引履歴の約定値は3-Aで確認してください。" });
+    const createEntryExecution = (legId: string, history: typeof fillEvidence.callHistory, position: SaxoApiPositionSnapshot, fallbackQuantity: number): OptionEntryExecution => {
+      const contracts = history?.quantity === undefined ? fallbackQuantity : Math.max(1, Math.abs(history.quantity));
+      const hasSaxoActualCommission = pair.accountCode === "N" && history?.transactionCost !== undefined;
+      return {
+        id: `saxo-synthetic-entry-${legId}-${history?.id ?? position.id}`,
+        legId,
+        tradeDate: history?.tradeDate ?? entryDate,
+        contracts,
+        fillPriceUSD: history?.price ?? position.premiumOpenPrice ?? position.currentOptionPrice ?? 0,
+        settlementCurrency: pair.accountCode === "N" ? "USD" as const : "JPY" as const,
+        brokerBookedAmountJPY: pair.accountCode === "P" ? history?.bookedAmount ?? history?.profitLossBase : undefined,
+        brokerPremiumJPY: pair.accountCode === "P" ? history?.premiumAmount : undefined,
+        brokerTransactionCostJPY: undefined,
+        brokerTotalTransactionCostJPY: pair.accountCode === "P" ? history?.transactionCost : undefined,
+        brokerFeeJPY: pair.accountCode === "P" ? history?.feeAmount : undefined,
+        brokerExchangeFeeJPY: pair.accountCode === "P" ? history?.exchangeFee : undefined,
+        brokerExchangeRateJPY: pair.accountCode === "P" ? history?.exchangeRate : undefined,
+        brokerTaxIncludedFeeJPY: pair.accountCode === "P" ? history?.taxIncludedFee : undefined,
+        commissionUSD: pair.accountCode === "N"
+          ? hasSaxoActualCommission
+            ? Math.abs(history!.transactionCost!)
+            : getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD)
+          : undefined,
+        commissionSource: pair.accountCode === "N" ? (hasSaxoActualCommission ? "saxo_actual" : "standard_default") : undefined,
+        referenceFxRateJPY: history?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
+        inputMode: pair.accountCode === "N" ? "USD_EXECUTION_CALC" as const : "P_JPY_BROKER_STATEMENT" as const,
+        source: "saxo_api_estimate" as const,
+        saxoSourceType: history ? "history" as const : "current_position" as const,
+        historyCompletionStatus: history ? "matched" as const : "unmatched" as const,
+        historyCandidateIds: history ? [history.id] : [],
+        confirmed: false,
+        memo: "入力元: Saxo SyntheticUnderlying親注文 + Saxo取引履歴。親注文のネット約定価格を一次根拠として、3-Aで二脚の約定実績を確認してください。",
+      };
+    };
     const existing = findSaxoSyntheticForwardSimulationForPair(pair, useOptionsStore.getState().simulations, parentOrderId);
     if (existing) {
       if (shouldRecoverSaxoSyntheticForwardEntryConfirmation(existing, isEntryConfirmation)) {
@@ -599,29 +781,97 @@ export default function App() {
         const putLeg = existing.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell");
         const existingEntryLegIds = new Set((existing.optionEntryExecutions ?? []).map((execution) => execution.legId));
         const upgraded: TradeSimulation = {
-          ...existing, status: "entry_confirmation", name: existing.name.replace("API取込下書き", "Saxo約定確認"), entryDate,
+          ...existing,
+          status: "entry_confirmation",
+          name: existing.name.replace("API取込下書き", "Saxo約定確認"),
+          entryDate,
           dte: Math.max(0, Math.ceil((Date.parse(existing.expiryDate) - Date.parse(entryDate)) / 86400000)),
-          optionLegs: existing.optionLegs.map((leg) => leg.id === callLeg?.id && !leg.premiumUSD ? { ...leg, premiumUSD: fillEvidence.callHistory?.price ?? pair.callPosition.premiumOpenPrice ?? leg.premiumUSD } : leg.id === putLeg?.id && !leg.premiumUSD ? { ...leg, premiumUSD: fillEvidence.putHistory?.price ?? pair.putPosition.premiumOpenPrice ?? leg.premiumUSD } : leg),
-          syntheticForwardTicket: { ...existing.syntheticForwardTicket, ticketId: parentOrderId ?? existing.syntheticForwardTicket?.ticketId, orderId: parentOrderId ?? existing.syntheticForwardTicket?.orderId, parentHistoryId: parentHistory?.id ?? existing.syntheticForwardTicket?.parentHistoryId, parentTradeDate: parentHistory?.tradeDate ?? existing.syntheticForwardTicket?.parentTradeDate, netFillPriceUSD: parentNetFill ?? existing.syntheticForwardTicket?.netFillPriceUSD, actualTotalCommissionUSD: parentCommission ?? existing.syntheticForwardTicket?.actualTotalCommissionUSD, netFillSource: parentNetFill === undefined ? existing.syntheticForwardTicket?.netFillSource : "saxo_parent", actualTotalCommissionSource: parentCommission === undefined ? existing.syntheticForwardTicket?.actualTotalCommissionSource : "saxo_parent" },
-          optionEntryExecutions: [...(existing.optionEntryExecutions ?? []), ...(callLeg && !existingEntryLegIds.has(callLeg.id) ? [fillEvidence.callHistory ? createEntryExecution(callLeg.id, fillEvidence.callHistory, callLeg.quantity) : createPositionEntry(callLeg.id, pair.callPosition, callLeg.quantity)] : []), ...(putLeg && !existingEntryLegIds.has(putLeg.id) ? [fillEvidence.putHistory ? createEntryExecution(putLeg.id, fillEvidence.putHistory, putLeg.quantity) : createPositionEntry(putLeg.id, pair.putPosition, putLeg.quantity)] : [])],
-          fixtureMeta: { ...existing.fixtureMeta!, notes: "Saxo SyntheticUnderlying親注文または二脚を根拠に約定確認待ちとして復旧しました。3-Aで約定確認を保存してください。" },
+          optionLegs: existing.optionLegs.map((leg) =>
+            leg.id === callLeg?.id && !leg.premiumUSD ? { ...leg, premiumUSD: fillEvidence.callHistory?.price ?? pair.callPosition.premiumOpenPrice ?? leg.premiumUSD } :
+            leg.id === putLeg?.id && !leg.premiumUSD ? { ...leg, premiumUSD: fillEvidence.putHistory?.price ?? pair.putPosition.premiumOpenPrice ?? leg.premiumUSD } : leg,
+          ),
+          syntheticForwardTicket: {
+            ...existing.syntheticForwardTicket,
+            ticketId: parentOrderId ?? existing.syntheticForwardTicket?.ticketId,
+            orderId: parentOrderId ?? existing.syntheticForwardTicket?.orderId,
+            parentHistoryId: parentHistory?.id ?? existing.syntheticForwardTicket?.parentHistoryId,
+            parentTradeDate: parentHistory?.tradeDate ?? existing.syntheticForwardTicket?.parentTradeDate,
+            netFillPriceUSD: parentNetFill ?? existing.syntheticForwardTicket?.netFillPriceUSD,
+            actualTotalCommissionUSD: parentCommission ?? existing.syntheticForwardTicket?.actualTotalCommissionUSD,
+            netFillSource: parentNetFill === undefined ? existing.syntheticForwardTicket?.netFillSource : "saxo_parent",
+            actualTotalCommissionSource: parentCommission === undefined ? existing.syntheticForwardTicket?.actualTotalCommissionSource : "saxo_parent",
+          },
+          optionEntryExecutions: [
+            ...(existing.optionEntryExecutions ?? []),
+            ...(callLeg && !existingEntryLegIds.has(callLeg.id) ? [createEntryExecution(callLeg.id, fillEvidence.callHistory, pair.callPosition, callLeg.quantity)] : []),
+            ...(putLeg && !existingEntryLegIds.has(putLeg.id) ? [createEntryExecution(putLeg.id, fillEvidence.putHistory, pair.putPosition, putLeg.quantity)] : []),
+          ],
+          fixtureMeta: {
+            ...existing.fixtureMeta!,
+            notes: "Saxo SyntheticUnderlying親注文または二脚を根拠に約定確認待ちとして復旧しました。3-Aで約定確認を保存してください。",
+          },
         };
-        upsertSimulation(upgraded); if (openEditor) { selectSimulation(upgraded.id); setIsEditorOpen(true); setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() }); } setQuoteStatus(`Saxo親注文 ${parentOrderId ?? ""} と二脚の約定履歴を統合し、約定確認待ちの3-Aデータへ復旧しました。`); return;
+        upsertSimulation(upgraded);
+        if (openEditor) {
+          selectSimulation(upgraded.id);
+          setIsEditorOpen(true);
+          setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() });
+        }
+        setQuoteStatus(`Saxo親注文 ${parentOrderId ?? ""} と二脚の約定履歴を統合し、約定確認待ちの3-Aデータへ復旧しました。`);
+        return;
       }
-      selectSimulation(existing.id); setIsEditorOpen(true); setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() }); setQuoteStatus(existing.status === "entry_confirmation" ? "このSynthetic Forward候補は約定確認待ちです。3-Aで確認してください。" : existing.status === "open" ? "このSynthetic Forward候補は建玉中として統合済みです。3-Aで確認してください。" : "このSynthetic Forward候補はすでに統合下書きへ反映済みです。3-Aで確認してください。"); return;
+      selectSimulation(existing.id);
+      setIsEditorOpen(true);
+      setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() });
+      setQuoteStatus(existing.status === "entry_confirmation" ? "このSynthetic Forward候補は約定確認待ちです。3-Aで確認してください。" : existing.status === "open" ? "このSynthetic Forward候補は建玉中として統合済みです。3-Aで確認してください。" : "このSynthetic Forward候補はすでに統合下書きへ反映済みです。3-Aで確認してください。");
+      return;
     }
     const id = `saxo-synthetic-draft-${pair.callPosition.id}-${pair.putPosition.id}`;
     const recoverConfirmedParent = forceEntryConfirmation && isFilled;
-    const simulation: TradeSimulation = { id, status: recoverConfirmedParent ? "open" : isEntryConfirmation ? "entry_confirmation" : "planned", name: `${pair.ticker} Synthetic Forward / ${recoverConfirmedParent ? "Saxo約定済み" : isEntryConfirmation ? "Saxo約定確認" : "API取込下書き"}`, ticker: pair.ticker, underlyingName: pair.callPosition.underlyingName ?? pair.putPosition.underlyingName ?? "", strategyType: "synthetic_forward", currentPriceUSD: pair.callPosition.currentPrice ?? pair.putPosition.currentPrice ?? 0, fxRateJPY: selected?.fxRateJPY ?? 0, accountCode: pair.accountCode, accountEnvironment: pair.accountCode === "N" ? "PROD_N_USD_SETTLEMENT" : activeWorkspace === "demo" ? "DEMO_JPY_BASE" : "PROD_P_JPY_SETTLEMENT", entryDate, expiryDate: pair.expiry, dte: Math.max(0, Math.ceil((Date.parse(pair.expiry) - Date.parse(entryDate)) / 86400000)), accountCurrency: pair.accountCode === "N" ? "USD" : "JPY", referenceFxRateJPY: selected?.referenceFxRateJPY ?? selected?.fxRateJPY ?? 0, stockPosition: null,
-      optionLegs: [{ id: `${id}-call`, type: "call", side: "buy", strikeUSD: pair.strike, premiumUSD: isEntryConfirmation ? fillEvidence.callHistory?.price ?? pair.callPosition.premiumOpenPrice ?? 0 : 0, quantity: pair.quantity, expiryDate: pair.expiry, assignmentPolicy: "unknown", brokerSymbol: pair.callPosition.instrumentCode, saxoAccountKey: pair.accountKey, saxoPositionId: pair.callPosition.positionId ?? pair.callPosition.id, saxoUic: pair.callPosition.uic }, { id: `${id}-put`, type: "put", side: "sell", strikeUSD: pair.strike, premiumUSD: isEntryConfirmation ? fillEvidence.putHistory?.price ?? pair.putPosition.premiumOpenPrice ?? 0 : 0, quantity: pair.quantity, expiryDate: pair.expiry, putIntent: "accept_assignment", assignmentPolicy: "unknown", brokerSymbol: pair.putPosition.instrumentCode, saxoAccountKey: pair.accountKey, saxoPositionId: pair.putPosition.positionId ?? pair.putPosition.id, saxoUic: pair.putPosition.uic }],
-      syntheticForwardTicket: { ticketId: parentOrderId, orderId: parentOrderId, parentHistoryId: parentHistory?.id, parentTradeDate: parentHistory?.tradeDate, netFillPriceUSD: parentNetFill, actualTotalCommissionUSD: parentCommission, netFillSource: parentNetFill === undefined ? undefined : "saxo_parent", actualTotalCommissionSource: parentCommission === undefined ? undefined : "saxo_parent" }, optionEntryExecutions: isEntryConfirmation ? [fillEvidence.callHistory ? createEntryExecution(`${id}-call`, fillEvidence.callHistory, pair.quantity) : createPositionEntry(`${id}-call`, pair.callPosition, pair.quantity), fillEvidence.putHistory ? createEntryExecution(`${id}-put`, fillEvidence.putHistory, pair.quantity) : createPositionEntry(`${id}-put`, pair.putPosition, pair.quantity)].map((execution) => recoverConfirmedParent ? { ...execution, confirmed: true, memo: "入力元: Saxo SyntheticUnderlying親注文 + Saxo取引履歴。二脚の正式保存済み記録から親シンセティック建玉を復旧しました。" } : execution) : [], optionCloseExecutions: [], brokerMarginJPY: 0, brokerMarginUSD: 0, marginBufferMultiplier: 1, marginUsagePercent: 0, availableCashJPY: 0, denominatorMode: "cash_secured", taxProfileId: "japan_derivative_separate_tax_user_confirm", nisaExpectedAnnualReturnPct: settings.defaultNisaExpectedAnnualReturnPct, beginnerMode: settings.beginnerMode, fixtureMeta: { source: activeWorkspace === "demo" ? "demo" : "live", isRealMoney: activeWorkspace !== "demo", broker: "SaxoBank", purpose: "development-fixture", createdAt: entryDate, notes: recoverConfirmedParent ? "Saxo SyntheticUnderlying親注文と正式保存済み二脚を根拠に、親シンセティック建玉だけを復旧しました。" : isEntryConfirmation ? "Saxo SyntheticUnderlying親注文または二脚を根拠に約定確認待ちとして復旧しました。3-Aで約定確認を保存してください。" : parentHistory ? "Saxo SyntheticUnderlying親注文を一次根拠に二脚を統合した下書きです。3-Aで約定実績と割当確認を完了してください。" : "Saxo現在建玉の二脚を統合した下書きです。親注文のネット約定価格・総手数料は未照合です。", saxoAccountKey: pair.accountKey } };
-    upsertSimulation(simulation); selectSimulation(simulation.id); setIsEditorOpen(true); setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() }); setQuoteStatus(recoverConfirmedParent ? `Saxo親注文 ${parentOrderId ?? ""} と正式保存済み二脚を根拠に、親Synthetic Forward建玉だけを復旧しました。` : isEntryConfirmation ? `C${pair.strike}買い/P${pair.strike}売りを約定確認待ちのSynthetic Forwardとして復旧し、該当する3-Aへ移動しました。` : parentHistory ? `Saxo親注文 ${parentOrderId ?? ""} のネット約定価格を根拠に、C${pair.strike}買い/P${pair.strike}売りを一件のSynthetic Forward下書きへ反映しました。` : "C買い/P売りを一件のSynthetic Forward下書きへ統合しました。親注文の約定実績を3-Aで確認してください。");
+    const simulation: TradeSimulation = {
+      id,
+      status: recoverConfirmedParent ? "open" : isEntryConfirmation ? "entry_confirmation" : "planned",
+      name: `${pair.ticker} Synthetic Forward / ${recoverConfirmedParent ? "Saxo約定済み" : isEntryConfirmation ? "Saxo約定確認" : "API取込下書き"}`,
+      ticker: pair.ticker,
+      underlyingName: pair.callPosition.underlyingName ?? pair.putPosition.underlyingName ?? "",
+      strategyType: "synthetic_forward",
+      currentPriceUSD: pair.callPosition.currentPrice ?? pair.putPosition.currentPrice ?? 0,
+      fxRateJPY: selected?.fxRateJPY ?? 0,
+      accountCode: pair.accountCode,
+      accountEnvironment: pair.accountCode === "N" ? "PROD_N_USD_SETTLEMENT" : activeWorkspace === "demo" ? "DEMO_JPY_BASE" : "PROD_P_JPY_SETTLEMENT",
+      entryDate,
+      expiryDate: pair.expiry,
+      dte: Math.max(0, Math.ceil((Date.parse(pair.expiry) - Date.parse(entryDate)) / 86400000)),
+      accountCurrency: pair.accountCode === "N" ? "USD" : "JPY",
+      referenceFxRateJPY: selected?.referenceFxRateJPY ?? selected?.fxRateJPY ?? 0,
+      stockPosition: null,
+      optionLegs: [
+        { id: `${id}-call`, type: "call", side: "buy", strikeUSD: pair.strike, premiumUSD: isEntryConfirmation ? fillEvidence.callHistory?.price ?? pair.callPosition.premiumOpenPrice ?? 0 : 0, quantity: pair.quantity, expiryDate: pair.expiry, assignmentPolicy: "unknown", brokerSymbol: pair.callPosition.instrumentCode, saxoAccountKey: pair.accountKey, saxoPositionId: pair.callPosition.positionId ?? pair.callPosition.id, saxoUic: pair.callPosition.uic },
+        { id: `${id}-put`, type: "put", side: "sell", strikeUSD: pair.strike, premiumUSD: isEntryConfirmation ? fillEvidence.putHistory?.price ?? pair.putPosition.premiumOpenPrice ?? 0 : 0, quantity: pair.quantity, expiryDate: pair.expiry, putIntent: "accept_assignment", assignmentPolicy: "unknown", brokerSymbol: pair.putPosition.instrumentCode, saxoAccountKey: pair.accountKey, saxoPositionId: pair.putPosition.positionId ?? pair.putPosition.id, saxoUic: pair.putPosition.uic },
+      ],
+      syntheticForwardTicket: {
+        ticketId: parentOrderId,
+        orderId: parentOrderId,
+        parentHistoryId: parentHistory?.id,
+        parentTradeDate: parentHistory?.tradeDate,
+        netFillPriceUSD: parentNetFill,
+        actualTotalCommissionUSD: parentCommission,
+        netFillSource: parentNetFill === undefined ? undefined : "saxo_parent",
+        actualTotalCommissionSource: parentCommission === undefined ? undefined : "saxo_parent",
+      },
+      optionEntryExecutions: isEntryConfirmation ? [createEntryExecution(`${id}-call`, fillEvidence.callHistory, pair.callPosition, pair.quantity), createEntryExecution(`${id}-put`, fillEvidence.putHistory, pair.putPosition, pair.quantity)].map((execution) => recoverConfirmedParent ? { ...execution, confirmed: true, memo: "入力元: Saxo SyntheticUnderlying親注文 + Saxo取引履歴。二脚の正式保存済み記録から親シンセティック建玉を復旧しました。" } : execution) : [], optionCloseExecutions: [], brokerMarginJPY: 0, brokerMarginUSD: 0, marginBufferMultiplier: 1, marginUsagePercent: 0, availableCashJPY: 0,
+      denominatorMode: "cash_secured", taxProfileId: "japan_derivative_separate_tax_user_confirm", nisaExpectedAnnualReturnPct: settings.defaultNisaExpectedAnnualReturnPct, beginnerMode: settings.beginnerMode,
+      fixtureMeta: { source: activeWorkspace === "demo" ? "demo" : "live", isRealMoney: activeWorkspace !== "demo", broker: "SaxoBank", purpose: "development-fixture", createdAt: entryDate, notes: recoverConfirmedParent ? "Saxo SyntheticUnderlying親注文と正式保存済み二脚を根拠に、親シンセティック建玉だけを復旧しました。" : isEntryConfirmation ? "Saxo SyntheticUnderlying親注文または二脚を根拠に約定確認待ちとして復旧しました。3-Aで約定確認を保存してください。" : parentHistory ? "Saxo SyntheticUnderlying親注文を一次根拠に二脚を統合した下書きです。3-Aで約定実績と割当確認を完了してください。" : "Saxo現在建玉の二脚を統合した下書きです。親注文のネット約定価格・総手数料は未照合です。", saxoAccountKey: pair.accountKey },
+    };
+    upsertSimulation(simulation); selectSimulation(simulation.id); setIsEditorOpen(true); setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() });
+    setQuoteStatus(recoverConfirmedParent ? `Saxo親注文 ${parentOrderId ?? ""} と正式保存済み二脚を根拠に、親Synthetic Forward建玉だけを復旧しました。` : isEntryConfirmation ? `C${pair.strike}買い/P${pair.strike}売りを約定確認待ちのSynthetic Forwardとして復旧し、該当する3-Aへ移動しました。` : parentHistory ? `Saxo親注文 ${parentOrderId ?? ""} のネット約定価格を根拠に、C${pair.strike}買い/P${pair.strike}売りを一件のSynthetic Forward下書きへ反映しました。` : "C買い/P売りを一件のSynthetic Forward下書きへ統合しました。親注文の約定実績を3-Aで確認してください。");
   };
 
   const linkSaxoPositionToExistingSimulation = (
     position: SaxoApiPositionSnapshot,
     target: TradeSimulation,
     historyItems: SaxoHistoryDiscoveryItem[] = saxoHistoryCandidates,
+    historyFetchState: OpeningHistoryFetchState = saxoHistoryFetchState,
   ): boolean => {
     if (position.kind !== "option" || (position.optionType !== "put" && position.optionType !== "call")) {
       setQuoteStatus("Saxoの米国株オプション建玉だけを既存建玉へ紐づけできます。");
@@ -632,9 +882,15 @@ export default function App() {
       setQuoteStatus("Saxo建玉の売買方向を判定できないため、既存建玉へ紐づけできません。");
       return false;
     }
+    const normalizedPositionAccountCode = position.accountAssignment === "P" || position.accountAssignment === "N"
+      ? position.accountAssignment
+      : target.accountCode;
+    const normalizedPosition = position.accountAssignment === normalizedPositionAccountCode
+      ? position
+      : { ...position, accountAssignment: normalizedPositionAccountCode };
     const targetLeg =
-      target.optionLegs.find((leg) => leg.type === position.optionType && leg.side === saxoSide) ??
-      target.optionLegs.find((leg) => leg.type === position.optionType) ??
+      target.optionLegs.find((leg) => leg.type === normalizedPosition.optionType && leg.side === saxoSide) ??
+      target.optionLegs.find((leg) => leg.type === normalizedPosition.optionType) ??
       target.optionLegs[0];
     if (!targetLeg) {
       setQuoteStatus("紐づけ先のオプション脚が見つかりません。建玉入力のオプション脚を確認してください。");
@@ -642,98 +898,104 @@ export default function App() {
     }
 
     const today = formatLocalDate(new Date());
-    const historyMatches = findEntryHistoryMatches(position, historyItems);
-    const opening = resolveOpeningExecution(position, historyMatches, true);
+    const historyMatches = findEntryHistoryMatches(normalizedPosition, historyItems);
+    const opening = resolveOpeningExecution(normalizedPosition, historyMatches, historyFetchState);
     const bestHistory = historyMatches.length === 1 ? historyMatches[0].item : undefined;
-    const actualExpiry = position.expiry ?? targetLeg.expiryDate ?? target.expiryDate;
-    const actualStrike = position.strike ?? targetLeg.strikeUSD;
-    const actualPremium = bestHistory?.price ?? position.premiumOpenPrice ?? position.currentOptionPrice ?? targetLeg.premiumUSD;
+    const actualExpiry = normalizedPosition.expiry ?? targetLeg.expiryDate ?? target.expiryDate;
+    const actualStrike = normalizedPosition.strike ?? targetLeg.strikeUSD;
+    const actualPremium = bestHistory?.price ?? normalizedPosition.premiumOpenPrice ?? normalizedPosition.currentOptionPrice ?? targetLeg.premiumUSD;
     const actualQuantity =
       bestHistory?.quantity !== undefined
         ? Math.max(1, Math.abs(bestHistory.quantity))
-        : position.quantity !== undefined
-          ? Math.max(1, Math.abs(position.quantity))
+        : normalizedPosition.quantity !== undefined
+          ? Math.max(1, Math.abs(normalizedPosition.quantity))
           : targetLeg.quantity;
     const actualTradeDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : bestHistory?.tradeDate ?? target.entryDate ?? today;
-    const accountCode = position.accountAssignment === "P" || position.accountAssignment === "N" ? position.accountAssignment : target.accountCode;
+    const accountCode = normalizedPositionAccountCode;
     const isNAccount = accountCode === "N";
-    const historyMissingItems =
-      bestHistory === undefined
-        ? []
-        : isNAccount
-          ? [
-              actualPremium > 0 ? undefined : "プレミアムUSD",
-              bestHistory.transactionCost !== undefined ? undefined : "取引費用USD",
-            ].filter((item): item is string => Boolean(item))
-          : [
-              bestHistory.bookedAmount !== undefined || bestHistory.profitLossBase !== undefined ? undefined : "記帳額JPY",
-              bestHistory.premiumAmount !== undefined ? undefined : "プレミアムJPY",
-              bestHistory.transactionCost !== undefined ? undefined : "取引費用JPY",
-              bestHistory.exchangeRate !== undefined ? undefined : "為替レート",
-            ].filter((item): item is string => Boolean(item));
-    const historyCompletionStatus: OptionEntryExecution["historyCompletionStatus"] = historyMatches.length > 1 ? "multiple" : "auto_filled_partial";
-    const diffs = describeSaxoPositionLinkDiffs(position, target, targetLeg, actualPremium, actualQuantity);
+    const optionType = normalizedPosition.optionType === "put" || normalizedPosition.optionType === "call"
+      ? normalizedPosition.optionType
+      : targetLeg.type;
+    const existingEntry = (target.optionEntryExecutions ?? []).find((execution) => execution.legId === targetLeg.id);
+    const diffs = describeSaxoPositionLinkDiffs(normalizedPosition, target, targetLeg, actualPremium, actualQuantity);
     const historyTicker = bestHistory
       ? resolveSaxoHistoryUnderlyingSymbol(bestHistory) ?? normalizeTicker(bestHistory.symbol ?? bestHistory.instrumentCode ?? "")
       : "";
-    const resolvedTicker = resolveSaxoPositionSymbol(position, simulations) || historyTicker || target.ticker;
+    const resolvedTicker = resolveSaxoPositionSymbol(normalizedPosition, simulations) || historyTicker || target.ticker;
     const updatedLeg: OptionLeg = {
       ...targetLeg,
-      type: position.optionType,
+      type: optionType,
       side: saxoSide,
       strikeUSD: actualStrike,
       premiumUSD: actualPremium,
       quantity: actualQuantity,
       expiryDate: actualExpiry,
-      isCovered: position.optionType === "call" ? true : targetLeg.isCovered,
-      marketPriceUSD: position.currentOptionPrice ?? targetLeg.marketPriceUSD,
-      brokerSymbol: position.instrumentCode ?? bestHistory?.instrumentCode ?? bestHistory?.symbol ?? targetLeg.brokerSymbol,
+      isCovered: optionType === "call" ? true : targetLeg.isCovered,
+      marketPriceUSD: normalizedPosition.currentOptionPrice ?? targetLeg.marketPriceUSD,
+      brokerSymbol: normalizedPosition.instrumentCode ?? bestHistory?.instrumentCode ?? bestHistory?.symbol ?? targetLeg.brokerSymbol,
     };
-    const existingEntry = (target.optionEntryExecutions ?? []).find((execution) => execution.legId === targetLeg.id);
-    const entryExecution: OptionEntryExecution = {
+    const mergedEntryExecutionBase: OptionEntryExecution = {
       ...existingEntry,
-      id: `saxo-entry-${position.id}-${Date.now()}`,
+      id: `saxo-entry-${normalizedPosition.id}-${Date.now()}`,
       legId: targetLeg.id,
-      tradeDate: existingEntry?.openingFieldSources?.tradeDate === "manual" ? existingEntry.tradeDate : actualTradeDate,
+      tradeDate: existingEntry?.openingFieldSources?.tradeDate === "manual" ? existingEntry.tradeDate : (existingEntry?.tradeDate || actualTradeDate),
       contracts: actualQuantity,
       fillPriceUSD: actualPremium,
       settlementCurrency: isNAccount ? "USD" : "JPY",
-      brokerBookedAmountJPY: !isNAccount ? existingEntry?.openingFieldSources?.brokerBookedAmountJPY === "manual" ? existingEntry.brokerBookedAmountJPY : opening.openingBookedAmountJpy?.value : undefined,
-      brokerPremiumJPY: !isNAccount ? existingEntry?.openingFieldSources?.brokerPremiumJPY === "manual" ? existingEntry.brokerPremiumJPY : opening.openingPremiumJpy?.value : undefined,
-      brokerTransactionCostJPY: !isNAccount ? existingEntry?.openingFieldSources?.brokerTransactionCostJPY === "manual" ? existingEntry.brokerTransactionCostJPY : opening.openingTransactionCostJpy?.value : undefined,
+      brokerBookedAmountJPY: !isNAccount ? existingEntry?.brokerBookedAmountJPY : undefined,
+      brokerPremiumJPY: !isNAccount ? existingEntry?.brokerPremiumJPY : undefined,
+      brokerTransactionCostJPY: !isNAccount ? existingEntry?.brokerTransactionCostJPY : undefined,
+      brokerCurrencyConversionCostJPY: !isNAccount ? existingEntry?.brokerCurrencyConversionCostJPY : undefined,
+      brokerTotalTransactionCostJPY: !isNAccount ? existingEntry?.brokerTotalTransactionCostJPY : undefined,
       brokerFeeJPY: !isNAccount ? bestHistory?.feeAmount : undefined,
       brokerExchangeFeeJPY: !isNAccount ? bestHistory?.exchangeFee : undefined,
-      brokerExchangeRateJPY: !isNAccount ? existingEntry?.openingFieldSources?.brokerExchangeRateJPY === "manual" ? existingEntry.brokerExchangeRateJPY : opening.openingFxRate?.value : undefined,
+      brokerOtherTransactionCostJPY: !isNAccount ? existingEntry?.brokerOtherTransactionCostJPY : undefined,
+      brokerExchangeRateJPY: !isNAccount ? existingEntry?.brokerExchangeRateJPY : undefined,
       brokerTaxIncludedFeeJPY: !isNAccount ? bestHistory?.taxIncludedFee : undefined,
-      commissionUSD: isNAccount ? (bestHistory?.transactionCost !== undefined ? Math.abs(bestHistory.transactionCost) : getNOptionStandardCommissionUSD(actualQuantity, standardNOptionCommissionUSD)) : undefined,
+      commissionUSD: isNAccount
+        ? bestHistory?.transactionCost !== undefined
+          ? Math.abs(bestHistory.transactionCost)
+          : getNOptionStandardCommissionUSD(actualQuantity, standardNOptionCommissionUSD)
+        : undefined,
       commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
       referenceFxRateJPY: bestHistory?.exchangeRate ?? target.referenceFxRateJPY ?? target.fxRateJPY ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
       inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
       source: "saxo_api_estimate",
       saxoSourceType: "current_position",
-      historyCompletionStatus,
-      openingFieldSources: !isNAccount ? { ...existingEntry?.openingFieldSources, tradeDate: existingEntry?.openingFieldSources?.tradeDate === "manual" ? "manual" : opening.executionTimeUtc?.source, brokerBookedAmountJPY: existingEntry?.openingFieldSources?.brokerBookedAmountJPY === "manual" ? "manual" : opening.openingBookedAmountJpy?.source, brokerPremiumJPY: existingEntry?.openingFieldSources?.brokerPremiumJPY === "manual" ? "manual" : opening.openingPremiumJpy?.source, brokerTransactionCostJPY: existingEntry?.openingFieldSources?.brokerTransactionCostJPY === "manual" ? "manual" : opening.openingTransactionCostJpy?.source, brokerExchangeRateJPY: existingEntry?.openingFieldSources?.brokerExchangeRateJPY === "manual" ? "manual" : opening.openingFxRate?.source } : undefined,
+      historyCompletionStatus: existingEntry?.confirmed
+        ? (existingEntry.historyCompletionStatus ?? "matched")
+        : mapOpeningExecutionHistoryStatusToEntryCompletionStatus(opening.historyStatus),
+      openingFieldSources: existingEntry?.openingFieldSources,
+      openingFieldEvidence: existingEntry?.openingFieldEvidence,
       historyCandidateIds: historyMatches.map((match) => match.item.id),
       confirmed: existingEntry?.confirmed ?? false,
-      memo:
-        diffs.length > 0
-          ? `入力元: Saxo現在建玉。注文前入力との差分: ${diffs.join("、")}。正式保存時はSaxo実約定値を優先します。`
-          : "入力元: Saxo現在建玉。正式保存時はSaxo実約定値を優先します。",
     };
+    const entryExecution = existingEntry?.confirmed || isNAccount
+      ? {
+          ...mergedEntryExecutionBase,
+          memo:
+            diffs.length > 0
+              ? `入力元: Saxo現在建玉。注文前入力との差分: ${diffs.join("、")}。正式保存時はSaxo実約定値を優先します。`
+              : "入力元: Saxo現在建玉。正式保存時はSaxo実約定値を優先します。",
+        }
+      : {
+          ...mergeOpeningExecutionIntoEntryExecution(mergedEntryExecutionBase, opening),
+          memo: buildOpeningEntryMemo(mergeOpeningExecutionIntoEntryExecution(mergedEntryExecutionBase, opening), false),
+        };
     const nextEntryExecutions = existingEntry?.confirmed ? (target.optionEntryExecutions ?? []) : [...(target.optionEntryExecutions ?? []).filter((execution) => execution.legId !== targetLeg.id), entryExecution];
     const dte = Math.max(0, Math.ceil((Date.parse(actualExpiry) - Date.parse(actualTradeDate)) / 86400000));
     const nextSimulation: TradeSimulation = {
       ...target,
       status: "open",
-      strategyType: position.side === "long"
-        ? position.optionType === "put"
+      strategyType: normalizedPosition.side === "long"
+        ? optionType === "put"
           ? "long_put"
           : "long_call"
-        : position.optionType === "put"
+        : optionType === "put"
           ? "short_put"
           : "covered_call",
       ticker: resolvedTicker,
-      underlyingName: target.underlyingName || position.underlyingName || resolvedTicker,
+      underlyingName: target.underlyingName || normalizedPosition.underlyingName || resolvedTicker,
       accountCode,
       accountEnvironment: isNAccount ? "PROD_N_USD_SETTLEMENT" : accountCode === "P" ? "PROD_P_JPY_SETTLEMENT" : target.accountEnvironment,
       accountCurrency: isNAccount ? "USD" : "JPY",
@@ -753,10 +1015,10 @@ export default function App() {
           notes: "",
         }),
         notes: "Saxo API read-onlyの約定済み現在建玉と注文前建玉を紐づけました。正式確認前に3-Aで内容確認が必要です。",
-        saxoAccountKey: position.accountKey,
-        saxoPositionId: position.positionId ?? position.id,
-        saxoInstrumentCode: position.instrumentCode ?? bestHistory?.instrumentCode ?? bestHistory?.symbol,
-        saxoUic: position.uic,
+        saxoAccountKey: normalizedPosition.accountKey,
+        saxoPositionId: normalizedPosition.positionId ?? normalizedPosition.id,
+        saxoInstrumentCode: normalizedPosition.instrumentCode ?? bestHistory?.instrumentCode ?? bestHistory?.symbol,
+        saxoUic: normalizedPosition.uic,
       },
     };
     upsertSimulation(nextSimulation);
@@ -922,7 +1184,10 @@ export default function App() {
     setEditorFocusRequest({ anchorId, requestId: Date.now() + Math.random() });
   };
   const openSyntheticForwardDashboard = (id: string) => {
-    setActiveView("positions"); setJournalFocusSimulationId(null); selectSimulation(id); setIsEditorOpen(false);
+    setActiveView("positions");
+    setJournalFocusSimulationId(null);
+    selectSimulation(id);
+    setIsEditorOpen(false);
     window.setTimeout(() => document.getElementById("position-dashboard")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   };
   const openEntryRationaleJournal = (id: string) => {
@@ -1180,9 +1445,10 @@ export default function App() {
             tradeDate: item.tradeDate ?? draft.tradeDate,
             contracts: item.quantity !== undefined ? Math.max(1, Math.abs(item.quantity)) : draft.contracts,
             fillPriceUSD: item.price ?? draft.fillPriceUSD,
-            brokerBookedAmountJPY: !isN ? item.bookedAmount ?? item.profitLossBase : undefined,
+            brokerBookedAmountJPY: !isN && item.accountCurrency === "JPY" ? item.bookedAmountAccountCurrency ?? item.bookedAmount : undefined,
             brokerPremiumJPY: !isN ? item.premiumAmount : undefined,
-            brokerTransactionCostJPY: !isN ? item.transactionCost : undefined,
+            brokerTransactionCostJPY: undefined,
+            brokerTotalTransactionCostJPY: !isN ? item.transactionCost : undefined,
             brokerFeeJPY: !isN ? item.feeAmount : undefined,
             brokerExchangeFeeJPY: !isN ? item.exchangeFee : undefined,
             brokerExchangeRateJPY: !isN ? item.exchangeRate : undefined,
@@ -1250,9 +1516,10 @@ export default function App() {
       : undefined;
     const stockSettlementTarget = anchorId === "stock-settlement-record" && sourceTradeId
       ? latestSimulations.find((simulation) => {
-          const settlement = simulation.stockSettlement;
+          const settlement = normalizeStockSettlement(simulation.stockSettlement);
           if (!settlement?.enabled) return false;
-          return sourceKeys.some((key) => key && settlement.memo?.includes(key));
+          const settlementHistoryKeys = getStockSettlementHistoryKeys(settlement);
+          return settlementHistoryKeys.length > 0 && sourceKeys.some((key) => key && settlementHistoryKeys.includes(key));
         })
       : undefined;
     const target = closeTarget?.simulation ?? entryTarget?.simulation ?? stockTarget ?? stockSettlementTarget ?? latestSelected ?? latestSimulations[0];
@@ -1401,7 +1668,7 @@ export default function App() {
   };
   const stockEvaluationsByWheelId = Object.fromEntries(
     wheelCycles
-      .filter((cycle) => ["n_stock_holding", "n_covered_call", "n_called_away"].includes(cycle.currentPhase))
+      .filter((cycle) => ["n_stock_holding", "n_covered_call"].includes(cycle.currentPhase) && cycle.currentShares > 0)
       .map((cycle) => {
         const relatedSimulation =
           simulations.find((simulation) => cycle.linkedSimulationIds.includes(simulation.id)) ??
@@ -1429,6 +1696,7 @@ export default function App() {
     onOrdersChange: setSaxoOrderCandidates,
     onPositionsChange: setSaxoPositionCandidates,
     onHistoryCandidatesChange: setSaxoHistoryCandidates,
+    onHistoryFetchStateChange: setSaxoHistoryFetchState,
     onCreateHistoryDraft: applySaxoHistoryDraftToSelectedSimulation,
     onCreateAssignmentDraft: applySaxoAssignmentDraftToSelectedSimulation,
     onCreatePositionDraft: createSimulationFromSaxoPosition,
@@ -1542,7 +1810,6 @@ export default function App() {
                     onWatchOnly={markCandidateWatchOnly}
                     onCreateSimulation={createCandidateSimulation}
                     onJournalChange={updateCandidateJournal}
-                    onChecklistChange={updateCandidateChecklist}
                     onDraftReviewChecklistChange={updateCandidatePositionDraftReview}
                   />
                 </div>
@@ -1825,7 +2092,6 @@ export default function App() {
                   onWatchOnly={markCandidateWatchOnly}
                   onCreateSimulation={createCandidateSimulation}
                   onJournalChange={updateCandidateJournal}
-                  onChecklistChange={updateCandidateChecklist}
                   onDraftReviewChecklistChange={updateCandidatePositionDraftReview}
                 />
               </div>
@@ -1861,9 +2127,9 @@ export default function App() {
                   }
                 }}
                 onOpenPerformance={() => {
+                  setActiveView("performance");
                   setIsEditorOpen(false);
                   setJournalFocusSimulationId(null);
-                  setActiveView("performance");
                 }}
                 onReturnToSaxoHistory={returnToSaxoHistoryCandidates}
                 onRecreateSaxoHistoryCandidate={recreateSaxoHistoryCandidate}
@@ -2013,9 +2279,9 @@ export default function App() {
                   <CloseDecisionCard
                     simulation={selected}
                     saxoOrderCandidates={saxoOrderCandidates}
+                    accountInputs={accountInputs}
                     onChange={upsertSimulation}
                     focusRequest={closeDecisionFocusRequest}
-                    accountInputs={accountInputs}
                     onExecutionDraft={() => {
                       setIsEditorOpen(true);
                       setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
@@ -2040,9 +2306,9 @@ export default function App() {
                     <CloseDecisionCard
                       simulation={selected}
                       saxoOrderCandidates={saxoOrderCandidates}
+                      accountInputs={accountInputs}
                       onChange={upsertSimulation}
                       focusRequest={closeDecisionFocusRequest}
-                      accountInputs={accountInputs}
                       onExecutionDraft={() => {
                         setIsEditorOpen(true);
                         setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
@@ -2085,10 +2351,10 @@ export default function App() {
                   <CloseDecisionCard
                     simulation={selected}
                     saxoOrderCandidates={saxoOrderCandidates}
+                    accountInputs={accountInputs}
                     onChange={upsertSimulation}
                     focusRequest={closeDecisionFocusRequest}
                     defaultOpen
-                    accountInputs={accountInputs}
                     onExecutionDraft={() => {
                       setIsEditorOpen(true);
                       setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
@@ -2181,9 +2447,9 @@ export default function App() {
                     <CloseDecisionCard
                       simulation={selected}
                       saxoOrderCandidates={saxoOrderCandidates}
+                      accountInputs={accountInputs}
                       onChange={upsertSimulation}
                       focusRequest={closeDecisionFocusRequest}
-                      accountInputs={accountInputs}
                       onExecutionDraft={() => {
                         setIsEditorOpen(true);
                         setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
@@ -2308,9 +2574,9 @@ export default function App() {
             )}
           </>
         )}
-        </div>
-        <BackToTopButton targetId={activeView === "performance" ? "performance-view-top" : "positions-view-top"} />
-      </main>
+      </div>
+      <BackToTopButton targetId={activeView === "performance" ? "performance-view-top" : "positions-view-top"} />
+    </main>
   );
 }
 
@@ -2330,10 +2596,11 @@ function CollapsibleSection({
   children: ReactNode;
 }) {
   if (!collapsed || !title) return <>{children}</>;
+  const detailsProps = open === undefined ? {} : { open };
   return (
     <details
+      {...detailsProps}
       className="rounded-lg border border-slate-200 bg-white shadow-sm"
-      open={open}
       onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
     >
       <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-900">
@@ -2658,6 +2925,20 @@ function getStockTransferForSimulation(simulation: TradeSimulation, stockTransfe
       transfer.sourceSimulationId === simulation.id &&
       transfer.toAccountCode === "N" &&
       Math.abs(transfer.shares - shares) <= 0.0001,
+  );
+}
+
+function isStockSettlementComplete(simulation: TradeSimulation): boolean {
+  const settlement = simulation.stockSettlement;
+  return Boolean(
+    settlement?.enabled &&
+      settlement.settlementDate &&
+      Number.isFinite(settlement.shares) &&
+      settlement.shares > 0 &&
+      Number.isFinite(settlement.sellPriceUSD) &&
+      settlement.sellPriceUSD > 0 &&
+      Number.isFinite(settlement.costBasisUSD) &&
+      settlement.costBasisUSD > 0,
   );
 }
 

@@ -128,6 +128,7 @@ export type AccountState = {
   marginRequirement?: number;
   marginUsagePercent: number;
   accountValue?: number;
+  saxoTotalValue?: number;
   updatedAt: string;
   cashAdjustments?: AccountCashAdjustment[];
   saxoSyncHistory?: SaxoAccountSyncHistory[];
@@ -290,6 +291,13 @@ export type StockSettlement = {
   fxRateJPY?: number;
   commissionUSD?: number;
   commissionJPY?: number;
+  source?: "manual" | "broker_statement" | "saxo_api_estimate" | "saxo_history";
+  sourceCandidateId?: string;
+  sourceTradeId?: string;
+  confirmationStatus?: "pending" | "confirmed";
+  completionStatus?: "complete" | "incomplete" | "conflict";
+  confirmedAt?: string;
+  invalidReason?: string;
   memo?: string;
 };
 
@@ -392,6 +400,25 @@ export type OptionCloseExecution = {
   memo?: string;
 };
 
+export type OptionEntryOpeningFieldKey =
+  | "tradeDate"
+  | "brokerBookedAmountJPY"
+  | "brokerPremiumJPY"
+  | "brokerTransactionCostJPY"
+  | "brokerCurrencyConversionCostJPY"
+  | "brokerTotalTransactionCostJPY"
+  | "brokerExchangeRateJPY";
+
+export type OptionEntryOpeningFieldSource = "position" | "trade_history" | "manual";
+
+export type OptionEntryOpeningFieldEvidence = {
+  source: OptionEntryOpeningFieldSource;
+  sourceField?: string;
+  capturedAt?: string;
+  completeness?: "direct" | "component_aggregate" | "partial" | "cross_validated_component_aggregate";
+  components?: Record<string, number>;
+};
+
 export type OptionEntryExecution = {
   id: string;
   legId: string;
@@ -401,9 +428,15 @@ export type OptionEntryExecution = {
   settlementCurrency: Currency;
   brokerBookedAmountJPY?: number;
   brokerPremiumJPY?: number;
+  /** 開始約定と同じ現金フローに含まれる開始現金費用。既存後方互換の正本。 */
   brokerTransactionCostJPY?: number;
+  /** 為替変換により別建てで計上される費用。direct/manual以外で補完しない。 */
+  brokerCurrencyConversionCostJPY?: number;
+  /** Saxo画面が総額として示す取引費用。direct/manual以外で補完しない。 */
+  brokerTotalTransactionCostJPY?: number;
   brokerFeeJPY?: number;
   brokerExchangeFeeJPY?: number;
+  brokerOtherTransactionCostJPY?: number;
   brokerExchangeRateJPY?: number;
   brokerTaxIncludedFeeJPY?: number;
   commissionUSD?: number;
@@ -414,7 +447,9 @@ export type OptionEntryExecution = {
   inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";
   source: "manual" | "broker_statement" | "saxo_api_estimate";
   saxoSourceType?: "current_position" | "history";
-  historyCompletionStatus?: "unmatched" | "matched" | "multiple" | "manual";
+  historyCompletionStatus?: "unmatched" | "matched" | "multiple" | "manual" | "history_not_fetched" | "history_fetch_failed" | "history_no_usable_match" | "history_match_missing_fields" | "history_match_complete" | "source_conflict" | "auto_filled_partial" | "auto_filled_complete";
+  openingFieldSources?: Partial<Record<OptionEntryOpeningFieldKey, OptionEntryOpeningFieldSource>>;
+  openingFieldEvidence?: Partial<Record<OptionEntryOpeningFieldKey, OptionEntryOpeningFieldEvidence>>;
   historyCandidateIds?: string[];
   confirmed: boolean;
   memo?: string;

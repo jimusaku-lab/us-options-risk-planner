@@ -7013,7 +7013,7 @@ P売り権利行使後の例:
 
 ローカル実用版のSaxo API Read-only取込は、個人利用の実用化段階としては十分な水準に到達している。
 
-ただし、GitHub Pagesの一般公開版へそのまま移植してはいけない。公開版は静的サイトであり、Saxo APIへ直接接続しない。アプリ本体はGitHub Pagesの公開版を使い続け、Saxo API接続を使う場合だけ、利用者本人のPCでローカルAPI補助ツールを起動する構成にする。
+ただし、GitHub Pagesの一般公開版へそのまま移植してはいけない。公開版は静的サイトであり、Saxo APIへ直接接続しない。利用者が各自のMacでローカルAPIを起動し、そのローカルAPIを公開版UIから呼び出す構成にする。
 
 ### 公開版で守る前提
 
@@ -7057,8 +7057,8 @@ GitHub Pagesでは、CORS origin は `https://jimusaku-lab.github.io` だが、�
 
 公開版では、Saxo APIパネルを次の表示にする。
 
-- ローカルAPI未起動: `この機能は各自のPCでローカルAPI補助ツールを起動した場合だけ使えます`
-- 設定未完了: `Client IDはGitHubには保存されません。各自のPCの.env.localまたは画面入力で設定してください`
+- ローカルAPI未起動: `この機能は各自のMacでローカルAPIを起動した場合だけ使えます`
+- 設定未完了: `Client IDはGitHubには保存されません。各自のMacの.env.localまたは画面入力で設定してください`
 - 接続済み: ローカル実用版と同じRead-only取込UX
 
 #### 公開版リポジトリへ移すファイル
@@ -7084,332 +7084,107 @@ GitHub Pagesでは、CORS origin は `https://jimusaku-lab.github.io` だが、�
 - `.env.local`、token、口座データ、バックアップJSONがGitHubに入っていない。
 - Read-only制限のテストが通る。
 
-## 67. 友人向けSaxo API接続準備オンボーディング
-
-### 目的
-
-GitHub Pages公開版を友人が使う場合、Saxo OpenAPIの初回準備で次の関係が混同されやすい。
-
-- SaxoTraderGOの通常ログイン
-- Saxo Developer Portal account
-- OpenAPI application
-- LIVE AppKey（Client ID）
-- Redirect URI
-- ローカルAPI起動
-
-そのため、アプリ内とdocsに、初回準備用の明示的なオンボーディングを追加する。
-
-### アプリ内表示
-
-Saxo API Read-onlyパネル内に `Saxo API接続準備` セクションを表示する。
-
-チェックリスト:
-
-- Saxo Developer Portalに入れる
-- SIM applicationを作成した
-- Redirect URIを登録した
-- LIVE appを申請または取得した
-- Client ID / AppKeyを確認した
-- ローカルAPIを起動した
-- Read-only接続できた
-
-このチェック状態はブラウザlocalStorageに保存してよい。ただし、チェック状態だけであり、Client ID、token、口座情報、取引情報は保存しない。
-
-### セキュリティ注意
-
-オンボーディング内に次を強く表示する。
-
-- Saxo ID、パスワード、2FAコードは保存しない。
-- OAuth tokenはGitHubやChatGPT/Codexに貼らない。
-- Client Secretはこのアプリでは使わない。入力欄も作らない。
-- ローカル設定へ入れるのはLIVE AppKey（Client ID）だけ。
-
-### ChatGPT/Codex相談文コピー
-
-アプリ内に `ChatGPT/Codexに渡す相談文をコピー` ボタンを置く。
-
-コピーされる相談文は、画面操作の伴走だけを依頼する内容にし、秘密情報を含めない。
-
-相談文に含める要点:
-
-- 目的: GitHub Pages公開版の米国株オプション建玉管理アプリで、Saxo OpenAPI Read-only接続を設定したい。
-- 前提: アプリ本体はGitHub Pagesの公開版を使い続け、Saxo通信だけをPC側補助ツールで行う。
-- PCがMacかWindowsかの確認から伴走してほしい。
-- Saxo Developer Portal、OpenAPI application、Redirect URI、LIVE AppKey確認を案内してほしい。
-- PC側補助ツールの準備に必要なNode.js/npm、`.env.local`、起動コマンドをMac/Windows別に案内してほしい。
-- 成功ログ `Saxo read-only local API listening on http://127.0.0.1:18787` の確認、Macの `>` 継続入力時の `Control + C` 案内、アプリ画面での `起動できたか確認`、`Saxo接続` / `Saxo再接続` への誘導を含める。
-- 絶対に共有しない情報: Saxo ID、Saxo password、2FAコード、Client Secret、Saxo Account ID、OAuth token、refresh token、口座番号、口座残高や建玉の詳細スクリーンショット。
-- 共有してよい情報: OS、画面上の一般的な文言、Redirect URI、エラー文、個人情報を隠したスクリーンショット、LIVE AppKeyが取得済みかどうか。
-- このアプリはRead-only用途で、発注、注文変更、注文取消を行わない。
-
-### docsガイド
-
-`docs/友人向けSaxo API接続準備ガイド.md` を追加する。
-
-内容:
-
-- Saxo Developer Portalで何を作るのか。
-- 通常の取引ログイン、Developer Portal、OpenAPI applicationの違い。
-- Redirect URIの意味。
-- LIVE利用時の注意。
-- ChatGPT/Codexに貼ってよい情報、貼ってはいけない情報。
-
-### 完了条件
-
-- 初回利用者が、Developer Portal、OpenAPI application、LIVE AppKey、Redirect URI、ローカルAPI起動の順序を画面上で確認できる。
-- アプリ内でセキュリティ注意が目立つ。
-- ChatGPT/Codexへ渡す相談文を、秘密情報なしでコピーできる。
-- docsに友人向けガイドがある。
-- Saxo APIはRead-onlyのままで、発注系endpointを追加しない。
-
-## 68. 公開版Saxo接続のOS別ローカルAPI起動UX
+## 67. Saxo現在建玉候補から3-A建玉開始へ進むときの対象脚自動選択・履歴補完
 
 ### 背景
 
-GitHub Pages公開版でSaxo API Read-onlyを使うには、静的サイトだけでは完結しない。
-利用者本人のPC上でローカルAPIを起動し、そのローカルAPIだけがSaxoと通信する。
-
-現状の案内は、ターミナル操作に慣れた利用者を前提にしすぎている。
-初回利用者は、次の状態を自分では判定できない。
-
-- 公開版画面に表示されたローカルPCのパスが、自分のPCでは存在しない。
-- ローカルAPI補助ツールをまだ準備していない。
-- Node.jsやnpmが入っていない。
-- コピーしたコマンドが途中入力状態で止まっている。
-- `>` の継続プロンプトが出ていて、まだ実行されていない。
-- ローカルAPIは起動しているが、公開版Origin許可が足りない。
-- `.env.local` がローカルAPI補助ツールのフォルダに無く、LIVE AppKey未設定で止まる。
-- Mac向け説明をWindows利用者が見てしまう。
-
-そのため、公開版のSaxo接続導線は「ユーザーがターミナルの意味を理解している」前提にしない。
-アプリがOS別に案内し、実行結果を画面上で判定し、次に押すボタンを明示する。
-
-### 基本方針
-
-- 公開版UIは、Mac/Windowsを選べる起動手順を持つ。
-- 公開版UIに、開発者本人の固定パスを表示しない。
-- ローカルAPI補助ツールが未導入の人向けに、導入手順を先に表示する。
-- 利用者に複数行コマンドを主表示しない。原則として1行コマンドをコピーする。
-- ターミナル/PowerShellで見るべき成功ログを明示する。
-- 失敗時は「何が間違ったか」ではなく「次に何をすればよいか」を表示する。
-- `.env.local`、Client ID、OAuth token、口座データはGitHub Pagesへ保存しない。
-- 発注機能は引き続き持たせない。
-
-### 表示順序
-
-公開版Saxo接続準備画面では、いきなりNode.jsや起動コマンドを出さない。
-初回ユーザーが目的を理解できるよう、次の順序で表示する。
-
-1. アプリ本体はGitHub Pagesの公開版を使い続けること。
-2. PCに置く必要があるのは、Saxo通信を担当するローカルAPI補助ツールだけであること。
-3. GitHub Pagesは静的Webアプリのため、OAuth tokenの安全な保持、macOS Keychain/Windows側保存領域の利用、Saxo API中継サーバの役割を担えないこと。
-4. この分離により、Saxo ID、password、2FA、OAuth token、口座情報がGitHub Pagesや作者側に保存されないこと。
-5. その後にMac / Windows選択、Node.js、`.env.local`、起動コマンドへ進むこと。
-
-UI見出しは `Saxo接続用のPC側補助ツールを準備` とする。
-
-### OS選択
-
-公開版Saxo APIパネル内に、ローカルAPI起動環境を選ぶUIを置く。
-
-- Mac
-- Windows
-- まだ分からない
-
-ブラウザの `navigator.userAgent` 等で初期推定してよいが、利用者が手動変更できるようにする。
-
-### ローカルAPI補助ツールの導入状態
-
-公開版UIは、ローカルAPI起動の前に、利用者の導入状態を確認する。
-
-- まだ何も導入していない
-- ローカルAPI補助ツールを導入済み
-- Node.js/npmを導入済み
-- `.env.local` を作成済み
-- ローカルAPIを起動済み
-
-`まだ何も導入していない` 利用者には、いきなり起動コマンドを表示しない。
-まず次を案内する。
-
-- Node.js LTSをインストールする。
-- ローカルAPI補助ツールをダウンロードまたは設置する。
-- ローカルAPI補助ツールのフォルダを開く。
-- `.env.local` を作成する。
-- OS別の起動コマンドを実行する。
-
-友人に使ってもらうアプリ本体は、引き続きGitHub Pagesの公開版である。
-利用者にローカル版アプリを使わせる意図ではない。
-PCに置く必要があるのは、Saxoと通信するためのローカルAPI補助ツールだけである。
-
-将来的には、友人向け公開版では「ローカルAPI補助ツール一式のダウンロード」または「インストーラ」を用意する。
-GitHubリポジトリをcloneさせる方法は、暫定・上級者向けの手段に留める。
-少なくとも、GitHub Pages上に作者本人のローカルパスや、ローカル版アプリ利用を前提にした案内を固定表示してはいけない。
-
-### Mac向け手順
-
-Macでは「ターミナルを開く」「1行コマンドを貼る」「Enterを押す」の3手順にする。
-コピーするコマンドは1行にする。
-複数行バックスラッシュ形式は、詳細表示内だけに置く。
-
-Mac向け表示には、次を含める。
-
-- `Control + C` は、途中入力で `>` が出た場合だけ押す。
-- 成功ログは `Saxo read-only local API listening on http://127.0.0.1:18787`。
-- 成功ログが出たらターミナルは閉じない。
-
-### Windows向け手順
-
-Windowsでは、PowerShell前提の導線を別に用意する。
-Macの固定パスや `SAXO_LOCAL_UI_ALLOWED_ORIGIN=... npm run ...` 形式を表示しない。
-
-Windows向け表示には、次を含める。
-
-- PowerShellを開く。
-- ローカルAPI補助ツールのフォルダへ移動する。
-- `.env.local` を作成または配置する。
-- 環境変数をPowerShell形式で設定してから `npm run dev:saxo-api` を実行する。
-
-PowerShell例:
-
-```powershell
-cd "C:\path\to\saxo-local-api-helper"
-$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="https://jimusaku-lab.github.io"
-$env:SAXO_LOCAL_UI_RETURN_URL="https://jimusaku-lab.github.io/us-options-risk-planner/"
-npm run dev:saxo-api
-```
-
-Windows利用者向けには、`.env.local` の作成方法も別カードに分けて表示する。
-Client IDは利用者本人のLIVE AppKeyであり、アプリ作者へ送らない。
-
-### `.env.local` の扱い
-
-ローカルAPI補助ツールでローカルAPIを起動する場合、その補助ツールのフォルダに `.env.local` が必要になる。
-ローカル実用版で接続済みの利用者は、既存 `.env.local` をコピーしてよい。
-初回利用者は、アプリ内の設定・診断からLIVE AppKeyを保存するか、`.env.local` を作成する。
-
-表示上は次の2パターンを分ける。
-
-- 既に別フォルダのローカル版でSaxo接続済み
-  - `.env.local` をローカルAPI補助ツールのフォルダへコピーする案内を出す。
-- 初めてSaxo API接続を行う
-  - Saxo Developer PortalでLIVE AppKeyを取得し、ローカルAPI補助ツールの `.env.local` へ設定する案内を出す。
-
-`.env.local` は `.gitignore` 対象であり、GitHubへpushされないことを画面とdocsに明記する。
-
-### 起動確認の判定
-
-`起動できたか確認` は、単にボタンを押させるだけではなく、結果を次のいずれかで表示する。
-
-- 起動できています。次は `Saxo接続` または `Saxo再接続` を押してください。
-- 起動していません。ターミナル/PowerShellに成功ログが出ているか確認してください。
-- コマンドが途中入力で止まっている可能性があります。`>` が出ていたら `Control + C` でキャンセルし、1行コマンドを貼り直してください。
-- 公開版Origin許可またはPrivate Network Accessでブロックされています。公開版用の起動コマンドで起動し直してください。
-- LIVE AppKeyが未設定です。設定・診断でLIVE AppKeyを保存してください。
-
-### 画面上の次アクション
-
-公開版Saxo APIパネルは、常に「次に押すもの」を1つだけ目立たせる。
-
-状態別の主ボタン:
-
-- 未導入: `導入手順を見る`
-- ローカルAPI未起動: `起動コマンドをコピー`
-- コマンド貼り付け後: `起動できたか確認`
-- ローカルAPI起動済み・Saxo未接続: `Saxo接続`
-- token期限切れ: `Saxo再接続`
-- 接続済み: `まとめて取得`
-
-補助ボタン:
-
-- `詳しい設定を見る`
-- `OSを変更`
-- `トラブル時の見方`
-
-### 完了条件
-
-- Mac利用者が、アプリの案内だけでローカルAPIを起動できる。
-- Windows利用者が、Mac向けコマンドを見せられず、PowerShell向け手順を確認できる。
-- `>` の継続入力で止まった場合の復旧手順が画面上に出る。
-- `.env.local` が必要であること、GitHubに保存されないことが分かる。
-- `起動できたか確認` の結果が、必ず画面上の次アクションに変換される。
-- Saxo APIはRead-onlyのままで、発注系endpointは追加しない。
-
-### 実装メモ
-
-2026-06-16時点の公開版実装では、通常表示・コピー用コマンドに作者PC固有の `/Users/...` パスを出さない。
-利用者はターミナルまたはPowerShellで、自分が導入したローカルAPI補助ツールのフォルダを開いてから、OS別の起動コマンドを実行する。
-
-Macの主表示は1行コマンド:
-
-```bash
-SAXO_LOCAL_UI_ALLOWED_ORIGIN=https://jimusaku-lab.github.io SAXO_LOCAL_UI_RETURN_URL=https://jimusaku-lab.github.io/us-options-risk-planner/ npm run dev:saxo-api
-```
-
-Windowsの主表示はPowerShell 1行コマンド:
-
-```powershell
-$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="https://jimusaku-lab.github.io"; $env:SAXO_LOCAL_UI_RETURN_URL="https://jimusaku-lab.github.io/us-options-risk-planner/"; npm run dev:saxo-api
-```
-
-## 69. 接続後の準備カード折りたたみと接続保持促進
-
-### 背景
-
-公開版のSaxo API接続準備カードは、初回導入時には必要だが、接続後も常時表示されると利用者の邪魔になる。
-特にPC側補助ツール、Node.js、`.env.local`、OS別起動手順の説明は、接続後の日常利用では不要である。
-
-一方で、接続直後はOAuth接続保持を保存していない可能性がある。
-この状態で準備カードをそのまま残すより、次回以降の再ログインを減らすために接続保持を保存する操作を強く促す。
-
-### 状態定義
-
-公開版Saxoパネルの表示状態を次に分ける。
-
-- 未導入/未起動
-  - 準備カードを展開表示する。
-- ローカルAPI起動済み・Saxo未接続
-  - 準備カードは要点のみ表示し、主ボタンは `Saxo接続` にする。
-- Saxo接続済み・接続保持未保存
-  - 準備カードは折りたたみ、代わりに `接続保持を保存` カードを最優先表示する。
-- Saxo接続済み・接続保持保存済み
-  - 準備カードを自動で折りたたむ。
-  - `準備手順を再表示` の小さな補助ボタンだけ残す。
-  - 主ボタンは `まとめて取得` にする。
-- 再接続が必要
-  - 準備カードではなく、`Saxo再接続` カードを表示する。
-
-### 接続保持を保存する導線
-
-Saxo接続済みで `tokenPersistence.enabled !== true` の場合、次を表示する。
-
-- 見出し: `次回以降の再ログインを減らすため、接続保持を保存してください`
-- 説明: `保存するのはOAuth接続保持情報だけです。Saxo ID、パスワード、2FAコード、口座情報は保存しません。`
-- 主ボタン: `このPCに接続保持を保存`
-- 補助: `今は保存しない`
-
-`このPCに接続保持を保存` が成功したら、準備カードは自動で折りたたむ。
-
-### 準備カードの再表示
-
-接続保持保存済みの場合でも、利用者が後から確認できるようにする。
-
-- 小さなリンクまたはボタン: `準備手順を再表示`
-- 押した場合だけ、OS別手順、`.env.local`、セキュリティ注意を再展開する。
-- 再表示状態はセッション中だけでもよい。
-
-### 完了条件
-
-- 接続前は、初回準備が分かる。
-- 接続後は、準備カードが画面を占有し続けない。
-- 接続保持未保存の場合は、保存を強く促す。
-- 接続保持保存後は、準備カードが自動で畳まれる。
-- `まとめて取得` などの日常操作が上に出る。
-- 必要時だけ `準備手順を再表示` で確認できる。
-- Saxo APIはRead-onlyのままで、発注系endpointは追加しない。
-
-## 70. P口座JPY建玉開始履歴の取得可能項目と任意明細
-
-### 背景
+Saxo現在建玉から新規建玉候補を取得し、3-A「建玉開始の約定確認」へ進んだときに、対象脚が未選択のままになり、クリックしても選択・入力できない状態が発生した。
+
+また、P口座JPY決済のコール買い建玉では、Saxo現在建玉APIだけでは不足する次の項目が黄色の不足項目として残った。
+
+- 記帳額JPY
+- プレミアムJPY
+- 取引費用JPY
+- 為替レート
+
+ただし、Saxo取引履歴画面にはこれらの値が存在している。したがって、現在建玉候補だけで完結させるのではなく、Saxo取引履歴候補との照合で自動補完する設計にする。
+
+### 対象ケース
+
+例:
+
+- 商品: Visa Inc. Nov2026 340 C
+- 売買方向: 買い / long
+- Put/Call: call
+- 権利行使価格: 340
+- 満期日: 2026-11-20
+- 取引日: 2026-06-30
+- 約定価格: 24.1 USD
+- 数量: 1
+- 口座: P口座 / JPY
+
+Saxo画面で確認できた値:
+
+- 記帳額JPY: -396,166
+- プレミアムJPY: -395,797
+- 取引費用JPY: -4,288
+- 為替レート: 164.231050
+
+コール買いはプレミアム支払いであるため、JPY金額はSaxo表示と同じくマイナス符号で保持する。
+
+### 設計方針
+
+1. 新規オプション建玉候補から3-Aへ下書き反映した時点で、対象脚を自動生成し、自動選択する。
+2. 対象脚ドロップダウンが空で、ユーザーが何も選べない状態を作らない。
+3. 対象脚の表示名は、ユーザーが照合しやすい形式にする。
+   - 例: `C買い 340 / 2026-11-20 / 1枚`
+4. Saxo現在建玉APIで取得できる最低限の値は、3-Aに先に入れる。
+   - 口座区分
+   - 数量
+   - 売買方向
+   - Put/Call
+   - 権利行使価格
+   - 満期日
+   - 建て価格
+   - Position ID
+   - Account Key
+5. JPY決済に必要な会計値は、Saxo取引履歴候補から補完する。
+   - 記帳額JPY
+   - プレミアムJPY
+   - 取引費用JPY
+   - 為替レート
+6. 自動補完できない場合は、手入力欄を残す。ただし、最初の主操作は「Saxo取引履歴から補完」にする。
+
+### 取引履歴との照合キー
+
+Saxo取引履歴候補との照合では、以下を使う。
+
+- 口座
+- 銘柄またはOptionSymbol
+- Put/Call
+- 権利行使価格
+- 満期日
+- 売買方向
+- 数量
+- 取引日
+- 約定価格
+
+完全一致が難しい場合は、OptionSymbol、満期日、権利行使価格、Put/Call、数量を優先し、取引日は近接日を許容する。ただし、候補が複数ある場合は自動確定せず、候補選択UIを出す。
+
+### UX要件
+
+- 新規建玉候補があるときは、反映待ち画面で `建玉入力へ下書き反映` を主操作として強調する。
+- 3-A画面では、対象脚が自動選択済みかどうかを明示する。
+- Saxo取引履歴から補完できる項目がある場合、`Saxo取引履歴から補完` を主ボタンとして強調する。
+- 補完後は、どの履歴行から値を取ったかを表示する。
+- 不足項目が残る場合は、「どの値をSaxo画面のどこから入力するか」を具体的に表示する。
+
+### 保存前バリデーション
+
+3-Aを正式保存する前に、以下を確認する。
+
+- 対象脚が未選択ではない。
+- P口座JPY決済では、記帳額JPY、プレミアムJPY、取引費用JPY、為替レートのいずれかが空の場合に警告する。
+- コール買い・プット買いのプレミアム支払いはマイナス値として扱う。
+- プット売り・コール売りのプレミアム受け取りはプラス値として扱う。
+
+### ローカル版・公開版
+
+この修正は共通UI・共通照合ロジックとして扱う。ローカル版と公開版の両方に反映する。
+
+公開版ではSaxo接続そのものはローカル補助API経由だが、取引履歴候補との照合、3-A対象脚自動選択、保存前バリデーションは同じ仕様にする。
+
+### 2026-07-01実データ確認による補足
 
 Visa Inc. Nov2026 340 C のP口座買い建て履歴で、Saxo `cs/v1/reports/trades/{ClientKey}` の実レスポンスを確認した。
 
@@ -7425,9 +7200,7 @@ APIレスポンスに存在した主な値:
 
 Saxo画面には `プレミアムJPY -395,797`、`取引費用JPY -4,288`、`為替レート 164.231050` が表示されていたが、上記APIレスポンスには同名または同等の独立フィールドとしては返っていなかった。
 
-### 設計方針
-
-P口座JPY決済の3-Aでは次の扱いにする。
+したがって、P口座JPY決済の3-Aでは次の扱いにする。
 
 1. `記帳額JPY` は `BookedAmountAccountCurrency` または `BookedAmountClientCurrency` から自動補完する。
 2. `記帳額JPY` が取得できた場合、現金反映・実績集計の主値としては十分とし、`プレミアムJPY`、`取引費用JPY`、`為替レート` は明細確認用の任意項目に落とす。
@@ -7435,39 +7208,24 @@ P口座JPY決済の3-Aでは次の扱いにする。
 4. APIレスポンスに存在しない値を、Saxo画面に表示されているという理由だけで「取得可能」と表示しない。
 5. `Amount` は数量でも使われるため、記帳額の優先候補として先に使ってはいけない。`BookedAmountAccountCurrency` / `BookedAmountClientCurrency` / `BookedAmountUSD` を優先する。
 
-### 表示方針
+表示文言は次の方針にする。
 
 - `記帳額JPY`: Saxo取引履歴APIから取得できる場合があります。
 - `プレミアムJPY / 取引費用JPY / 為替レート`: Saxo画面には表示されますが、取引履歴APIでは独立フィールドとして返らない場合があります。必要な場合だけSaxo画面を見て入力してください。
 
-## 71. JPY口座の費用推定禁止とOAuth戻り先
+### 2026-07-01補足: JPY口座の費用推定とOAuth戻り先
 
-### JPY口座の補完ルール
-
-P口座JPY建玉開始履歴では、`TradedValue` はUSD建てプレミアム相当、`BookedAmountAccountCurrency` はJPY記帳額で返るケースがある。この2つの差分を `取引費用JPY` として推定してはいけない。
-
+- P口座JPY建玉開始履歴では、`TradedValue` はUSD建てプレミアム相当、`BookedAmountAccountCurrency` はJPY記帳額で返るケースがある。この2つの差分を `取引費用JPY` として推定してはいけない。
 - `AccountCurrency` または `ClientCurrency` が `JPY` の取引では、独立したJPY費用フィールドが返らない限り、取引費用は自動補完しない。
 - `記帳額JPY` が補完できた場合は、保存・現金反映の主値として扱い、プレミアムJPY、取引費用JPY、為替レートは任意明細にする。
+- Saxo OAuth完了後の戻り先は、補助サーバー起動時の固定URLではなく、`/api/saxo/auth/start?returnUrl=...` で渡された起動元URLを優先する。
+- ローカル版と公開版の両方を使うため、戻り先として `http://127.0.0.1:5173`、`http://localhost:5173`、`https://jimusaku-lab.github.io/us-options-risk-planner` を許可する。
 
-### OAuth戻り先
-
-Saxo OAuth完了後の戻り先は、補助サーバー起動時の固定URLではなく、`/api/saxo/auth/start?returnUrl=...` で渡された起動元URLを優先する。
-
-許可する戻り先:
-
-- `http://127.0.0.1:5173`
-- `http://localhost:5173`
-- `https://jimusaku-lab.github.io/us-options-risk-planner`
-
-## 72. コール買い履歴の移動先判定とロングコール株価表示
-
-### 背景
+### 2026-07-01補足: コール買い履歴の移動先判定とロングコール株価表示
 
 VISA C340 / 2026-11-20 / P口座 / コール買いの建玉開始をSaxoから取り込んだ後、同じ取引履歴候補が `決済実績候補を作成して7へ進む` と表示され、押下すると「買い建て脚に対する反対売買の売履歴ではない」という赤い警告が出る事象を確認した。
 
 原因は、Saxo履歴候補の `buy + call` を、N口座カバードコール買い戻しのために一律で `close` 扱いしている判定である。`buy + call` は、P口座ロングコールでは新規建玉開始であり、決済ではない。
-
-### 移動先判定
 
 移動先判定は次の優先順位に変更する。
 
@@ -7481,7 +7239,7 @@ VISA C340の今回データは `entry` として扱う。履歴候補の主操�
 
 一方で、N口座カバードコールのコール売りを買い戻す履歴は、アプリ内のショートコール建玉と照合できる場合に限り、従来どおり `close` として7番へ送る。
 
-### ロングコールの現在株価表示
+#### ロングコールの現在株価表示
 
 VISAコール買いのダッシュボードで、反対売買判断カードに `現在株価 $0.00` と表示される事象を確認した。これは、原資産株価が未取得または銘柄ティッカー未設定の状態を0ドルとして表示・計算しているためである。
 
@@ -7496,13 +7254,11 @@ VISAコール買いのダッシュボードで、反対売買判断カードに 
 
 ロングコールの年率・損益表示では、支払プレミアムと手数料を投下資金として扱い、原資産株価0ドルを分母・損益判定に使ってはいけない。
 
-## 73. 反映待ちキューのCTA整理と銘柄表示復元
-
-### 背景
+### 2026-07-01補足: 反映待ちキューのCTA整理と銘柄表示復元
 
 Saxo `まとめて取得` 後の反映待ちカードで、実際には追加操作が不要または任意確認だけの状態でも、`候補を確認`、`監査用の復旧候補を確認`、`不足している反映候補をまとめて作成` が主操作のように見える事象を確認した。これは、ユーザーに「何か処理しないといけない」と誤認させるためUX上の不具合として扱う。
 
-### 反映待ちカードの表示ルール
+反映待ちカードは、次のルールにする。
 
 - `処理が必要` が0件の場合、主CTAは出さない。表示は `今回の取得で追加処理はありません` を基本にする。
 - 建玉候補が全件 `照合済み` の場合、概要カードの操作は `照合済みの建玉を確認` のような任意確認ボタンにし、強調しない。
@@ -7515,7 +7271,7 @@ Saxo `まとめて取得` 後の反映待ちカードで、実際には追加操
 
 今回のように「確認済みまたは対象外10件」「監査用復旧候補0件」「追加作成が必要な履歴候補が実質0件」の状態では、画面上の結論を `追加で処理する候補はありません` と表示し、目立つ作成ボタンや復旧確認ボタンは出さない。
 
-### ダッシュボード銘柄表示
+#### ダッシュボード銘柄表示
 
 ダッシュボードで、VISAコール買いは `V` が表示される一方、NVDAプット売りの銘柄欄が空になる事象を確認した。これは建玉として不自然であり、銘柄は必ず表示する。
 
@@ -7528,15 +7284,13 @@ Saxo `まとめて取得` 後の反映待ちカードで、実際には追加操
 
 Saxo連携で作成・照合した建玉は、保存時に復元した原資産ティッカーを建玉データへ保持する。画面表示だけで一時補完してはいけない。
 
-## 74. ダッシュボード「次にやること」ボタンの遷移保証
-
-### 背景
+### 2026-07-01補足: ダッシュボード「次にやること」ボタンの遷移保証
 
 ダッシュボードの `次にやること` に表示される `反対売買で決済`、`反対売買判断`、および警告欄の `反対売買判断へ` は、単なるラベルではなく、ユーザーを次の確認箇所へ移動させる操作ボタンである。押下しても画面上で何も起きない場合はUX不具合として扱う。
 
 現在の構造では、`Dashboard` から `goToWorkflowTask` / `goToCloseDecision` へイベントは渡っているが、遷移先の `CloseDecisionCard` が外側の `CollapsibleSection` の中にある。外側の折りたたみが閉じたままだと、`CloseDecisionCard` 内部の `focusRequest` だけではユーザーから見て無反応になる。
 
-### 仕様
+仕様を次のように固定する。
 
 - ダッシュボードの `反対売買で決済`、`反対売買判断`、警告欄の反対売買系ボタンを押したら、対象建玉を選択する。
 - 対象建玉の詳細表示で `反対売買判断` セクションを必ず開く。外側の折りたたみと `CloseDecisionCard` 内部の折りたたみの両方を開く。
@@ -7546,11 +7300,9 @@ Saxo連携で作成・照合した建玉は、保存時に復元した原資産�
 - ボタンは `type="button"` とし、行選択とのイベント競合を避けるため `stopPropagation` を維持する。
 - 何らかの理由で遷移できない場合は、無反応にせず `反対売買判断を開けませんでした。対象建玉を確認してください。` のような状態メッセージを出す。
 
-### 実装方針
+実装では、`closeDecisionFocusRequest` だけに頼らず、反対売買判断セクションの外側を開く状態をアプリ側で持つ。例として `closeDecisionSectionOpen` または `closeDecisionOpenRequest` を用意し、`goToWorkflowTask` と `goToCloseDecision` の `targetAnchor === "close-decision"` 系ルートで `true` にする。該当 `CollapsibleSection` には `open` と `onOpenChange` を渡し、ユーザーが手動で畳む操作も保持する。
 
-`closeDecisionFocusRequest` だけに頼らず、反対売買判断セクションの外側を開く状態をアプリ側で持つ。例として `closeDecisionSectionOpen` または `closeDecisionOpenRequest` を用意し、`goToWorkflowTask` と `goToCloseDecision` の `targetAnchor === "close-decision"` 系ルートで `true` にする。該当 `CollapsibleSection` には `open` と `onOpenChange` を渡し、ユーザーが手動で畳む操作も保持する。
-
-### 受け入れ条件
+受け入れ条件:
 
 - V / P口座 / コール買いの `反対売買で決済` を押すと、Vの建玉が選択され、反対売買判断カードが開き、コール脚の決済価格入力付近へ移動する。
 - NVDA / N口座 / プット売りの `反対売買判断` を押すと、NVDAの建玉が選択され、反対売買判断カードが開き、プット脚の買戻し価格入力付近へ移動する。
@@ -7558,9 +7310,9 @@ Saxo連携で作成・照合した建玉は、保存時に復元した原資産�
 - ボタンを複数回押しても、毎回スクロールとフォーカスが再実行される。
 - ローカル版と公開版で同一挙動にする。
 
-## 75. 反対売買判断の候補価格取得は既存建玉UICを優先する
+### 2026-07-02補足: 反対売買判断の候補価格取得は既存建玉UICを優先する
 
-### 背景
+#### 背景
 
 VISA C340ロングコールで、Saxo LIVE接続後に反対売買判断の `候補価格を取得` を押しても `Bid` / `Ask` / `Last` / `Mid` が未取得になり、`V のContract Option Rootが見つかりません。SIM環境の取扱銘柄または検索条件を確認してください。` と表示される事象を確認した。
 
@@ -7576,7 +7328,7 @@ VISA C340ロングコールで、Saxo LIVE接続後に反対売買判断の `候
 
 したがって、Saxo側に建玉データがないことが原因ではない。現在の問題は、反対売買判断の価格取得が既存建玉の `uic` / `accountKey` を使わず、`simulation.ticker` の `V` だけから `ref/v1/instruments` と `contractoptionspaces` でContract Option Rootを再検索している点にある。1文字ティッカーや検索条件に依存すると、既に建玉として取得できている契約でも候補価格取得に失敗する。
 
-### 修正方針
+#### 修正方針
 
 `/api/saxo/options/premium-candidate` は、既存建玉としてSaxoから取得済みの契約を価格照会する場合、Contract Option Root検索よりも `uic + assetType + accountKey` を優先する。
 
@@ -7587,7 +7339,7 @@ VISA C340ロングコールで、Saxo LIVE接続後に反対売買判断の `候
 3. 既存建玉から特定できない場合だけ、従来の `ref/v1/instruments` + `contractoptionspaces` 検索をフォールバックとして使う。
 4. フォールバック検索でも失敗した場合は、LIVE接続時に `SIM口座にデータなし` と表示してはいけない。`LIVEで契約ルート未取得`、`Saxo価格候補を取得できません` など、実態に合う分類にする。
 
-### UI側の要件
+#### UI側の要件
 
 反対売買判断カードから候補価格を取得する際、`symbol` / `expiry` / `strike` / `optionType` だけでなく、建玉に保持されているSaxo識別情報を送る。
 
@@ -7600,7 +7352,7 @@ VISA C340ロングコールで、Saxo LIVE接続後に反対売買判断の `候
 
 建玉データに `saxoUic` がない場合でも、Saxo現在建玉スナップショットとの照合済み行があるなら、その行の `uic` を使って保存またはAPI呼び出しに渡す。
 
-### サーバー側の要件
+#### サーバー側の要件
 
 `GET /api/saxo/options/premium-candidate` は以下の追加クエリを受け付ける。
 
@@ -7614,7 +7366,7 @@ VISA C340ロングコールで、Saxo LIVE接続後に反対売買判断の `候
 
 `accountKey` がUIから渡っていない場合に `accounts[0]` を無条件に使う挙動は避ける。P口座とN口座を併用するため、誤った口座で照会すると価格取得や権限判定が不安定になる。口座が不明な場合は、建玉の `saxoAccountKey` 取得を促す明示メッセージを返す。
 
-### 受け入れ条件
+#### 受け入れ条件
 
 - V / P口座 / C340 / 2026-11-20 / ロングコールで、既存建玉の `uic` を使って候補価格取得を試みる。
 - 失敗時も `SIM口座にデータなし` とは表示せず、LIVE接続で何が取れなかったかを表示する。
@@ -7622,9 +7374,9 @@ VISA C340ロングコールで、Saxo LIVE接続後に反対売買判断の `候
 - UI上に既存の手入力値がある場合、API失敗で上書きしない。
 - ローカル版と公開版で同じ実装にする。
 
-## 76. 候補価格取得のタイムアウトをAPI未起動と誤表示しない
+### 2026-07-02補足: 候補価格取得のタイムアウトをAPI未起動と誤表示しない
 
-### 背景
+#### 背景
 
 SaxoローカルAPI `/api/saxo/status` は正常に応答し、Saxo API詳細カードでもLIVE接続中と表示されているにもかかわらず、反対売買判断の候補価格取得だけが `SaxoローカルAPIが起動していません。別ターミナルで npm run dev:saxo-api または npm run dev:all を起動してください。` と表示される事象を確認した。
 
@@ -7632,7 +7384,7 @@ SaxoローカルAPI `/api/saxo/status` は正常に応答し、Saxo API詳細カ
 
 また、Saxo側が `429 RateLimitExceeded` を返す場合もあり、この場合は再試行タイミングを空けるべきであって、API未起動やユーザーの起動ミスではない。
 
-### 修正方針
+#### 修正方針
 
 - `fetchJson` は `AbortError` と接続不能を区別する。
 - `AbortError` の場合は `Saxo価格取得がタイムアウトしました。Saxo側の応答待ちまたはレート制限の可能性があります。少し時間を置いて再試行してください。` のように表示する。
@@ -7641,16 +7393,16 @@ SaxoローカルAPI `/api/saxo/status` は正常に応答し、Saxo API詳細カ
 - サーバーが `429 RateLimitExceeded` を受けた場合は、`classification: Saxo APIレート制限` などで返し、UIにもレート制限として表示する。
 - 古いSaxoローカルAPIプロセスが動き続けると修正コードが反映されないため、実装後の確認手順に `18787` のサーバー再起動を含める。
 
-### 受け入れ条件
+#### 受け入れ条件
 
 - `/api/saxo/status` が成功している状態で候補価格取得だけが遅い場合、`API未起動` と表示しない。
 - Saxo側の429は `レート制限` と表示する。
 - UIC優先修正を入れた後、SaxoローカルAPIサーバーを再起動しないと反映されないことを実装担当の確認手順に明記する。
 - 取得失敗時でも、既存の現在オプション価格や手入力値を変更しない。
 
-## 77. InfoPriceに価格が無い場合の代替経路と理由表示
+### 2026-07-02補足: InfoPriceに価格が無い場合の代替経路と理由表示
 
-### 背景
+#### 背景
 
 VISA C340ロングコールで、UIC優先経路により `trade/v1/infoprices (existing position UIC)` までは到達したが、SaxoのInfoPrice応答に `Bid` / `Ask` / `Last` / `Mid` が含まれず、現在オプション価格をアプリへ入れられない事象を確認した。
 
@@ -7660,7 +7412,7 @@ Saxo公式OpenAPIのPricing説明では、InfoPriceの中核価格は `Quote.Bid
 
 したがって、アプリ側は `UICが見つかったのに価格が無い` という状態を、単なる失敗として扱わず、Saxoが返している理由と代替確認手段を表示する必要がある。
 
-### 修正方針
+#### 修正方針
 
 1. InfoPriceのレスポンスから `Quote.ErrorCode`、`Quote.PriceTypeBid`、`Quote.PriceTypeAsk`、`Quote.DelayedByMinutes`、`PriceInfo`、`PriceInfoDetails` を診断情報として抽出する。
 2. 価格抽出では、既存の `Quote.Bid` / `Quote.Ask` / `Quote.Mid` に加え、Saxoが返す可能性のある `LastTradedPrice`、`LastTraded`、`LastClose`、`Close` などを広めに探索する。ただし、0は有効価格として扱わない。
@@ -7670,7 +7422,7 @@ Saxo公式OpenAPIのPricing説明では、InfoPriceの中核価格は `Quote.Bid
 6. `NoMarket` / `Pending` / `IsMarketOpen=false` の場合は、市場外または一時的に価格が返らない状態として表示し、Saxo決済チケットのBid/Ask/指値を手入力する案内を出す。
 7. `OldIndicative` や `LastClose` 等が取れる場合は、`参考価格` として表示できるが、`現在オプション価格` や売却判断の確定値として自動入力してはいけない。
 
-### UI表示
+#### UI表示
 
 価格が返らない場合、反対売買判断カードには次のように表示する。
 
@@ -7679,7 +7431,7 @@ Saxo公式OpenAPIのPricing説明では、InfoPriceの中核価格は `Quote.Bid
 - 補足: `Saxo決済チケットに表示されるBid、または実際に使う売却指値を「現在オプション価格」に手入力してください。`
 - 取得元: `trade/v1/infoprices`、`trade/v1/infoprices/list`、または `Saxo現在建玉`
 
-### 受け入れ条件
+#### 受け入れ条件
 
 - UICが見つかったがInfoPriceに価格が無い場合、Saxoが返した `ErrorCode` / `PriceTypeBid` / `PriceTypeAsk` / `IsMarketOpen` のうち取得できた情報を表示する。
 - `NoMarket` や市場外の可能性が高い場合、ユーザーにSaxo決済チケットの値を手入力するよう明示する。
@@ -7688,15 +7440,15 @@ Saxo公式OpenAPIのPricing説明では、InfoPriceの中核価格は `Quote.Bid
 - 価格が無い状態を0として扱わない。
 - ローカル版と公開版で同じ挙動にする。
 
-## 78. 買いオプション反対売買判断に現在決済ベース年率を表示する
+### 2026-07-02補足: 買いオプション反対売買判断に現在決済ベース年率を表示する
 
-### 背景
+#### 背景
 
 VISA C340ロングコールで、Saxo決済チケットのBidを `現在オプション価格` に手入力すると、反対売買判断カードには `評価損益` と `評価損益率` が表示される。現状の `評価損益率` は、支払ったプレミアムに対して今反対売買した場合の単純損益率であり、保有日数を加味した投資効率は分からない。
 
 マネースクールで学んだコール買い・シンセティックコンボ系の運用では、満期保有ではなく途中の反対売買で利確または損切りする判断が重要である。そのため、買いオプションの反対売買判断カードには、今決済した場合の保有期間年率を表示し、短期で利益が出ている時の効率を確認できるようにする。
 
-### 対象
+#### 対象
 
 - コール買い
 - プット買い
@@ -7704,7 +7456,7 @@ VISA C340ロングコールで、Saxo決済チケットのBidを `現在オプ�
 
 売りオプションの買戻し判断には既存の途中決済年率・確保率の考え方を使うため、この追加仕様は買いオプション脚を主対象にする。
 
-### 計算式
+#### 計算式
 
 表示名は `現在決済ベース年率` とする。
 
@@ -7746,7 +7498,7 @@ JPY主帳簿または参考JPY表示の場合:
 
 保有日数は `建玉日` から現在日までの日数を使う。同日または1日未満の場合も、0除算を避けるため最低1日として扱う。
 
-### UI表示
+#### UI表示
 
 買いオプションの反対売買判断カードで、`評価損益率` の次に次の行を追加する。
 
@@ -7764,7 +7516,7 @@ JPY主帳簿または参考JPY表示の場合:
 - 必要な場合だけ、ヘルプまたはdetails内に「年率は現在価格で今反対売買した場合の概算であり、確定成績ではない」と記載する。通常表示の1行には出さない。
 - ダッシュボードの大きな年率とは混同しないよう、ラベルを `現在決済ベース年率` に固定する。
 
-### 受け入れ条件
+#### 受け入れ条件
 
 - V / P口座 / C340 / 2026-11-20 / コール買いで、現在オプション価格を入力すると `評価損益率` と別に `現在決済ベース年率` が表示される。
 - 手数料込み評価損益、建玉時支払額、保有日数を使って計算する。
@@ -7774,15 +7526,15 @@ JPY主帳簿または参考JPY表示の場合:
 - 現在オプション価格を消した場合は年率も `未計算` に戻る。
 - ローカル版と公開版で同じ表示・計算にする。
 
-## 79. プット売り資金カードと買いオプション詳細カードの表示整理
+### 2026-07-02補足: プット売り資金カードと買いオプション詳細カードの表示整理
 
-### 背景
+#### 背景
 
 N口座プット売りの詳細カードで `P権利行使時の追加買付資金` と表示されているが、ユーザーにとって重要なのは「追加で必要」という意味ではなく、権利行使時に必要な買付資金が口座内で確保できているかどうかである。`追加` という語は、既にキャッシュセキュアード前提で資金を確保している利用者には不自然に見える。
 
 また、VISAコール買いでは `最大損失` が主カードとして大きく表示されている。買いオプションの理論最大損失は支払プレミアムと手数料の合計であり計算としては正しいが、マネースクール戦略では満期放置ではなく途中の反対売買決済が主目的である。したがって、主表示は `最大損失` ではなく、現在価格に応じた利確/損切り判断へ寄せる。
 
-### プット売り資金カード
+#### プット売り資金カード
 
 N口座プット売り、P口座プット売りのいずれでも、カード名と文言を次のように変更する。
 
@@ -7825,7 +7577,7 @@ Saxo API詳細または口座余力で同一口座の買付資金を確認して
 
 `追加` という語は、不足額を明示する時だけ使う。通常のカード名には使わない。
 
-### 資金確認ロジックの正式データ源
+#### 資金確認ロジックの正式データ源
 
 資金確認は `simulation.availableCashJPY` だけで判定しない。これは建玉データへ後付けで付与される派生値であり、選択中詳細・実績計算・税計算用の `taxSimulation` を通ると欠落する可能性があるためである。
 
@@ -7880,7 +7632,7 @@ P195 × 100株。資金確認: 不足。N口座USD現金 $18,000.00 / 不足 $1,
 P195 × 100株。資金確認: 未確認。N口座USD現金を取得してください。
 ```
 
-### 買いオプションの主表示
+#### 買いオプションの主表示
 
 コール買い・プット買いの詳細カードでは、満期放置時の理論最大損失を主カードにしない。主表示は次の順番にする。
 
@@ -7902,7 +7654,7 @@ $2,412.25
 
 このカードは赤い警告カードにしない。損失が発生済みであるかのような見せ方を避け、支払済みの上限リスクとして中立表示にする。警告扱いにするのは、現在オプション価格が損切りライン以下になった場合、または残存日数・時間価値の低下により明確な注意条件を満たした場合に限る。
 
-### ダッシュボード行の表示
+#### ダッシュボード行の表示
 
 買いオプションのダッシュボード行では、`最大損失 / 支払額` のように損失を主語にしない。次のように表示する。
 
@@ -7931,7 +7683,7 @@ Saxo決済チケットのBidまたは実際に使う売却指値を入力して�
 
 次にやることは、買いオプションでは原則として `反対売買で決済` または `反対売買判断` とし、ボタン押下で対象建玉の反対売買判断カードを開く。
 
-### 満期損益分岐点の扱い
+#### 満期損益分岐点の扱い
 
 買いオプションの `損益分岐点` は満期まで保有した場合の参考値であり、途中決済戦略の主判断ではない。表示する場合は次の名称にする。
 
@@ -7941,7 +7693,7 @@ $364.12
 満期まで保有した場合の参考値です。途中決済では現在オプション価格・利確/損切りラインを優先します。
 ```
 
-### 反対売買ベースの損益分岐点
+#### 反対売買ベースの損益分岐点
 
 コール買い・プット買いでは、マネースクールの運用方針どおり、満期まで保有して権利行使することを主目的にしない。主判断は、満期前に反対売買した場合のオプション価格で行う。
 
@@ -8004,7 +7756,7 @@ UI上の優先順位:
 
 `満期時の損益図` は買いオプションでは主カードにしない。表示する場合は折りたたみ、または `満期保有・権利行使した場合の参考図` として明確に二次情報へ下げる。
 
-### 買いオプションの価値分解・時間価値減衰ビュー
+#### 買いオプションの価値分解・時間価値減衰ビュー
 
 No34/No35資料の整理を反映し、コール買い・プット買いの途中決済判断では、満期時の株価損益ではなく、現在のオプション価格を `本質的価値` と `時間的価値` に分解して表示する。
 
@@ -8078,7 +7830,7 @@ UIでは、買いオプション詳細の上位に `時間価値減衰ビュー`
 
 チャートは `価値分解タイムライン` とする。横軸を日付、縦軸をオプション価格、積み上げ要素を本質的価値と時間的価値にする。初回スナップショットしかない場合は、トレンド判定を出さず、現在の価値分解だけを表示する。
 
-### 買いオプション選択時の詳細カード優先順位
+#### 買いオプション選択時の詳細カード優先順位
 
 コール買い・プット買いは、マネースクール戦略上、満期保有や権利行使ではなく途中の反対売買で判断する。したがって、ダッシュボード下の大きな詳細カード領域で `満期時の損益図` を主表示にしない。
 
@@ -8105,7 +7857,7 @@ short_put / covered_call:
   満期時の損益図と資金確認を主表示
 ```
 
-### 受け入れ条件
+#### 受け入れ条件
 
 - プット売りのカード名に `追加買付資金` が出ず、`権利行使時に必要な買付資金` と表示される。
 - 口座余力が取れている場合、必要資金に対して `充足` / `不足` / `未確認` が分かる。
@@ -8121,9 +7873,9 @@ short_put / covered_call:
 - プット売り・カバードコールでは、満期時の損益図を主表示対象として残す。
 - ローカル版と公開版で同じ表示にする。
 
-### エントリー根拠ジャーナル
+#### エントリー根拠ジャーナル
 
-マネースクール戦略では、エントリー後の結果だけでなく、なぜその銘柄・戦略・タイミングで入ったのかを残すことが重要である。公開版でも、Saxo APIやmoomoo OpenDへ直接接続しない範囲で、エントリー理由とチャート画像を保存できる `エントリー根拠ジャーナル` を共通コアとして扱う。
+マネースクール戦略では、エントリー後の結果だけでなく、なぜその銘柄・戦略・タイミングで入ったのかを残すことが重要である。Saxo API連携で約定・建玉を管理するだけでは、エントリー時の判断根拠が後から消えるため、建玉管理アプリに `エントリー根拠ジャーナル` を追加する。
 
 目的:
 
@@ -8135,7 +7887,7 @@ short_put / covered_call:
 対象導線:
 
 - 新規建玉入力
-- 候補ファイル取込後の候補カード
+- Saxo建玉候補から建玉入力へ下書き反映した直後
 - ダッシュボードの各建玉行
 - 反対売買判断
 - 決済実績保存後
@@ -8248,8 +8000,43 @@ UI方針:
 - ジャーナル本文とメタデータは既存のJSON保存対象に含める。
 - 画像本体はIndexedDBに保存する。
 - 初期実装では画像を巨大なBase64としてJSONに埋め込まない。
-- 公開版では画像やメモを外部サーバーへ送信しない。
 - 将来、画像込みバックアップが必要になったらzip exportを別機能として設計する。
+
+### 2026-08-12 追加是正: チャート画像を固有ID単位で削除できるようにする
+
+原因:
+
+- `エントリー根拠 > チャート画像` は添付だけ可能で、誤添付した1枚を取り消す UI がない。
+- `chartEvidence` は `id` を持つが、削除導線がないため、simulation / candidate 保存データと IndexedDB 画像参照が残り続ける。
+
+契約:
+
+- 各画像カードに、その画像だけを削除するボタンを置く。画像プレビューの上には重ねず、カード右上またはメタ情報欄右端に配置する。
+- 削除対象は配列 index ではなく `ChartEvidence.id` を正本とし、同一取得元・同時刻の画像が複数あっても対象1件だけ除外する。
+- 削除前に確認ダイアログを出し、`取得元`、`時間軸`、`取得日時` を表示する。実画像の他項目や journal 本文は変更しない。
+- 確定時は `chartEvidence` から対象 `id` を除外し、`updatedAt` を更新した journal を既存 `onChange` 経路で親 simulation / candidate state へ返す。これにより store と localStorage は既存永続化経路で即時更新する。
+- 画像本体は best-effort で IndexedDB から `imageRef` と `thumbnailRef` を削除する。IndexedDB 削除失敗でも、journal メタデータ削除は巻き戻さない。
+- 画像が 1 件だけでも削除可能。0 件になったら空状態表示と `画像添付` ボタンだけを表示する。
+- エントリー理由、タグ、想定シナリオ、レビュー、別画像は非影響とする。
+
+編集権限:
+
+- 既存の編集可能導線では削除ボタンを表示する。
+- 将来 `EntryRationaleJournalPanel` が read-only で使われる場合に備え、画像削除は `editable` / `editDisabledReason` 契約で制御できるようにする。編集不可時は削除ボタンを非表示または disabled とし、理由を小さく表示できるようにする。
+
+欠損・競合:
+
+- `imageRef` / `thumbnailRef` が IndexedDB に存在しなくても journal 上の削除は許可する。存在確認不能を理由に UI 削除を止めない。
+- `ChartEvidence.id` 欠損の legacy データは自動生成せず、現行保存済みデータが持つ `id` をそのまま使う。
+
+回帰条件:
+
+- 複数画像から 1 件だけ削除できる。
+- 確認ダイアログでキャンセルすると `chartEvidence`、他項目、永続化結果が変わらない。
+- 最後の 1 件を削除すると空状態に戻る。
+- 削除後に store 永続化相当の再読込をしても削除済み画像が復活しない。
+- 削除対象は `ChartEvidence.id` で一意に選ばれ、同時刻・同一取得元の別画像を消さない。
+- 削除ボタンはゴミ箱アイコン付きで、対象識別を含む `aria-label` を持つ。
 
 受け入れ条件:
 
@@ -9175,3 +8962,227 @@ local helperはこの建玉のUICから `ref/v1/instruments/details/{Uic}/StockO
 - 新規候補の主操作から3-Aへ直接進み、履歴候補の自動照合結果が同じ下書きに含まれる。3-A保存後は該当候補が消え、再取得してもlinked/savedとして非表示のままである。
 - 実機受入では、今回の新規ロングコールだけが通常tableに表示され、既存単脚と既存シンセティック二脚が非表示であることをDOMで確認する。新要候補のresolved ticker、契約条件、下書きtickerが一致することも同時に確認する。
 - ローカル全回帰・build・5173bundle・実機DOM合格後だけ公開版へ反映する。公開版も独立test/build/Pages bundle/DOM確認後にGitHub pushする。実口座データ、実銘柄、OAuth、raw応答、localStorage、バックアップを公開版へ移送しない。
+
+## 2026-08-12 P/JPY 3-A金額欠落是正: 取得済みの明示値を一回の導線で3-Aへ統合する
+
+### 実データ再現と確定原因
+
+P口座の対象ロングオプションについて、ローカルhelperがトークン有効中に取得した Saxo 現在建玉と約定履歴を、同一口座、UIC、C/P、権利行使価格、満期、数量、建値、約定時刻で照合したところ、候補は1件に一意化された。
+
+実調査では、次の direct evidence が同時に存在することを確認した。
+
+- trade report に、口座通貨建ての `BookedAmountAccountCurrency` と商品通貨建ての `TradedValue`
+- current position に、開始時の `MarketValueOpenInBaseCurrency` と `ConversionRateOpen`
+- current position の `Costs.OpenCostInBaseCurrency.*` に、開始費用の明示内訳
+- 開始約定時刻から正規化した Asia/Tokyo の取引日
+
+Saxo公式schemaでは、`BookedAmountAccountCurrency`は口座通貨の記帳額、`TradedValue`は商品通貨の取引価値、`MarketValueOpenInBaseCurrency`は開始時の口座/クライアント通貨建てnominal value、`OpenCostInBaseCurrency`は開始取引費用である。これらは値の意味が異なるため、同じfallback列へ混ぜない。
+
+今回の根本原因は、direct に取得済みの記帳額、開始プレミアム、開始費用内訳を同じ 3-A 下書きへ統合できていなかったことにある。開始プレミアムと開始費用内訳は、direct な記帳額と丸め許容内で整合する場合に限り cross-validation された値として採用できるが、現行コードはこの関係を使っていなかった。
+
+一方、3-Aは取引日と為替だけを表示し、記帳額JPY、プレミアムJPY、取引費用JPYを空欄とした。原因は次の四点である。
+
+1. `normalizePosition()`は `MarketValueOpenInBaseCurrency`を保存するが、`resolveOpeningExecution()`はこれをP/JPYの開始プレミアムへ渡さない。
+2. `OpenCostInBaseCurrency`の6候補プロパティが全て存在することを要求し、Saxoが明示的に返した3費用内訳と記帳額による完全性照合を行っていない。結果は `partial`のまま破棄される。
+3. `まとめて取得`で現在建玉取得と履歴取得が一つの完了契約になっていない。履歴がタイムアウト、トークン失効、日次更新前の場合でも現在建玉だけで下書きを開ける。後から一意の履歴が取れても開いている3-Aへ再統合されず、別ボタンを要求する。
+4. `resolveOpeningExecution()`の `historyStatus`は履歴が完全な分岐でも `history_match_missing_fields`を返す。加えて履歴未照合時の `historyMissingItems=[]`が `不足項目:` 空文字列として表示され、失敗理由と必須項目が矛盾する。
+
+実装中の再取得で、さらに三つの具体的な落下点を確定した。
+
+5. helperの費用内訳取得は、入れ子の `Costs.OpenCostInBaseCurrency`をdirect objectとして読む必要がある。全rawのrecursive alias検索だけに依存すると、rawに値があってもnormalized evidenceへ渡らない。
+6. 履歴候補と現在建玉の照合で、helper直後の `accountAssignment=unassigned`を不一致として拒否してはならない。確認済みのaccount mappingまたは対象simulationのP/Nを適用した後に口座一致を判定する。P/N競合は従来どおり拒否する。
+7. 開いている3-Aへの後着履歴再統合は、保存済み `fixtureMeta.saxoPositionId`と再取得position IDを最優先の直接指紋とし、次にUIC、instrument、契約形状を使う。画面選択中の建玉と一致するという理由だけで別下書きを上書きしない。
+
+`TradeCostsTotalInBaseCurrency` は、Saxo公式schema上、開始費用と realized / unrealized close costs を含み得る動的合計である。開始費用の代用には使わず、diagnosticにだけ保持する。
+
+### OpeningExecutionの正規化契約
+
+1. `openingBookedAmountJpy` は、口座割当P、AccountCurrency JPY、一意照合したtrade reportの `BookedAmountAccountCurrency`がある場合だけdirect evidenceとして採用する。`BookedAmountUSD`、差額、口座残高で代用しない。
+2. `openingPremiumJpy` は、同じ現在建玉の `MarketValueOpenInBaseCurrency`をdirect evidenceとして採用する。口座割当P、口座通貨JPY、商品StockOption、数量、UIC、開始時刻、履歴約定価格が一致することを必須とする。`TradedValue * FX`で新しい値を作らない。`TradedValue`と `ConversionRateOpen`は一致診断にだけ使う。
+3. `openingTransactionCostJpy` は `Costs.OpenCostInBaseCurrency`が明示的に返した数値プロパティだけを集計する。返っていないプロパティに0を補完しない。
+4. 3の内訳合計は、direct `openingBookedAmountJpy`とdirect `openingPremiumJpy`の符号付き関係が口座通貨の丸め許容内で一致する場合だけ `cross_validated_component_aggregate`として採用する。不一致、符号不明、複数履歴候補、通貨不明は `source_conflict` として空欄のまま正式保存を止める。
+5. `TradeCostsTotalInBaseCurrency`、current FX、current price、P/L、cash balanceは開始費用・開始プレミアム・記帳額のfallbackに使わない。
+6. evidenceは `value`、`source`、`sourceField`、`capturedAt`、`completeness`、費用内訳、照合キーの指紋を持つ。raw ID、Account Key、OAuthをUIや公開fixtureに残さない。
+7. `historyStatus` を `history_not_fetched` / `history_fetch_failed` / `history_no_usable_match` / `history_match_missing_fields` / `history_match_complete` / `source_conflict` に分ける。完全候補をmissingとして返さない。
+
+### 2026-08-12 追加是正: 3-A「取引費用JPY」の意味と取得境界
+
+Saxo UI には、開始時の現金費用とは別に、為替変換費用や総取引費用として見える費目が存在し得る。一方、ローカルhelperが現在取得できている raw / normalized data を境界ごとに確認すると、次が確定した。
+
+1. current position raw にある `Costs.OpenCostInBaseCurrency.*` は、開始約定と同じ現金フローに含まれる口座通貨建て費用内訳として扱える。
+2. `TradeCostsTotalInBaseCurrency` は開始費用と意味が一致する保証がないため、開始費用の direct evidence としては使わない。
+3. trade report raw field names には `SpreadCostAccountCurrency` / `SpreadCostClientCurrency` / `SpreadCostUSD` が存在し得るが、現在の取得経路では数値を direct に正規化できない場合がある。したがって、為替変換費用または総取引費用として自動補完してはならない。
+4. よって、現在のデータ契約における `brokerTransactionCostJPY` / 3-A「取引費用JPY」は、「開始約定の記帳額JPYと同じ現金フローに含まれる口座通貨建て開始費用」を記録する欄と定義する。
+5. UI 上の総取引費用や為替変換費用を `brokerTransactionCostJPY` へ推測代入してはならない。これらを保持するには、別の direct raw source path と別 field 契約が必要である。
+6. `brokerTransactionCostJPY` が direct evidence でも fee breakdown合計でも取得できない場合、3-Aと約定確認サマリーは `未取得` / `未確定` を表示する。`0円` を既定値として表示しない。
+
+### 2026-08-12 追加是正: 開始現金費用・為替変換費用・Saxo総取引費用を分離して二重計上を防ぐ
+
+実調査と Saxo 公式schema を照合した結果、開始費用まわりは次の3概念を同じ欄に混在させてはならない。
+
+1. `openingCashTransactionCostJPY`（既存 `brokerTransactionCostJPY` の意味を明示化したもの）
+   - 記帳額JPYとプレミアムJPYの差を構成する、開始約定と同じ現金フローに含まれる費用。
+   - current position raw `Costs.OpenCostInBaseCurrency.*` の明示内訳でのみ構成する。
+   - 明示内訳同士の合計が direct な記帳額 / プレミアム差と整合する場合だけ採用する。
+   - `TradeCostsTotalInBaseCurrency` は意味が一致しないため、この欄には使わない。
+2. `currencyConversionCostJPY`
+   - 為替変換により別建てで計上される費用。
+   - Saxo公式trade schemaには `SpreadCostAccountCurrency` / `SpreadCostClientCurrency` / `SpreadCostUSD` が定義されているが、説明は “Spread added by counterpart ...” であり、「為替変換手数料」と同義であることをこの時点では証明できていない。
+   - 現在の取得経路では、field name は見えても numeric value を direct に取得できない場合がある。したがって自動補完しない。
+   - direct raw source path と数値が確認できるまでは `未取得` とし、必要なら3-Aで手入力を許可する。
+3. `brokerTotalTransactionCostJPY`
+   - Saxo画面が総額として表示する取引費用。
+   - 現在の helper fetch path と公式schemaの確認範囲では、UI上の総額に対応する direct numeric field が未確認な場合がある。
+   - 別費目や画面差額から逆算して生成しない。direct evidence が無い限り `未取得` または手入力とする。
+
+データ契約は次のとおりとする。
+
+1. `brokerBookedAmountJPY` は現金残高反映の正本であり、開始現金費用をすでに含む。現金反映で同費用を再控除しない。
+2. `brokerPremiumJPY` はプレミアム総額の正本とする。
+3. `brokerTransactionCostJPY` は後方互換のため保持するが、意味は「開始現金費用」に固定する。既存保存済み値を UI 上の総費用へ読み替えない。
+4. 新設 `brokerCurrencyConversionCostJPY` は direct evidence または手入力値だけを保持する。
+5. 新設 `brokerTotalTransactionCostJPY` は Saxo総取引費用の direct evidence または手入力値だけを保持する。
+6. 成績・年率・建玉時の経済的総費用は次の優先順位で計算する。
+   - `brokerTotalTransactionCostJPY` が direct/manual で存在する場合はそれを総費用の唯一の値源とし、内訳を再加算しない。
+   - 総費用が無い場合だけ、非重複の明示内訳（開始現金費用 + 為替変換費用 + その他明示費用）を合算する。
+   - 取得不能は `undefined` のままとし、0補完しない。
+7. `brokerTotalTransactionCostJPY` と explicit component sum が同時に存在しても、自動的に一致を要求して保存停止にはしない。総費用欄は総費用の正本、component欄は内訳の参考として保持する。ただし同一意味のdirect total sourceが複数存在し互いに矛盾する場合は `source_conflict` とする。
+8. 3-A UIは `開始現金費用JPY`、`為替変換費用JPY`、`Saxo総取引費用JPY` を分けて表示する。開始現金費用の内訳（Commission / ExchangeFee / StampDuty 等）は折りたたみ詳細で確認できるようにする。未取得欄は `未取得` と表示し、0円を出さない。
+9. manual入力時は `source=manual`、`capturedAt`、`completeness` を field 単位で保持する。confirmed済み値は自動上書きしない。
+10. 移行時は、既存 `brokerTransactionCostJPY` のみを持つ保存済みP/JPY entryは `openingCashTransactionCostJPY` 相当として扱い、`brokerCurrencyConversionCostJPY` と `brokerTotalTransactionCostJPY` は未設定のままにする。
+
+### 2026-08-12 追加是正: 手入力 `brokerTotalTransactionCostJPY` を 0 補完せず欠損と実0を区別する
+
+対象 3-A の実保存値を確認したところ、`openingFieldSources.brokerTotalTransactionCostJPY = manual` と `openingFieldEvidence.brokerTotalTransactionCostJPY.source = manual` は保持されていた一方、値そのものは reload 前の保存時点ですでに `0` だった。別の manual 費用項目は同じ execution に保持されていたため、deserialize / migration / late merge ではなく、3-A の手入力 onChange 経路だけが `brokerTotalTransactionCostJPY` を `0` に変換していたと確定した。
+
+境界ごとの確定事実は次のとおり。
+
+1. 3-A の `Saxo総取引費用 JPY` 入力は `NumberInput` を通して `buildManualOpeningFieldPatch()` へ渡る。
+2. 旧 `NumberInput` は `onChange(Number(event.target.value))` 固定であり、空文字 `\"\"` を `0` に変換する。
+3. そのため、手入力途中・クリア・ブラウザ側の空文字イベントのどこかで `0` が `simulation.optionEntryExecutions[].brokerTotalTransactionCostJPY` に書き戻される。
+4. store 永続化は単純 `JSON.stringify` / `localStorage.setItem` であり、保存済み値は `0` のまま保持される。
+5. reload 時の `JSON.parse` / `normalizeSimulation()` はその `0` を変更しない。late merge も `openingFieldSources[field] === manual` のため上書きしない。
+6. summary は explicit total cost `0` を実値として扱い、経済的総費用 `0円` を表示していた。ここで初めて 0 になったのではなく、すでに保存済みの 0 を表示しているだけである。
+
+修理契約を次のとおり定める。
+
+1. 3-A の手入力数値欄は、空欄 `undefined` と実値 `0` と負数を区別する。`Number(\"\")` による 0 補完を禁止する。
+2. `brokerTotalTransactionCostJPY`、`brokerCurrencyConversionCostJPY`、`brokerTransactionCostJPY`、`brokerBookedAmountJPY`、`brokerPremiumJPY`、`brokerExchangeRateJPY` の P 口座 3-A 欄は、空欄時に `undefined` を保存する。
+3. explicit `0` は、ユーザーが実際に `0` を入力した direct/manual evidence のときだけ保存する。欠損を `0` と同一視しない。
+4. `buildManualOpeningFieldPatch()` は manual value が `undefined` の場合、その field の `openingFieldSources[field]` と `openingFieldEvidence[field]` を削除する。manual evidence が無い欠損値に対して late merge を再許可する。
+5. manual numeric value が finite number の場合だけ `source=manual`、`capturedAt`、`completeness=direct` を保存する。
+6. reload / deserialize / late merge では、finite な manual value を上書きしない。manual の総取引費用が保存されていれば、そのまま復元し、開始現金費用や為替変換費用を再加算しない。
+7. summary は `brokerTotalTransactionCostJPY` が finite ならその絶対値だけを `経済的総費用` として表示する。total が欠損のときだけ、非重複 component 合算へ戻る。欠損は `未取得` と表示し、0 円にしない。
+
+回帰条件を追加する。
+
+1. direct total cost が無く、開始現金費用だけあるP/JPY entryは、3-Aで `開始現金費用JPY` だけを表示し、`為替変換費用JPY` と `Saxo総取引費用JPY` は `未取得` になる。
+2. `brokerTotalTransactionCostJPY` がある場合、成績計算はそれを唯一の総費用として使い、`brokerTransactionCostJPY` と `brokerCurrencyConversionCostJPY` を重複加算しない。
+3. `brokerTotalTransactionCostJPY` が無く `brokerCurrencyConversionCostJPY` だけある場合、経済的総費用は `開始現金費用 + 為替変換費用` の明示値だけで構成する。
+4. `brokerTransactionCostJPY` が未取得でも summary / dashboard / history は `0円` を出さず `未取得` 扱いにする。
+
+### 最小操作と状態遷移
+
+1. `まとめて取得`は口座、現在建玉、instrument details、注文、closed positions、tradesを一つのcomposite resultとして返す。各sourceの成否、取得時刻、一意照合結果を保持する。
+2. 新規候補の主CTAは、履歴取得が完了、取得失敗で理由確定、またはSaxo日次更新前で待機と分類されるまで有効にしない。成功したsourceだけで「全取得済み」と表示しない。
+3. 一意照合の履歴がある場合、主CTAの1回で上記5項目を含む3-A下書きを開く。「履歴候補を選ぶ」「Saxo取引履歴から補完」を通常フローで追加要求しない。
+4. 現在建玉だけで下書きを開いた後に同じ履歴が取れた場合は、開いている未確認3-Aを同一照合キーで再解決し、未入力項目だけを自動統合する。ユーザー上書き、確認済み、source conflictは自動上書きしない。
+5. トークン失効・タイムアウトは `Saxoに再接続して同じ画面で再取得` の1操作だけを出す。詳細履歴画面へ往復させない。
+6. 3-Aは `不足項目:` 空文字列を表示しない。取得済み、未取得、一時失敗、API項目なし、source conflictを項目別に表示する。
+7. 全5項目が取得済みで照合に競合がない場合、ユーザーの主操作は `確認して正式保存`の1回だけとする。正式保存前の下書き作成、口座残高更新、建玉status更新は自動実行しない。
+
+### 2026-08-12 追加是正: 3-Aの主操作はカード内正式保存だけに統一する
+
+対象3-A実機では、未確認カードが残っているのに画面上部 `建玉開始を確認済みにする` とカード内 `確認して正式保存する` が同時に緑の主操作として表示され、どちらを押すべきか判別しづらかった。さらに Saxo API下書きヘッダー側にも別の `確認して正式保存する` があり、同じ確認を複数回求める導線になっていた。状態遷移の正本はカード単位の確認であり、上部一括確認は通常フローに残してはならない。
+
+1. 未確認の3-Aカードが1件でもある間、通常フローの唯一の主操作は各カード内の `確認して正式保存する` とする。
+2. 画面上部 `建玉開始を確認済みにする` は未確認カードがある間は表示しない。少なくとも緑の主操作として残さない。
+3. Saxo API下書きヘッダーの `確認して正式保存する` も、未確認3-Aカードが残る間は表示しない。ヘッダーは状態説明と破棄だけにとどめる。
+4. 各カード保存では、そのカードの必須項目と競合状態を検証したうえで当該executionだけを `confirmed=true` にする。
+5. 最後の未確認カードを正式保存した時点で、全必須カードが `confirmed` かつ未作成の必須3-Aカードが残っていない場合だけ、建玉開始全体を一度で完了させる。通常の単脚・複数脚では `status=open` まで同じ更新で原子的に保存し、ユーザーに二度目の確認を求めない。
+6. シンセティックのように親チケット等の別必須確認が残る場合は、カード保存後も全体完了へ自動遷移しない。未完了理由を維持し、既存の親チケット確認導線を使う。
+7. すでに `confirmed` のカード、手入力済み値、`source_conflict`、未入力項目は自動上書きしない。最後の保存条件を満たさない限り `status` は変えない。
+8. `planned` / `entry_confirmation` / Saxo API下書きのいずれでも、最後のカード保存だけで通常の建玉開始完了状態へ遷移させる。別の上部一括確認ボタンは通常フローに戻さない。
+
+### 2026-08-13 是正: 確認済み株式譲渡を反映待ちCTAに残さない
+
+既存株式譲渡の確認済み履歴では、summary が `追加で処理する候補はありません` / `口座・履歴を含む全体の反映待ち0件` を表示している一方で、緑色CTA `株式譲渡確認へ戻る` が残留していた。実データの異常ではなく、履歴分類・株式譲渡型・summary件数の契約不整合が原因である。
+
+#### 確定原因
+
+1. `requiredActionCount` は create/broken だけを数え、既存 `candidate` の戻りCTAを件数へ含めない。
+2. `historyActions` は `candidate` があるだけで行を描画するため、summary 0件と緑CTAが共存する。
+3. `stock_settlement` は `simulation.stockSettlement.enabled` と `memo` 内の履歴キーだけで `candidate` 化され、typed な `source` / `sourceCandidateId` / `sourceTradeId` / `confirmationStatus` / `completionStatus` がないため `official` へ遷移できない。
+4. `HistorySummaryActionRow` は `stock_settlement` 行にも option 用の `optionType / strike / expiry` formatter を適用するため、`種類未確認 / 行使価格0 / 満期未取得` が出る。
+
+#### 型・migration 契約
+
+1. `StockSettlement` に少なくとも次を追加する。
+   - `source: "manual" | "broker_statement" | "saxo_api_estimate" | "saxo_history"`
+   - `sourceCandidateId?: string`
+   - `sourceTradeId?: string`
+   - `confirmationStatus?: "pending" | "confirmed"`
+   - `completionStatus?: "complete" | "incomplete" | "conflict"`
+   - `confirmedAt?: string`
+2. `memo` は表示メモ専用にし、履歴照合キーには使わない。履歴照合は typed な `sourceCandidateId` / `sourceTradeId` を使う。
+3. 既存データ migration は `normalizeSimulation()` で一度だけ行う。旧 `memo` に埋め込まれた既知の `sourceCandidateId` / `取引ID` パターンだけを typed field へ移す。
+4. 旧株式譲渡が required fields を満たし、旧UIで既に成績反映済み状態だった場合は `confirmationStatus=confirmed` / `completionStatus=complete` として正規化し、未完へ戻さない。
+5. typed source を安全に復元できない場合は `completionStatus=incomplete` または `conflict` に留め、勝手に `confirmed` にしない。
+
+#### classification 契約
+
+1. `stock_settlement` は typed field と required fields から次のいずれかに分類する。
+   - `official` / `saved_no_action`: `confirmationStatus=confirmed` かつ `completionStatus=complete`
+   - `candidate` / `pending_action`: `completionStatus=incomplete`
+   - `broken` / `conflict_review`: `completionStatus=conflict`、または typed link と履歴照合が競合
+   - `none`: 対応する保存済み株式譲渡がない
+2. 正式保存済み・確認済みの株式譲渡は、通常の反映待ち一覧、緑CTA、`requiredActionCount` から除外する。
+3. 未完の株式譲渡だけを `requiredActionCount` に含める。不足項目または競合理由を表示し、CTA は `株式譲渡を確認する` とする。
+4. summary 件数、見出し、CTA は同一 classification から導出する。`requiredActionCount=0` のときは actionable CTA が通常表示に一切ないことを不変条件とする。
+5. confirmed 履歴を参照表示する場合は折りたたみ `確認済み履歴` に弱いリンクで出してよいが、緑の主CTAにはしない。
+
+#### UI 契約
+
+1. `stock_settlement` 行は option formatter を使わず、`ticker / 譲渡日 / 株数 / 売却単価 / 株式譲渡` の専用表示にする。
+2. `optionType` / `strike` / `expiry` は株式譲渡行に表示しない。未取得は株式項目単位で `未取得` とする。
+3. 未完行の補助文言は generic な `既存確認用下書きへ移動します` だけにせず、`不足項目: ...` または `競合: ...` を上段に出す。
+4. confirmed/saved_no_action 行は summary 主CTA領域から外し、必要なら履歴一覧側の読み取り専用表示へ残す。
+
+#### 実装境界
+
+1. `buildSaxoStockSettlementDraft()` は typed な `source` / `sourceCandidateId` / `sourceTradeId` を保存し、`memo` に照合キーを埋め込まない。
+2. `createHistoryReflectionStates()` は `stockSettlement.memo.includes(key)` をやめ、typed link と completion/confirmation 状態で `official` / `candidate` / `broken` を返す。
+3. `createReflectionSummary()` と `ReflectionPendingSummary` は、return/create/review を含む actionable history row を同じ分類から数える。
+4. 既存 confirmed settlement を未完へ戻したり、同じ履歴から重複 candidate を作らない。
+
+#### 回帰受入条件
+
+1. confirmed 済み株式譲渡は、summary 0件時に緑CTAを出さない。
+2. pending な株式譲渡は、`requiredActionCount=1` と一致し、`株式譲渡を確認する` CTA と不足理由を出す。
+3. `requiredActionCount=0` と actionable CTA の共存は起こらない。
+4. 株式譲渡行は `ticker / 譲渡日 / 株数 / 売却単価 / 株式譲渡` を表示し、option 項目を出さない。
+5. 旧 memo だけを持つ既存データは typed field へ migration され、confirmed な既存株式譲渡を壊さない。
+6. option close / assignment / entry の既存 classification と CTA を壊さない。
+
+### 実装工程
+
+1. ローカルhelperに実取得値を公開せず確認するdiagnosticと、匿名化したP/JPYロングオプションfixtureを追加する。raw応答をrepoに保存しない。
+2. server normalizerに上記OpeningExecution evidenceとcross-validationを実装し、開始プレミアム、費用内訳、照合結果を型付きで返す。
+3. client normalizer / `resolveOpeningExecution()` / Appの新規下書き / 既存下書き再解決を同じresolverに統一する。
+4. `まとめて取得`をcomposite completionにし、履歴が未解決のまま主CTAが有効になるraceをなくす。一時失敗は同じ画面で再試行する。
+5. 3-Aのprovenance、不足理由、主CTAを新状態契約へ合わせる。取引費用はUI入力契約の符号で表示し、内訳とSaxo原値をprovenanceへ保持する。
+6. ローカル対象test -> ローカル全test/build -> helper再起動 -> 5173配信bundle -> Saxo再接続 -> 実取得 -> DOM確認の順で合格させる。正式保存は押さない。
+7. ローカル合格後だけ、一般化コード、匿名fixture、一般化設計を公開版へ反映する。公開版は独立test/build、Pages build、`gh-pages`、live bundle文字列とDOMを確認後にGitHub pushする。
+
+### 回帰テストと実機受入条件
+
+1. 匿名P/JPYロングオプションfixtureにdirect booked amount、direct market value open in base currency、OpenCostの3明示内訳、opening FX、execution timeを与えると、5項目が設計どおり解決され `history_match_complete` になる。
+2. 返却されないOpenCostプロパティをfixtureに0として追加しない。明示内訳合計とdirect booked/premiumが一致する時だけ費用を採用する。
+3. direct bookedなし、direct premiumなし、内訳合計不一致、複数候補、P/N競合、UIC競合は自動補完せず、理由付きで正式保存を止める。
+4. `TradeCostsTotalInBaseCurrency`だけのfixtureで開始費用を作らない。current FX、current price、P/L、cash balanceから開始金額を作らない。
+5. `history_match_complete`と `history_match_missing_fields`を別テストし、完全候補でmissingを返さない。履歴なしでも `不足項目:` 空文字を表示しない。
+6. `まとめて取得`の履歴成功、部分失敗、タイムアウト、トークン失効、日次更新待ちをテストし、未解決状態で正式保存へ進まない。
+7. 履歴未取得で作られた未確認3-Aに後から一意履歴を与えると、一回だけ未入力項目が自動統合される。ユーザー上書きと確認済みは変更しない。
+8. ローカル実機で対象ロングコールの3-Aを開き、取引日、約定価格、数量、記帳額、プレミアム、開始現金費用、為替がそれぞれ正しい取得元とともに表示されることをDOMで確認する。実装検証では正式保存を押さない。
+9. 実機の `TradeCostsTotalInBaseCurrency` を開始費用として誤採用しない。費用内訳合計と direct 金額照合の provenance を確認する。
+10. 公開版には実銘柄、実金額、Account Key、Account ID、Position ID、Order ID、Trade ID、UIC、raw応答、OAuth、localStorage、バックアップを移送しない。

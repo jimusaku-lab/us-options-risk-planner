@@ -20,6 +20,7 @@ import {
   normalizeOptionCloseExecutionsForStatus,
   sanitizeSaxoHistoryCloseExecutions,
 } from "@/domain/optionCloseExecutions";
+import { normalizeStockSettlement } from "@/domain/stockSettlementState";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
 import { DEFAULT_N_OPTION_STANDARD_COMMISSION_USD } from "@/domain/optionEntryExecutions";
 import { finalizeSyntheticForwardParent } from "@/domain/compositeOptionPosition";
@@ -181,6 +182,7 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
   const exitOrderPlans = normalizeExitOrderPlans({ ...normalized, exitOrderPlan });
   return finalizeSyntheticForwardParent(sanitizeSaxoHistoryCloseExecutions({
     ...normalized,
+    stockSettlement: normalizeStockSettlement(normalized.stockSettlement),
     optionEntryExecutions: normalized.optionEntryExecutions ?? [],
     optionCloseExecutions: normalizeOptionCloseExecutionsForStatus(normalized.optionCloseExecutions, normalized.status),
     exitOrderPlan,

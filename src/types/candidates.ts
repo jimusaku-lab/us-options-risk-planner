@@ -14,6 +14,7 @@ import type {
 import type { EntryRationaleJournal } from "@/types/domain";
 
 export type CandidateSource =
+  | "moomoo_opend"
   | "moomoo_file_import"
   | "manual"
   | "manual_import"

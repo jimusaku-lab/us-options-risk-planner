@@ -26,7 +26,7 @@ export type SaxoApiStatus = {
   lastSyncedAt?: string;
   readOnly: true;
   orderEndpointsEnabled: false;
-  bindAddress?: string;
+  bindAddress: "127.0.0.1";
   oauthConfigured: boolean;
   clientIdConfigured?: boolean;
   redirectUri?: string;
@@ -65,15 +65,13 @@ export type SaxoTokenPersistenceStatus = {
 export type SaxoConfigStatus = {
   mode: "saxo_readonly";
   readOnly: true;
-  bindAddress?: string;
+  bindAddress: "127.0.0.1";
   clientIdConfigured: boolean;
   clientIdMasked?: string;
   environment: SaxoEnvironment;
   environmentConfigured: boolean;
   redirectUri: string;
   expectedRedirectUri: string;
-  localUiAllowedOrigin?: string;
-  localUiReturnUrl?: string;
   localConfigFile: ".env.local";
   localConfigFileExists: boolean;
   configurationWarnings: { code: string; message: string }[];
@@ -172,21 +170,258 @@ export type SaxoApiPositionSnapshot = {
   shareQuantity?: number;
   averageOpenPrice?: number;
   currentStockPrice?: number;
-  openingExecution?: { executionTimeUtc?: string; executionTimeSourceField?: string; openingFxRate?: number; openingFxRateSourceField?: string; marketValueOpenInBaseCurrency?: number; marketValueOpenSourceField?: string; tradeCostsTotalInBaseCurrency?: number; tradeCostsTotalSourceField?: string; openingTransactionCostJpy?: number; openingTransactionCostCompleteness?: "component_aggregate" | "partial"; openingTransactionCostSourceField?: string; capturedAt: string };
+  openingExecution?: {
+    executionTimeUtc?: string;
+    executionTimeSourceField?: string;
+    openingFxRate?: number;
+    openingFxRateSourceField?: string;
+    marketValueOpenInBaseCurrency?: number;
+    marketValueOpenSourceField?: string;
+    tradeCostsTotalInBaseCurrency?: number;
+    tradeCostsTotalSourceField?: string;
+    /** Explicit OpenCostInBaseCurrency components only; omitted components are never zero-filled. */
+    openingTransactionCostComponents?: Record<string, number>;
+    openingTransactionCostCompleteness?: "component_aggregate" | "partial";
+    openingTransactionCostSourceField?: string;
+    capturedAt: string;
+  };
   missingFields: string[];
   fetchedAt: string;
   raw?: unknown;
 };
 
+function parseFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value.replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function getOpeningTransactionCostComponents(position: SaxoApiPositionSnapshot): Record<string, number> | undefined {
+  const normalizedComponents = position.openingExecution?.openingTransactionCostComponents;
+  if (normalizedComponents && Object.keys(normalizedComponents).length > 0) return normalizedComponents;
+  const rawOpenCost = (position.raw as { Costs?: { OpenCostInBaseCurrency?: Record<string, unknown> } } | undefined)
+    ?.Costs?.OpenCostInBaseCurrency;
+  if (!rawOpenCost) return undefined;
+  const componentEntries = Object.entries(rawOpenCost)
+    .map(([name, value]) => [name, parseFiniteNumber(value)] as const)
+    .filter((entry): entry is [string, number] => entry[1] !== undefined);
+  return componentEntries.length > 0 ? Object.fromEntries(componentEntries) : undefined;
+}
+
 export type OpeningEvidenceSource = "position" | "trade_history" | "manual";
-export type OpeningExecutionEvidence<T> = { value: T; source: OpeningEvidenceSource; sourceField: string; capturedAt: string; completeness: "direct" | "component_aggregate" | "partial" };
-export type OpeningExecutionResolution = { executionTimeUtc?: OpeningExecutionEvidence<string>; openingFxRate?: OpeningExecutionEvidence<number>; openingPremiumJpy?: OpeningExecutionEvidence<number>; openingTransactionCostJpy?: OpeningExecutionEvidence<number>; openingBookedAmountJpy?: OpeningExecutionEvidence<number>; historyStatus: "history_not_fetched" | "history_no_usable_match" | "history_match_missing_fields" };
-export function resolveOpeningExecution(position: SaxoApiPositionSnapshot, historyMatches: SaxoEntryHistoryMatch[], historyFetched = true): OpeningExecutionResolution {
+export type OpeningExecutionEvidence<T> = {
+  value: T;
+  source: OpeningEvidenceSource;
+  sourceField: string;
+  capturedAt: string;
+  completeness: "direct" | "component_aggregate" | "partial" | "cross_validated_component_aggregate";
+  components?: Record<string, number>;
+};
+export type OpeningExecutionResolution = {
+  executionTimeUtc?: OpeningExecutionEvidence<string>;
+  openingFxRate?: OpeningExecutionEvidence<number>;
+  openingPremiumJpy?: OpeningExecutionEvidence<number>;
+  openingTransactionCostJpy?: OpeningExecutionEvidence<number>;
+  currencyConversionCostJpy?: OpeningExecutionEvidence<number>;
+  totalTransactionCostJpy?: OpeningExecutionEvidence<number>;
+  openingBookedAmountJpy?: OpeningExecutionEvidence<number>;
+  historyStatus: "history_not_fetched" | "history_fetch_failed" | "history_no_usable_match" | "history_match_missing_fields" | "history_match_complete" | "source_conflict";
+};
+
+export type OpeningHistoryFetchState = "fetched" | "not_fetched" | "fetch_failed";
+
+export function mapOpeningExecutionHistoryStatusToEntryCompletionStatus(
+  historyStatus: OpeningExecutionResolution["historyStatus"],
+): OptionEntryExecution["historyCompletionStatus"] {
+  return historyStatus;
+}
+
+/**
+ * Resolves direct opening evidence only.  In particular, it never derives a
+ * premium from price × FX, never uses current P/L or TradeCostsTotal, and
+ * never substitutes omitted OpenCost components with zero.
+ */
+export function resolveOpeningExecution(
+  position: SaxoApiPositionSnapshot,
+  historyMatches: SaxoEntryHistoryMatch[],
+  historyFetchState: OpeningHistoryFetchState | boolean = "fetched",
+): OpeningExecutionResolution {
+  const normalizedFetchState: OpeningHistoryFetchState = typeof historyFetchState === "boolean"
+    ? historyFetchState ? "fetched" : "not_fetched"
+    : historyFetchState;
   const history = historyMatches.length === 1 ? historyMatches[0].item : undefined;
   const capturedAt = position.openingExecution?.capturedAt ?? position.fetchedAt;
-  const fromPosition = <T,>(value: T | undefined, sourceField: string | undefined, completeness: OpeningExecutionEvidence<T>["completeness"] = "direct") => value === undefined || !sourceField ? undefined : { value, source: "position" as const, sourceField, capturedAt, completeness };
-  const fromHistory = <T,>(value: T | undefined, sourceField: string) => value === undefined ? undefined : { value, source: "trade_history" as const, sourceField, capturedAt: position.fetchedAt, completeness: "direct" as const };
-  return { executionTimeUtc: fromPosition(position.openingExecution?.executionTimeUtc, position.openingExecution?.executionTimeSourceField) ?? fromHistory(history?.tradeDate, "tradeDate"), openingFxRate: fromHistory(history?.exchangeRate, "exchangeRate") ?? fromPosition(position.openingExecution?.openingFxRate, position.openingExecution?.openingFxRateSourceField), openingPremiumJpy: fromHistory(history?.premiumAmount, "premiumAmount"), openingTransactionCostJpy: fromHistory(history?.transactionCost, "transactionCost") ?? fromPosition(position.openingExecution?.openingTransactionCostJpy, position.openingExecution?.openingTransactionCostSourceField, "component_aggregate"), openingBookedAmountJpy: fromHistory(history?.bookedAmount ?? history?.profitLossBase, "bookedAmount"), historyStatus: !historyFetched ? "history_not_fetched" : !history ? "history_no_usable_match" : "history_match_missing_fields" };
+  const resolvedAccountCode = position.accountAssignment === "P" || position.accountAssignment === "N"
+    ? position.accountAssignment
+    : history?.accountCode;
+  const fromPosition = <T,>(value: T | undefined, sourceField: string | undefined, completeness: OpeningExecutionEvidence<T>["completeness"] = "direct") =>
+    value === undefined || !sourceField ? undefined : { value, source: "position" as const, sourceField, capturedAt, completeness };
+  const fromHistory = <T,>(value: T | undefined, sourceField: string) =>
+    value === undefined ? undefined : { value, source: "trade_history" as const, sourceField, capturedAt: position.fetchedAt, completeness: "direct" as const };
+  const isPJPY = resolvedAccountCode === "P";
+  const componentValues = getOpeningTransactionCostComponents(position);
+  const componentCost = componentValues && Object.keys(componentValues).length > 0
+    ? Object.values(componentValues).reduce((sum, value) => sum + value, 0)
+    : undefined;
+  const booked = isPJPY ? history?.bookedAmountAccountCurrency : undefined;
+  const premium = isPJPY ? position.openingExecution?.marketValueOpenInBaseCurrency : history?.premiumAmount;
+  // Saxo's direct booked amount equals the direct opening market value less
+  // explicit opening costs.  Validate that relationship before admitting the
+  // component aggregate; neither side is manufactured when it does not hold.
+  const costRelationshipMatches = booked !== undefined && premium !== undefined && componentCost !== undefined
+    && Math.abs(booked - (premium - Math.abs(componentCost))) <= 1;
+  const openingTransactionCostJpy = costRelationshipMatches
+    ? {
+        value: componentCost!, source: "position" as const,
+        sourceField: position.openingExecution?.openingTransactionCostSourceField ?? "Costs.OpenCostInBaseCurrency",
+        capturedAt,
+        completeness: "cross_validated_component_aggregate" as const,
+        components: componentValues,
+      }
+    : undefined;
+  const conflict = isPJPY && history !== undefined && componentCost !== undefined && !costRelationshipMatches;
+  const resolution = {
+    executionTimeUtc: fromPosition(position.openingExecution?.executionTimeUtc, position.openingExecution?.executionTimeSourceField) ?? fromHistory(history?.tradeDate, "tradeDate"),
+    openingFxRate: fromPosition(position.openingExecution?.openingFxRate, position.openingExecution?.openingFxRateSourceField) ?? fromHistory(history?.exchangeRate, "exchangeRate"),
+    openingPremiumJpy: isPJPY
+      ? fromPosition(position.openingExecution?.marketValueOpenInBaseCurrency, position.openingExecution?.marketValueOpenSourceField)
+      : fromHistory(history?.premiumAmount, "premiumAmount"),
+    openingTransactionCostJpy: isPJPY
+      ? openingTransactionCostJpy
+      : fromHistory(history?.transactionCost, "transactionCost"),
+    openingBookedAmountJpy: isPJPY
+      ? fromHistory(history?.bookedAmountAccountCurrency, "BookedAmountAccountCurrency")
+      : fromHistory(history?.bookedAmount, "bookedAmount"),
+  };
+  const allPFieldsPresent = Boolean(
+    resolution.executionTimeUtc && resolution.openingFxRate && resolution.openingPremiumJpy
+      && resolution.openingTransactionCostJpy && resolution.openingBookedAmountJpy,
+  );
+  return {
+    ...resolution,
+    historyStatus: normalizedFetchState === "not_fetched"
+      ? "history_not_fetched"
+      : normalizedFetchState === "fetch_failed"
+        ? "history_fetch_failed"
+        : historyMatches.length > 1
+          ? "source_conflict"
+          : !history
+            ? "history_no_usable_match"
+            : conflict
+              ? "source_conflict"
+              : isPJPY && allPFieldsPresent
+                ? "history_match_complete"
+                : "history_match_missing_fields",
+  };
+}
+
+export function mergeOpeningExecutionIntoEntryExecution(
+  execution: OptionEntryExecution,
+  resolution: OpeningExecutionResolution,
+): OptionEntryExecution {
+  if (execution.confirmed) return execution;
+  const nextFieldSources = { ...(execution.openingFieldSources ?? {}) };
+  const nextFieldEvidence = { ...(execution.openingFieldEvidence ?? {}) };
+  const nextExecution: OptionEntryExecution = {
+    ...execution,
+    historyCompletionStatus: mapOpeningExecutionHistoryStatusToEntryCompletionStatus(resolution.historyStatus),
+  };
+  const canAutofill = (field: keyof NonNullable<OptionEntryExecution["openingFieldSources"]>) => nextFieldSources[field] !== "manual";
+  const applyEvidence = (field: keyof NonNullable<OptionEntryExecution["openingFieldEvidence"]>, evidence: OpeningExecutionEvidence<unknown> | undefined) => {
+    if (!evidence) return;
+    nextFieldEvidence[field] = {
+      source: evidence.source,
+      sourceField: evidence.sourceField,
+      capturedAt: evidence.capturedAt,
+      completeness: evidence.completeness,
+      ...(evidence.components ? { components: evidence.components } : {}),
+    };
+  };
+  if (!execution.tradeDate && resolution.executionTimeUtc && canAutofill("tradeDate")) {
+    nextExecution.tradeDate = resolution.executionTimeUtc.value;
+    nextFieldSources.tradeDate = resolution.executionTimeUtc.source;
+    applyEvidence("tradeDate", resolution.executionTimeUtc);
+  }
+  if (
+    (execution.brokerBookedAmountJPY === undefined || !Number.isFinite(execution.brokerBookedAmountJPY)) &&
+    resolution.openingBookedAmountJpy &&
+    canAutofill("brokerBookedAmountJPY")
+  ) {
+    nextExecution.brokerBookedAmountJPY = resolution.openingBookedAmountJpy.value;
+    nextFieldSources.brokerBookedAmountJPY = resolution.openingBookedAmountJpy.source;
+    applyEvidence("brokerBookedAmountJPY", resolution.openingBookedAmountJpy);
+  }
+  if (
+    (execution.brokerPremiumJPY === undefined || !Number.isFinite(execution.brokerPremiumJPY)) &&
+    resolution.openingPremiumJpy &&
+    canAutofill("brokerPremiumJPY")
+  ) {
+    nextExecution.brokerPremiumJPY = resolution.openingPremiumJpy.value;
+    nextFieldSources.brokerPremiumJPY = resolution.openingPremiumJpy.source;
+    applyEvidence("brokerPremiumJPY", resolution.openingPremiumJpy);
+  }
+  if (
+    (execution.brokerTransactionCostJPY === undefined || !Number.isFinite(execution.brokerTransactionCostJPY)) &&
+    resolution.openingTransactionCostJpy &&
+    canAutofill("brokerTransactionCostJPY")
+  ) {
+    nextExecution.brokerTransactionCostJPY = resolution.openingTransactionCostJpy.value;
+    nextFieldSources.brokerTransactionCostJPY = resolution.openingTransactionCostJpy.source;
+    applyEvidence("brokerTransactionCostJPY", resolution.openingTransactionCostJpy);
+    if ((execution.brokerFeeJPY === undefined || !Number.isFinite(execution.brokerFeeJPY)) && Number.isFinite(resolution.openingTransactionCostJpy.components?.Commission)) {
+      nextExecution.brokerFeeJPY = resolution.openingTransactionCostJpy.components?.Commission;
+    }
+    if ((execution.brokerExchangeFeeJPY === undefined || !Number.isFinite(execution.brokerExchangeFeeJPY)) && Number.isFinite(resolution.openingTransactionCostJpy.components?.ExchangeFee)) {
+      nextExecution.brokerExchangeFeeJPY = resolution.openingTransactionCostJpy.components?.ExchangeFee;
+    }
+    if ((execution.brokerTaxIncludedFeeJPY === undefined || !Number.isFinite(execution.brokerTaxIncludedFeeJPY)) && Number.isFinite(resolution.openingTransactionCostJpy.components?.StampDuty)) {
+      nextExecution.brokerTaxIncludedFeeJPY = resolution.openingTransactionCostJpy.components?.StampDuty;
+    }
+    const otherTransactionCost =
+      (resolution.openingTransactionCostJpy.components?.AdditionalTransactionCosts ?? 0) +
+      (resolution.openingTransactionCostJpy.components?.ExternalCharges ?? 0) +
+      (resolution.openingTransactionCostJpy.components?.PerformanceFee ?? 0);
+    if ((execution.brokerOtherTransactionCostJPY === undefined || !Number.isFinite(execution.brokerOtherTransactionCostJPY)) && otherTransactionCost > 0) {
+      nextExecution.brokerOtherTransactionCostJPY = otherTransactionCost;
+    }
+  }
+  if (
+    (execution.brokerCurrencyConversionCostJPY === undefined || !Number.isFinite(execution.brokerCurrencyConversionCostJPY)) &&
+    resolution.currencyConversionCostJpy &&
+    canAutofill("brokerCurrencyConversionCostJPY")
+  ) {
+    nextExecution.brokerCurrencyConversionCostJPY = resolution.currencyConversionCostJpy.value;
+    nextFieldSources.brokerCurrencyConversionCostJPY = resolution.currencyConversionCostJpy.source;
+    applyEvidence("brokerCurrencyConversionCostJPY", resolution.currencyConversionCostJpy);
+  }
+  if (
+    (execution.brokerTotalTransactionCostJPY === undefined || !Number.isFinite(execution.brokerTotalTransactionCostJPY)) &&
+    resolution.totalTransactionCostJpy &&
+    canAutofill("brokerTotalTransactionCostJPY")
+  ) {
+    nextExecution.brokerTotalTransactionCostJPY = resolution.totalTransactionCostJpy.value;
+    nextFieldSources.brokerTotalTransactionCostJPY = resolution.totalTransactionCostJpy.source;
+    applyEvidence("brokerTotalTransactionCostJPY", resolution.totalTransactionCostJpy);
+  }
+  if (
+    (execution.brokerExchangeRateJPY === undefined || !Number.isFinite(execution.brokerExchangeRateJPY)) &&
+    resolution.openingFxRate &&
+    canAutofill("brokerExchangeRateJPY")
+  ) {
+    nextExecution.brokerExchangeRateJPY = resolution.openingFxRate.value;
+    nextFieldSources.brokerExchangeRateJPY = resolution.openingFxRate.source;
+    applyEvidence("brokerExchangeRateJPY", resolution.openingFxRate);
+  }
+  if (Object.keys(nextFieldSources).length > 0) {
+    nextExecution.openingFieldSources = nextFieldSources;
+  }
+  if (Object.keys(nextFieldEvidence).length > 0) {
+    nextExecution.openingFieldEvidence = nextFieldEvidence;
+  }
+  return nextExecution;
 }
 
 export type SaxoSyntheticForwardPair = {
@@ -276,7 +511,8 @@ export function findSaxoSyntheticForwardPairing(positions: SaxoApiPositionSnapsh
 }
 
 function isSaxoSyntheticForwardOption(position: SaxoApiPositionSnapshot): boolean {
-  return position.accountAssignment !== "unassigned" && position.accountAssignment !== "ignored" && (position.kind === "option" || position.assetType?.toLowerCase().includes("option") === true || Boolean(getSaxoSyntheticForwardOptionDetails(position)));
+  return position.accountAssignment !== "unassigned" && position.accountAssignment !== "ignored" &&
+    (position.kind === "option" || position.assetType?.toLowerCase().includes("option") === true || Boolean(getSaxoSyntheticForwardOptionDetails(position)));
 }
 
 function resolveSaxoSyntheticForwardSide(position: SaxoApiPositionSnapshot): SaxoPositionSide {
@@ -284,7 +520,9 @@ function resolveSaxoSyntheticForwardSide(position: SaxoApiPositionSnapshot): Sax
   return (position.quantity ?? 0) < 0 ? "short" : (position.quantity ?? 0) > 0 ? "long" : "unknown";
 }
 
-function getSaxoSyntheticForwardOptionDetails(position: SaxoApiPositionSnapshot): { optionType: "call" | "put"; strike: number; expiry?: string } | undefined {
+function getSaxoSyntheticForwardOptionDetails(
+  position: SaxoApiPositionSnapshot,
+): { optionType: "call" | "put"; strike: number; expiry?: string } | undefined {
   const contract = parseSaxoOptionContract(position.instrumentCode ?? "") ?? parseSaxoOptionContract(position.symbol ?? "");
   const optionType = position.optionType === "call" || position.optionType === "put" ? position.optionType : contract?.optionType;
   const strike = position.strike ?? contract?.strike;
@@ -310,17 +548,32 @@ export function findSaxoSyntheticForwardParentHistory(
 }
 
 /** Resolve only one exact composite parent. A tie is intentionally left unresolved to avoid opening another position. */
-export function findSaxoSyntheticForwardSimulationForPair(pair: SaxoSyntheticForwardPair, simulations: TradeSimulation[], parentOrderId?: string): TradeSimulation | undefined {
-  const matches = simulations.filter((simulation) => simulation.strategyType === "synthetic_forward").filter((simulation) => simulation.accountCode === pair.accountCode).filter((simulation) => simulation.ticker.trim().toUpperCase() === pair.ticker.toUpperCase()).map((simulation) => {
-    const callLeg = simulation.optionLegs.find((leg) => leg.type === "call" && leg.side === "buy");
-    const putLeg = simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell");
-    if (!callLeg || !putLeg || callLeg.expiryDate !== pair.expiry || putLeg.expiryDate !== pair.expiry || callLeg.strikeUSD !== pair.strike || putLeg.strikeUSD !== pair.strike || callLeg.quantity !== pair.quantity || putLeg.quantity !== pair.quantity) return undefined;
-    const callPositionId = pair.callPosition.positionId ?? pair.callPosition.id; const putPositionId = pair.putPosition.positionId ?? pair.putPosition.id;
-    const positionScore = Number(callLeg.saxoPositionId === callPositionId) + Number(putLeg.saxoPositionId === putPositionId);
-    const orderScore = Number(Boolean(parentOrderId) && simulation.syntheticForwardTicket?.orderId === parentOrderId);
-    return { simulation, score: positionScore * 10 + orderScore };
-  }).filter((match): match is { simulation: TradeSimulation; score: number } => Boolean(match)).sort((left, right) => right.score - left.score);
-  if (matches.length === 0 || (matches.length > 1 && matches[0].score === matches[1].score)) return undefined;
+export function findSaxoSyntheticForwardSimulationForPair(
+  pair: SaxoSyntheticForwardPair,
+  simulations: TradeSimulation[],
+  parentOrderId?: string,
+): TradeSimulation | undefined {
+  const matches = simulations
+    .filter((simulation) => simulation.strategyType === "synthetic_forward")
+    .filter((simulation) => simulation.accountCode === pair.accountCode)
+    .filter((simulation) => simulation.ticker.trim().toUpperCase() === pair.ticker.toUpperCase())
+    .map((simulation) => {
+      const callLeg = simulation.optionLegs.find((leg) => leg.type === "call" && leg.side === "buy");
+      const putLeg = simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell");
+      if (!callLeg || !putLeg) return undefined;
+      if (callLeg.expiryDate !== pair.expiry || putLeg.expiryDate !== pair.expiry) return undefined;
+      if (callLeg.strikeUSD !== pair.strike || putLeg.strikeUSD !== pair.strike) return undefined;
+      if (callLeg.quantity !== pair.quantity || putLeg.quantity !== pair.quantity) return undefined;
+      const callPositionId = pair.callPosition.positionId ?? pair.callPosition.id;
+      const putPositionId = pair.putPosition.positionId ?? pair.putPosition.id;
+      const positionScore = Number(callLeg.saxoPositionId === callPositionId) + Number(putLeg.saxoPositionId === putPositionId);
+      const orderScore = Number(Boolean(parentOrderId) && simulation.syntheticForwardTicket?.orderId === parentOrderId);
+      return { simulation, score: positionScore * 10 + orderScore };
+    })
+    .filter((match): match is { simulation: TradeSimulation; score: number } => Boolean(match))
+    .sort((left, right) => right.score - left.score);
+  if (matches.length === 0) return undefined;
+  if (matches.length > 1 && matches[0].score === matches[1].score) return undefined;
   return matches[0].simulation;
 }
 
@@ -338,19 +591,32 @@ function isSaxoFilledTradeHistory(item: SaxoHistoryDiscoveryItem | undefined): i
   return !/(cancel|reject|unfilled|working|pending)/.test(status);
 }
 
-/** Require a composite parent trade and a matching entry trade for each leg. */
+/**
+ * A current position alone is not enough to mark a synthetic forward as filled.
+ * Require the composite parent trade and one matching entry trade for each leg.
+ */
 export function resolveSaxoSyntheticForwardFillEvidence(
   pair: SaxoSyntheticForwardPair,
   historyItems: SaxoHistoryDiscoveryItem[],
 ): SaxoSyntheticForwardFillEvidence {
   const parentHistory = findSaxoSyntheticForwardParentHistory(pair, historyItems);
-  const callHistory = findEntryHistoryMatches(pair.callPosition, historyItems).map((match) => match.item).find(isSaxoFilledTradeHistory);
-  const putHistory = findEntryHistoryMatches(pair.putPosition, historyItems).map((match) => match.item).find(isSaxoFilledTradeHistory);
+  const callHistory = findEntryHistoryMatches(pair.callPosition, historyItems)
+    .map((match) => match.item)
+    .find(isSaxoFilledTradeHistory);
+  const putHistory = findEntryHistoryMatches(pair.putPosition, historyItems)
+    .map((match) => match.item)
+    .find(isSaxoFilledTradeHistory);
   const missing: SaxoSyntheticForwardFillEvidence["missing"] = [];
   if (!isSaxoFilledTradeHistory(parentHistory)) missing.push("parent");
   if (!callHistory) missing.push("call");
   if (!putHistory) missing.push("put");
-  return { status: missing.length === 0 ? "filled" : "incomplete", parentHistory, callHistory, putHistory, missing };
+  return {
+    status: missing.length === 0 ? "filled" : "incomplete",
+    parentHistory,
+    callHistory,
+    putHistory,
+    missing,
+  };
 }
 
 export type SaxoPositionReconciliationRow = {
@@ -435,6 +701,9 @@ export type SaxoHistoryDiscoveryItem = {
   transactionCost?: number;
   feeAmount?: number;
   exchangeFee?: number;
+  spreadCostAccountCurrency?: number;
+  spreadCostClientCurrency?: number;
+  spreadCostUSD?: number;
   exchangeRate?: number;
   taxIncludedFee?: number;
   rawFieldNames?: string[];
@@ -475,17 +744,35 @@ export function getSaxoHistoryCandidateKeys(item: SaxoHistoryDiscoveryItem): str
 
 function historyCloseFingerprint(item: SaxoHistoryDiscoveryItem): string | undefined {
   if (getSaxoHistoryCandidateTarget(item) !== "close") return undefined;
-  const contract = [item.accountCode ?? item.accountKey, item.assetType?.toLowerCase(), resolveSaxoHistoryUnderlyingSymbol(item), resolveSaxoHistoryOptionType(item), item.strike, item.expiry, item.tradeDate, item.quantity === undefined ? undefined : Math.abs(item.quantity)];
+  const contract = [
+    // A confirmed P/N assignment is the primary boundary.  Only when neither
+    // source has one may the same-kind masked source account key be auxiliary.
+    item.accountCode ?? item.accountKey,
+    item.assetType?.toLowerCase(),
+    resolveSaxoHistoryUnderlyingSymbol(item),
+    resolveSaxoHistoryOptionType(item),
+    item.strike,
+    item.expiry,
+    item.tradeDate,
+    item.quantity === undefined ? undefined : Math.abs(item.quantity),
+  ];
   if (contract.some((value) => value === undefined || value === "")) return undefined;
   return contract.map(normalizeHistoryKeyPart).join("|");
 }
 
+/**
+ * Collapses a uniquely matching trade/closed-position pair before it reaches UI or draft creation.
+ * No monetary or direction value is inferred: explicit trade fields win and conflicts are blocked.
+ */
 export function createEffectiveSaxoHistoryCandidates(items: SaxoHistoryDiscoveryItem[]): SaxoHistoryDiscoveryItem[] {
   const groups = new Map<string, SaxoHistoryDiscoveryItem[]>();
   const untouched: SaxoHistoryDiscoveryItem[] = [];
   for (const item of items) {
     const fingerprint = historyCloseFingerprint(item);
-    if (!fingerprint) { untouched.push(item); continue; }
+    if (!fingerprint) {
+      untouched.push(item);
+      continue;
+    }
     groups.set(fingerprint, [...(groups.get(fingerprint) ?? []), item]);
   }
   const effective = [...untouched];
@@ -495,17 +782,118 @@ export function createEffectiveSaxoHistoryCandidates(items: SaxoHistoryDiscovery
     const prices = new Set(group.map((item) => normalizeHistoryKeyPart(item.price)));
     const uics = new Set(group.map((item) => normalizeHistoryKeyPart(item.uic)).filter((uic) => uic !== "_"));
     const relatedCandidateKeys = group.flatMap((item) => getSaxoHistoryCandidateKeys(item));
-    const directValueConflict = (field: keyof SaxoHistoryDiscoveryItem) => new Set(group.map((item) => normalizeHistoryKeyPart(item[field])).filter((value) => value !== "_")).size > 1;
-    if (prices.size > 1 || uics.size > 1 || directValueConflict("profitLossAccountCurrency") || directValueConflict("bookedAmountAccountCurrency")) { effective.push(...group.map((item) => ({ ...item, relatedCandidateKeys, duplicateResolution: "source_conflict" as const }))); continue; }
-    if (trades.length === 1 && closed.length === 1 && group.length === 2) {
-      const trade = trades[0]; const closedItem = closed[0];
-      effective.push({ ...closedItem, id: trade.id, kind: trade.kind, accountCode: trade.accountCode ?? closedItem.accountCode, accountCurrency: closedItem.accountCurrency ?? trade.accountCurrency, symbol: trade.symbol ?? closedItem.symbol, assetType: trade.assetType ?? closedItem.assetType, optionType: trade.optionType ?? closedItem.optionType, strike: trade.strike ?? closedItem.strike, expiry: trade.expiry ?? closedItem.expiry, instrumentCode: trade.instrumentCode ?? closedItem.instrumentCode, uic: trade.uic ?? closedItem.uic, quantity: trade.quantity ?? closedItem.quantity, buySell: trade.buySell, openClose: trade.openClose, price: trade.price ?? closedItem.price, tradeDate: trade.tradeDate ?? closedItem.tradeDate, bookedAmount: closedItem.bookedAmountAccountCurrency ?? trade.bookedAmountAccountCurrency ?? closedItem.bookedAmount ?? trade.bookedAmount, bookedAmountAccountCurrency: closedItem.bookedAmountAccountCurrency ?? trade.bookedAmountAccountCurrency, bookedAmountUSD: trade.bookedAmountUSD ?? closedItem.bookedAmountUSD, profitLossAccountCurrency: closedItem.profitLossAccountCurrency ?? trade.profitLossAccountCurrency, profitLossClientCurrency: closedItem.profitLossClientCurrency ?? trade.profitLossClientCurrency, profitLossBaseCurrency: closedItem.profitLossBaseCurrency ?? trade.profitLossBaseCurrency, profitLoss: closedItem.profitLossAccountCurrency ?? trade.profitLossAccountCurrency, profitLossBase: closedItem.profitLossBaseCurrency ?? trade.profitLossBaseCurrency, relatedCandidateKeys, fieldDiagnostics: [...(trade.fieldDiagnostics ?? []), ...(closedItem.fieldDiagnostics ?? [])], rawFieldNames: Array.from(new Set([...(trade.rawFieldNames ?? []), ...(closedItem.rawFieldNames ?? [])])) });
+    const directValueConflict = (field: keyof SaxoHistoryDiscoveryItem) => {
+      const values = new Set(group.map((item) => normalizeHistoryKeyPart(item[field])).filter((value) => value !== "_"));
+      return values.size > 1;
+    };
+    if (prices.size > 1 || uics.size > 1 || directValueConflict("profitLossAccountCurrency") || directValueConflict("bookedAmountAccountCurrency")) {
+      effective.push(...group.map((item) => ({ ...item, relatedCandidateKeys, duplicateResolution: "source_conflict" as const })));
       continue;
     }
-    if (group.length > 1) { effective.push(...group.map((item) => ({ ...item, relatedCandidateKeys, duplicateResolution: "ambiguous_duplicate" as const }))); continue; }
+    if (trades.length === 1 && closed.length === 1 && group.length === 2) {
+      const trade = trades[0];
+      const closedItem = closed[0];
+      effective.push({
+        ...closedItem,
+        id: trade.id,
+        kind: trade.kind,
+        orderId: trade.orderId ?? closedItem.orderId,
+        accountCode: trade.accountCode ?? closedItem.accountCode,
+        accountCurrency: closedItem.accountCurrency ?? trade.accountCurrency,
+        symbol: trade.symbol ?? closedItem.symbol,
+        assetType: trade.assetType ?? closedItem.assetType,
+        optionType: trade.optionType ?? closedItem.optionType,
+        strike: trade.strike ?? closedItem.strike,
+        expiry: trade.expiry ?? closedItem.expiry,
+        instrumentCode: trade.instrumentCode ?? closedItem.instrumentCode,
+        uic: trade.uic ?? closedItem.uic,
+        quantity: trade.quantity ?? closedItem.quantity,
+        buySell: trade.buySell,
+        openClose: trade.openClose,
+        price: trade.price ?? closedItem.price,
+        tradeDate: trade.tradeDate ?? closedItem.tradeDate,
+        bookedAmount: closedItem.bookedAmountAccountCurrency ?? trade.bookedAmountAccountCurrency ?? closedItem.bookedAmount ?? trade.bookedAmount,
+        bookedAmountAccountCurrency: closedItem.bookedAmountAccountCurrency ?? trade.bookedAmountAccountCurrency,
+        bookedAmountUSD: trade.bookedAmountUSD ?? closedItem.bookedAmountUSD,
+        profitLossAccountCurrency: closedItem.profitLossAccountCurrency ?? trade.profitLossAccountCurrency,
+        profitLossClientCurrency: closedItem.profitLossClientCurrency ?? trade.profitLossClientCurrency,
+        profitLossBaseCurrency: closedItem.profitLossBaseCurrency ?? trade.profitLossBaseCurrency,
+        profitLoss: closedItem.profitLossAccountCurrency ?? trade.profitLossAccountCurrency,
+        profitLossBase: closedItem.profitLossBaseCurrency ?? trade.profitLossBaseCurrency,
+        spreadCostAccountCurrency: trade.spreadCostAccountCurrency ?? closedItem.spreadCostAccountCurrency,
+        spreadCostClientCurrency: trade.spreadCostClientCurrency ?? closedItem.spreadCostClientCurrency,
+        spreadCostUSD: trade.spreadCostUSD ?? closedItem.spreadCostUSD,
+        relatedCandidateKeys,
+        fieldDiagnostics: [...(trade.fieldDiagnostics ?? []), ...(closedItem.fieldDiagnostics ?? [])],
+        rawFieldNames: Array.from(new Set([...(trade.rawFieldNames ?? []), ...(closedItem.rawFieldNames ?? [])])),
+      });
+      continue;
+    }
+    if (group.length > 1) {
+      effective.push(...group.map((item) => ({ ...item, relatedCandidateKeys, duplicateResolution: "ambiguous_duplicate" as const })));
+      continue;
+    }
     effective.push(group[0]);
   }
   return effective;
+}
+
+export type SaxoHistoryDualSourceMappingDiagnostic = {
+  hasAccountKey: boolean;
+  accountKeysEqual: boolean;
+  confirmedMappingMatched: boolean;
+  accountCodeAssigned: boolean;
+  accountCodesEqual: boolean;
+  oneSidedAssignment: boolean;
+  effectiveSingle: boolean;
+};
+
+/**
+ * Produces boolean-only diagnostics for matching trade/closed-position records.
+ * It intentionally exposes neither account identifiers nor execution values.
+ */
+export function diagnoseSaxoHistoryDualSourceMapping(
+  rawEndpoints: SaxoHistoryDiscoveryEndpoint[],
+  mappedEndpoints: SaxoHistoryDiscoveryEndpoint[],
+): SaxoHistoryDualSourceMappingDiagnostic[] {
+  const rawById = new Map(rawEndpoints.flatMap((endpoint) => endpoint.items ?? []).map((item) => [item.id, item]));
+  const mappedItems = mappedEndpoints.flatMap((endpoint) => endpoint.items ?? []);
+  const groups = new Map<string, SaxoHistoryDiscoveryItem[]>();
+  for (const item of mappedItems) {
+    if (getSaxoHistoryCandidateTarget(item) !== "close") continue;
+    const key = [
+      item.assetType?.toLowerCase(),
+      resolveSaxoHistoryUnderlyingSymbol(item),
+      resolveSaxoHistoryOptionType(item),
+      item.strike,
+      item.expiry,
+      item.tradeDate,
+      item.quantity === undefined ? undefined : Math.abs(item.quantity),
+      item.price,
+    ];
+    if (key.some((value) => value === undefined || value === "")) continue;
+    const fingerprint = key.map(normalizeHistoryKeyPart).join("|");
+    groups.set(fingerprint, [...(groups.get(fingerprint) ?? []), item]);
+  }
+  return Array.from(groups.values())
+    .filter((group) => group.length === 2 && group.some((item) => item.kind === "trade" && item.openClose === "close") && group.some((item) => item.kind === "closed_position"))
+    .map((group) => {
+      const trade = group.find((item) => item.kind === "trade")!;
+      const closed = group.find((item) => item.kind === "closed_position")!;
+      const rawTrade = rawById.get(trade.id);
+      const rawClosed = rawById.get(closed.id);
+      const tradeAssigned = trade.accountCode === "P" || trade.accountCode === "N";
+      const closedAssigned = closed.accountCode === "P" || closed.accountCode === "N";
+      return {
+        hasAccountKey: Boolean(rawTrade?.accountKey && rawClosed?.accountKey),
+        accountKeysEqual: Boolean(rawTrade?.accountKey && rawClosed?.accountKey && rawTrade.accountKey === rawClosed.accountKey),
+        confirmedMappingMatched: tradeAssigned && closedAssigned,
+        accountCodeAssigned: tradeAssigned || closedAssigned,
+        accountCodesEqual: tradeAssigned && closedAssigned && trade.accountCode === closed.accountCode,
+        oneSidedAssignment: tradeAssigned !== closedAssigned,
+        effectiveSingle: createEffectiveSaxoHistoryCandidates(group).length === 1,
+      };
+    });
 }
 
 export type SaxoHistoryFieldDiagnostic = {
@@ -1364,7 +1752,7 @@ export function findEntryHistoryMatches(
 
 function isStrictEntryHistoryCandidate(position: SaxoApiPositionSnapshot, item: SaxoHistoryDiscoveryItem): boolean {
   if (item.kind === "closed_position" || item.openClose === "close") return false;
-  if (item.accountCode && position.accountAssignment !== item.accountCode) return false;
+  if (item.accountCode && position.accountAssignment !== "unassigned" && position.accountAssignment !== item.accountCode) return false;
   if (item.accountKey && position.accountKey && item.accountKey !== position.accountKey && item.accountKey !== maskSaxoIdentifier(position.accountKey)) return false;
   const itemOptionType = resolveSaxoHistoryOptionType(item);
   const itemStrike = resolveSaxoHistoryStrike(item);
@@ -1587,7 +1975,7 @@ export function createSaxoSetupGuidance(status: SaxoApiStatus | null, apiErrorMe
       code: "local_api_down",
       tone: "danger",
       title: "SaxoローカルAPIが起動していません",
-      detail: apiErrorMessage ?? "別ターミナルでローカルAPI補助ツールを起動してから、状態更新を押してください。",
+      detail: apiErrorMessage ?? "別ターミナルでローカルAPIを起動してから、状態更新を押してください。",
       command: "SAXO_CLIENT_ID=... SAXO_ENVIRONMENT=sim npm run dev:all",
     };
   }

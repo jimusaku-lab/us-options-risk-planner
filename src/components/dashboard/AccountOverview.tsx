@@ -3,6 +3,8 @@ import { NumberInput } from "@/components/ui/NumberInput";
 import type { AccountState, SaxoAccountCode } from "@/types/domain";
 import type { PendingAccountCashEffect } from "@/domain/accountCashEffects";
 import { formatJPY, formatUSD } from "@/lib/format";
+import type { FxQuote } from "@/lib/marketData";
+import { calculateReferenceTotalAssetsBreakdownJPY, formatReferenceTotalAssetsJPY } from "@/domain/referenceTotalAssets";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useState } from "react";
 
@@ -10,6 +12,7 @@ export function AccountOverview({
   workspace,
   accountInputs,
   referenceFxRateJPY,
+  referenceFxQuote,
   pendingCashEffects = [],
   onApplyCashEffect,
   onResolveCashEffect,
@@ -18,6 +21,7 @@ export function AccountOverview({
   workspace: WorkspaceMode;
   accountInputs: AccountInputs;
   referenceFxRateJPY?: number;
+  referenceFxQuote?: FxQuote | null;
   pendingCashEffects?: PendingAccountCashEffect[];
   onApplyCashEffect?: (effect: PendingAccountCashEffect) => void;
   onResolveCashEffect?: (effect: PendingAccountCashEffect) => void;
@@ -25,8 +29,13 @@ export function AccountOverview({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const isDemo = workspace === "demo";
-
+  const referenceTotalAssets = calculateReferenceTotalAssetsBreakdownJPY({
+    pSaxoTotalValueJPY: accountInputs.P.saxoTotalValue,
+    nSaxoTotalValueUSD: accountInputs.N.saxoTotalValue,
+    fxQuote: referenceFxQuote,
+  });
   return (
+    <>
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
@@ -47,8 +56,10 @@ export function AccountOverview({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-4">
-          <AccountMetric account={accountInputs.P} displayName={isDemo ? "DEMO / JPYベース" : "P口座"} />
-          {!isDemo ? <AccountMetric account={accountInputs.N} displayName="N口座" referenceFxRateJPY={referenceFxRateJPY} /> : null}
+          <div className="flex flex-wrap items-center justify-end gap-4">
+            <AccountMetric account={accountInputs.P} displayName={isDemo ? "DEMO / JPYベース" : "P口座"} />
+            {!isDemo ? <AccountMetric account={accountInputs.N} displayName="N口座" referenceFxRateJPY={referenceFxRateJPY} /> : null}
+          </div>
           <button
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
             onClick={() => setIsOpen((value) => !value)}
@@ -138,6 +149,16 @@ export function AccountOverview({
         </div>
       ) : null}
     </section>
+    {!isDemo ? (
+      <section className="mt-3 overflow-x-auto rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm" aria-label="口座全体の資産">
+        <div className="flex min-w-max flex-nowrap items-center gap-8 whitespace-nowrap text-sm font-medium text-slate-600">
+          <span>P口座資産　{formatReferenceTotalAssetsJPY(referenceTotalAssets?.pAccountAssetsJPY)}</span>
+          <span>N口座資産　{formatReferenceTotalAssetsJPY(referenceTotalAssets?.nAccountAssetsJPY)}</span>
+          <span>参考総資産　{formatReferenceTotalAssetsJPY(referenceTotalAssets?.referenceTotalAssetsJPY)}</span>
+        </div>
+      </section>
+    ) : null}
+    </>
   );
 }
 

@@ -1,5 +1,6 @@
 import { normalizeTicker } from "@/lib/marketData";
 import type { StockSettlement, StockTransferEvent, TradeSimulation, WheelCycle } from "@/types/domain";
+import { getStockSettlementHistoryKeys, normalizeStockSettlement } from "@/domain/stockSettlementState";
 import { getSaxoHistoryStableKey, resolveSaxoHistoryUnderlyingSymbol, type SaxoHistoryDiscoveryItem } from "./saxoAccountSync";
 
 export type SaxoStockSettlementTargetResult = {
@@ -118,12 +119,12 @@ export function buildSaxoStockSettlementDraft({
     return { errorMessage: "株式譲渡候補を作成できませんでした。株数、売却単価、または取得単価が未取得です。Saxo履歴とP→N移管記録を確認してください。" };
   }
   const sourceKey = getSaxoHistoryStableKey(item);
-  const existing = target.stockSettlement;
+  const existing = normalizeStockSettlement(target.stockSettlement);
   const alreadyLinked =
     existing?.enabled &&
-    [sourceKey, item.id, item.sourceIdMasked].some((key) => key && existing.memo?.includes(key));
+    [sourceKey, item.id].some((key) => key && getStockSettlementHistoryKeys(existing).includes(key));
   return {
-    settlement: {
+    settlement: normalizeStockSettlement({
       enabled: true,
       kind: "manual_sale",
       settlementDate: item.tradeDate ?? fallbackDate,
@@ -133,12 +134,17 @@ export function buildSaxoStockSettlementDraft({
       fxRateJPY: existing?.fxRateJPY,
       commissionUSD,
       commissionJPY: existing?.commissionJPY,
+      source: "saxo_history",
+      sourceCandidateId: sourceKey,
+      sourceTradeId: item.id,
+      confirmationStatus: existing?.confirmationStatus ?? "confirmed",
+      completionStatus: "complete",
+      confirmedAt: existing?.confirmedAt,
       memo: [
         `Saxo N口座 Stock売却履歴から作成。取引ID ${item.sourceIdMasked ?? item.id}。`,
-        `sourceCandidateId ${sourceKey}。`,
-        alreadyLinked ? "既存候補を更新。" : "未確認ドラフト。",
+        alreadyLinked ? "既存の株式譲渡記録を更新。" : "株式譲渡記録として取り込み。",
       ].join(""),
-    },
+    }),
   };
 }
 

@@ -44,6 +44,7 @@ import {
   resolveSaxoHistoryUnderlyingSymbol,
   resolveSaxoPositionSymbol,
   resolveSaxoPositionSymbolResolution,
+  type OpeningHistoryFetchState,
   type SaxoAccountMapping,
   type SaxoApiAccount,
   type SaxoApiAccountSnapshot,
@@ -62,6 +63,13 @@ import {
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { summarizeSaxoHistoryCompletion } from "@/features/saxo/saxoHistoryCompletion";
 import { isSyntheticForwardEntrySaved, shouldRecoverSaxoSyntheticForwardEntryConfirmation } from "@/domain/compositeOptionPosition";
+import {
+  describeStockSettlementPendingReason,
+  getStockSettlementHistoryKeys,
+  getStockSettlementMissingFields,
+  isConfirmedStockSettlement,
+  normalizeStockSettlement,
+} from "@/domain/stockSettlementState";
 import type { AccountState, OptionLeg, SaxoAccountCode, StockTransferEvent, TradeSimulation } from "@/types/domain";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 
@@ -72,11 +80,10 @@ const SAXO_DRAFTED_POSITION_KEY = "us-options-saxo-drafted-position-candidates-v
 const SAXO_LINKED_POSITION_KEY = "us-options-saxo-linked-position-candidates-v1";
 const SAXO_LINKED_POSITION_TARGET_KEY = "us-options-saxo-linked-position-targets-v1";
 const SAXO_LOCAL_API_START_COMMAND = [
-  "SAXO_LOCAL_UI_ALLOWED_ORIGIN=https://jimusaku-lab.github.io",
-  "SAXO_LOCAL_UI_RETURN_URL=https://jimusaku-lab.github.io/us-options-risk-planner/",
-  "npm run dev:saxo-api",
-].join(" ");
-const SAXO_LOCAL_API_ONLY_COMMAND = SAXO_LOCAL_API_START_COMMAND;
+  "cd /Users/motomichi/Documents/30_ファイナンス（作業中）/apps/us-options-risk-planner",
+  "npm run dev:all",
+].join("\n");
+const SAXO_LOCAL_API_ONLY_COMMAND = "npm run dev:saxo-api";
 
 type SaxoPanelConnectionState = NonNullable<SaxoApiStatus["connectionState"]> | "disconnected" | "local_api_down";
 type LinkedSimulationResolution =
@@ -131,6 +138,7 @@ export function SaxoReadOnlyPanel({
   onOrdersChange,
   onPositionsChange,
   onHistoryCandidatesChange,
+  onHistoryFetchStateChange,
   onCreateHistoryDraft,
   onCreateAssignmentDraft,
   onCreatePositionDraft,
@@ -153,12 +161,13 @@ export function SaxoReadOnlyPanel({
   onOrdersChange?: (orders: SaxoApiOrderSnapshot[]) => void;
   onPositionsChange?: (positions: SaxoApiPositionSnapshot[]) => void;
   onHistoryCandidatesChange?: (items: SaxoHistoryDiscoveryItem[]) => void;
+  onHistoryFetchStateChange?: (state: OpeningHistoryFetchState) => void;
   onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
-  onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
+  onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[], historyFetchState?: OpeningHistoryFetchState) => void;
   onCreateSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[], options?: { forceEntryConfirmation?: boolean }) => void;
   onRecoverSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
-  onLinkPositionToExisting?: (position: SaxoApiPositionSnapshot, simulation: TradeSimulation, historyItems?: SaxoHistoryDiscoveryItem[]) => boolean | void;
+  onLinkPositionToExisting?: (position: SaxoApiPositionSnapshot, simulation: TradeSimulation, historyItems?: SaxoHistoryDiscoveryItem[], historyFetchState?: OpeningHistoryFetchState) => boolean | void;
   onCreateStockTransferFromPosition?: (position: SaxoApiPositionSnapshot, sourceSimulationId?: string) => boolean | void;
   stockTransfers?: StockTransferEvent[];
   onOpenLinkedSimulation?: (simulationId: string, anchorId?: string) => void;
@@ -183,6 +192,7 @@ export function SaxoReadOnlyPanel({
   const [ordersFetchedAt, setOrdersFetchedAt] = useState("");
   const [historyEndpoints, setHistoryEndpoints] = useState<SaxoHistoryDiscoveryEndpoint[]>([]);
   const [historyFetchedAt, setHistoryFetchedAt] = useState("");
+  const [historyFetchOutcome, setHistoryFetchOutcome] = useState<"pending" | "ready" | "failed">("pending");
   const [expandedPositionId, setExpandedPositionId] = useState("");
   const [highlightedPositionId, setHighlightedPositionId] = useState("");
   const [expandedOrderId, setExpandedOrderId] = useState("");
@@ -205,6 +215,11 @@ export function SaxoReadOnlyPanel({
   const [setupEnvironment, setSetupEnvironment] = useState<"sim" | "live">("sim");
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const mappedHistoryFetchState: OpeningHistoryFetchState = historyFetchOutcome === "ready"
+    ? "fetched"
+    : historyFetchOutcome === "failed"
+      ? "fetch_failed"
+      : "not_fetched";
   const mappingWorkspace = workspace === "demo" ? "demo" : "real";
   const pendingSummaryRef = useRef<HTMLDivElement | null>(null);
   const mappingRef = useRef<HTMLDivElement | null>(null);
@@ -320,7 +335,12 @@ export function SaxoReadOnlyPanel({
     () => createHistoryReflectionStates(effectiveHistoryEndpoints, simulations, reflectedHistoryIds, ignoredHistoryIds, stockTransfers),
     [effectiveHistoryEndpoints, ignoredHistoryIds, simulations, reflectedHistoryIds, stockTransfers],
   );
-  useEffect(() => { onHistoryCandidatesChange?.(effectiveHistoryItems); }, [effectiveHistoryItems, onHistoryCandidatesChange]);
+  useEffect(() => {
+    onHistoryCandidatesChange?.(effectiveHistoryItems);
+  }, [effectiveHistoryItems, onHistoryCandidatesChange]);
+  useEffect(() => {
+    onHistoryFetchStateChange?.(mappedHistoryFetchState);
+  }, [mappedHistoryFetchState, onHistoryFetchStateChange]);
   const resolveHistoryTarget = (item: SaxoHistoryDiscoveryItem) => getSaxoHistoryCandidateTargetForSimulations(item, simulations);
 
   useEffect(() => {
@@ -451,7 +471,7 @@ export function SaxoReadOnlyPanel({
       return true;
     }
 
-    const historyItems = historyEndpoints.flatMap((endpoint) => endpoint.items ?? []);
+    const historyItems = effectiveHistoryItems;
     const assignmentStockItem = target === "assignment" ? findSaxoAssignmentStockAcquisitionItem(item, historyItems) : undefined;
     const created = target === "assignment" ? onCreateAssignmentDraft?.(item, assignmentStockItem) : onCreateHistoryDraft?.(item);
     if (!created?.simulationId) {
@@ -467,7 +487,7 @@ export function SaxoReadOnlyPanel({
     setIgnoredHistoryIds((current) => current.filter((id) => !historyKeys.includes(id)));
     setReflectedHistoryIds((current) => {
       const withoutCurrent = current.filter((id) => !historyKeys.includes(id));
-      return [...withoutCurrent, primaryHistoryKey];
+      return [...withoutCurrent, ...historyKeys];
     });
     const successMessage =
       target === "assignment"
@@ -486,7 +506,7 @@ export function SaxoReadOnlyPanel({
   }
 
   function createHistoryDrafts(items: SaxoHistoryDiscoveryItem[]) {
-    const historyItems = historyEndpoints.flatMap((endpoint) => endpoint.items ?? []);
+    const historyItems = effectiveHistoryItems;
     const creatableItems = items.filter((item) => {
       const target = resolveHistoryTarget(item);
       const state = historyReflectionStates[item.id] ?? { status: "none" as const };
@@ -522,7 +542,7 @@ export function SaxoReadOnlyPanel({
     const primaryHistoryKey = getSaxoHistoryStableKey(item);
     setIgnoredHistoryIds((current) => {
       const withoutCurrent = current.filter((id) => !historyKeys.includes(id));
-      return [...withoutCurrent, primaryHistoryKey];
+      return [...withoutCurrent, ...historyKeys];
     });
     setReflectedHistoryIds((current) => current.filter((id) => !historyKeys.includes(id)));
     const message = "この履歴候補は今回は無視しました。正式保存や現金残高反映は行いません。";
@@ -762,9 +782,11 @@ export function SaxoReadOnlyPanel({
       const mappedEndpoints = enrichHistoryEndpointsWithAccountMappings(response.endpoints, mappings);
       setHistoryEndpoints(mappedEndpoints);
       setHistoryFetchedAt(response.fetchedAt);
+      setHistoryFetchOutcome("ready");
       setMessage("決済履歴・約定履歴の候補endpointを確認しました。取得値は下書き候補扱いです。");
       await refreshStatus();
     } catch (error) {
+      setHistoryFetchOutcome("failed");
       await refreshStatus();
       setMessage(error instanceof Error ? error.message : "履歴系endpointを確認できませんでした。");
     } finally {
@@ -778,6 +800,7 @@ export function SaxoReadOnlyPanel({
       return;
     }
     setIsLoading(true);
+    setHistoryFetchOutcome("pending");
     const failures: string[] = [];
     try {
       try {
@@ -810,7 +833,9 @@ export function SaxoReadOnlyPanel({
         const mappedEndpoints = enrichHistoryEndpointsWithAccountMappings(historyResponse.endpoints, mappings);
         setHistoryEndpoints(mappedEndpoints);
         setHistoryFetchedAt(historyResponse.fetchedAt);
+        setHistoryFetchOutcome("ready");
       } catch (error) {
+        setHistoryFetchOutcome("failed");
         failures.push(`履歴候補: ${error instanceof Error ? error.message : "失敗"}`);
       }
       await refreshStatus();
@@ -1295,7 +1320,8 @@ export function SaxoReadOnlyPanel({
                 draftedPositionIds={draftedPositionIds}
                 simulations={simulations}
                 stockTransfers={stockTransfers}
-                historyItems={historyEndpoints.flatMap((endpoint) => endpoint.items ?? [])}
+                historyItems={effectiveHistoryItems}
+                historyReady={historyFetchOutcome !== "pending"}
                 resolveLinkedSimulation={resolveLinkedSimulation}
                 positionActionErrors={positionActionErrors}
                 positionActionNotices={positionActionNotices}
@@ -1345,7 +1371,8 @@ export function SaxoReadOnlyPanel({
                   const linkedByApp = onLinkPositionToExisting?.(
                     row.position,
                     row.simulation,
-                    historyEndpoints.flatMap((endpoint) => endpoint.items ?? []),
+                    effectiveHistoryItems,
+                    mappedHistoryFetchState,
                   );
                   setLinkedPositionIds((current) => (current.includes(row.position!.id) ? current : [...current, row.position!.id]));
                   setLinkedPositionTargets((current) => ({ ...current, [row.position!.id]: row.simulation!.id }));
@@ -1430,7 +1457,7 @@ export function SaxoReadOnlyPanel({
                     ...current,
                     [position.id]: draftMessage,
                   }));
-                  onCreatePositionDraft?.(position, historyEndpoints.flatMap((endpoint) => endpoint.items ?? []));
+                  onCreatePositionDraft?.(position, effectiveHistoryItems, mappedHistoryFetchState);
                   setMessage(
                     onCreatePositionDraft
                       ? draftMessage
@@ -1438,7 +1465,7 @@ export function SaxoReadOnlyPanel({
                   );
                 }}
                 onCreateSyntheticForwardDraft={(pair) => {
-                  const historyItems = historyEndpoints.flatMap((endpoint) => endpoint.items ?? []);
+                  const historyItems = effectiveHistoryItems;
                   const parentOrderId = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems).parentHistory?.orderId;
                   const integrated = findSaxoSyntheticForwardSimulationForPair(pair, simulations, parentOrderId);
                   const recoveryRequired = (draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id)) && !integrated;
@@ -1484,7 +1511,7 @@ export function SaxoReadOnlyPanel({
                     ...current,
                     [position.id]: draftMessage,
                   }));
-                  onCreatePositionDraft?.(position, historyEndpoints.flatMap((endpoint) => endpoint.items ?? []));
+                  onCreatePositionDraft?.(position, effectiveHistoryItems, mappedHistoryFetchState);
                   setMessage(`壊れた紐づけを解除しました。${draftMessage}`);
                 }}
                 onRecreateDraftFromStaleFlag={(position) => {
@@ -1515,7 +1542,7 @@ export function SaxoReadOnlyPanel({
                     ...current,
                     [position.id]: draftMessage,
                   }));
-                  onCreatePositionDraft?.(position, historyEndpoints.flatMap((endpoint) => endpoint.items ?? []));
+                  onCreatePositionDraft?.(position, effectiveHistoryItems, mappedHistoryFetchState);
                   setMessage(draftMessage);
                 }}
                 onDiscardDraft={(position) => {
@@ -1789,7 +1816,7 @@ function SaxoDiagnostics({
     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
       <h3 className="text-sm font-bold text-slate-950">設定・診断</h3>
       <dl className="mt-3 grid gap-2 text-sm md:grid-cols-2">
-        <StatusRow label="ローカルAPI bind" value={status?.bindAddress ?? "localhost"} />
+        <StatusRow label="ローカルAPI bind" value={status?.bindAddress ?? "127.0.0.1"} />
         <StatusRow label="注文系endpoint" value={status?.orderEndpointsEnabled ? "有効" : "なし"} />
         <StatusRow label="OAuth設定" value={status?.oauthConfigured ? "LIVE AppKey設定済み" : "LIVE AppKey未設定"} />
         <StatusRow label="接続期限" value={formatDateTime(status?.connectionExpiresAt)} />
@@ -2039,15 +2066,51 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
   );
 });
 
-function HistorySummaryActionRow({ action, onOpen, onShowHistory }: { action: HistorySummaryAction; onOpen: () => void; onShowHistory: () => void }) {
+function HistorySummaryActionRow({
+  action,
+  onOpen,
+  onShowHistory,
+}: {
+  action: HistorySummaryAction;
+  onOpen: () => void;
+  onShowHistory: () => void;
+}) {
   const symbol = resolveSaxoHistoryUnderlyingSymbol(action.item) ?? action.item.symbol ?? "対象銘柄";
-  const optionLabel = action.item.optionType === "call" ? "C" : action.item.optionType === "put" ? "P" : "種類未確認";
-  const contract = [optionLabel, action.item.strike !== undefined ? `行使価格 ${formatNumber(action.item.strike)}` : "行使価格未取得", action.item.expiry ?? "満期未取得"].join(" / ");
   const targetLabel = action.target === "close" ? "決済" : action.target === "entry" ? "建玉開始" : action.target === "assignment" ? "権利行使" : action.target === "stock_settlement" ? "株式譲渡" : "要確認";
   const destination = action.target === "close" ? "Section 7" : action.target === "entry" ? "3-A" : action.target === "assignment" ? "6-A" : action.target === "stock_settlement" ? "6-B" : undefined;
-  const createLabel = action.target === "close" ? `${symbol}の決済内容を確認する` : action.target === "entry" ? `${symbol}の建玉開始内容を確認する` : action.target === "assignment" ? `${symbol}の権利行使内容を確認する` : `${symbol}の株式譲渡内容を確認する`;
-  const returnLabel = action.target === "close" ? `${symbol}の決済確認へ戻る` : action.target === "entry" ? `${symbol}の建玉開始確認へ戻る` : action.target === "assignment" ? `${symbol}の権利行使確認へ戻る` : `${symbol}の株式譲渡確認へ戻る`;
-  return <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs"><div className="min-w-0"><div className="font-bold text-slate-900">{symbol} / {contract} / {action.item.tradeDate ?? "取引日未取得"} / {targetLabel}</div>{action.mode === "review" ? <div className="mt-1 text-amber-900">{action.reason ?? "自動反映できません。履歴一覧で理由を確認してください。"}</div> : <div className="mt-1 text-slate-600">{action.mode === "create" ? `${destination}へ確認用下書きを作成して移動します。まだ正式保存されません。` : `${destination}の既存確認用下書きへ移動します。まだ正式保存されません。`}</div>}</div>{action.mode === "review" ? <button type="button" className="rounded border border-slate-300 bg-white px-2 py-1 font-bold text-slate-800" onClick={onShowHistory}>履歴候補一覧を見る</button> : <button type="button" className="rounded border border-teal-700 bg-teal-700 px-2 py-1 font-bold text-white hover:bg-teal-800" onClick={onOpen}>{action.mode === "create" ? createLabel : returnLabel}</button>}</div>;
+  const optionLabel = action.item.optionType === "call" ? "C" : action.item.optionType === "put" ? "P" : "種類未確認";
+  const contract = [optionLabel, action.item.strike !== undefined ? `行使価格 ${formatNumber(action.item.strike)}` : "行使価格未取得", action.item.expiry ?? "満期未取得"].join(" / ");
+  const stockSettlementContract = [
+    action.item.tradeDate ?? "譲渡日未取得",
+    action.item.quantity !== undefined ? `${formatNumber(Math.abs(action.item.quantity))}株` : "株数未取得",
+    action.item.price !== undefined ? `${formatNumber(action.item.price)} USD` : "売却単価未取得",
+    targetLabel,
+  ].join(" / ");
+  const title = action.target === "stock_settlement"
+    ? `${symbol} / ${stockSettlementContract}`
+    : `${symbol} / ${contract} / ${action.item.tradeDate ?? "取引日未取得"} / ${targetLabel}`;
+  const createLabel = action.target === "close" ? `${symbol}の決済内容を確認する` : action.target === "entry" ? `${symbol}の建玉開始内容を確認する` : action.target === "assignment" ? `${symbol}の権利行使内容を確認する` : `${symbol}の株式譲渡を確認する`;
+  const returnLabel = action.target === "close" ? `${symbol}の決済確認へ戻る` : action.target === "entry" ? `${symbol}の建玉開始確認へ戻る` : action.target === "assignment" ? `${symbol}の権利行使確認へ戻る` : `${symbol}の株式譲渡を確認する`;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs">
+      <div className="min-w-0">
+        <div className="font-bold text-slate-900">{title}</div>
+        {action.reason && action.mode !== "review" ? (
+          <div className="mt-1 text-amber-900">{action.reason}</div>
+        ) : null}
+        {action.mode === "review" ? (
+          <div className="mt-1 text-amber-900">{action.reason ?? "自動反映できません。履歴一覧で理由を確認してください。"}</div>
+        ) : (
+          <div className="mt-1 text-slate-600">{action.mode === "create" ? `${destination}へ確認用下書きを作成して移動します。まだ正式保存されません。` : `${destination}の既存確認用下書きへ移動します。まだ正式保存されません。`}</div>
+        )}
+      </div>
+      {action.mode === "review" ? (
+        <button type="button" className="rounded border border-slate-300 bg-white px-2 py-1 font-bold text-slate-800" onClick={onShowHistory}>履歴候補一覧を見る</button>
+      ) : (
+        <button type="button" className="rounded border border-teal-700 bg-teal-700 px-2 py-1 font-bold text-white hover:bg-teal-800" onClick={onOpen}>{action.mode === "create" ? createLabel : returnLabel}</button>
+      )}
+    </div>
+  );
 }
 
 function PendingLine({
@@ -2415,6 +2478,7 @@ function PositionsPreview({
   simulations,
   stockTransfers,
   historyItems,
+  historyReady,
   resolveLinkedSimulation,
   positionActionErrors,
   positionActionNotices,
@@ -2450,6 +2514,7 @@ function PositionsPreview({
   simulations: TradeSimulation[];
   stockTransfers: StockTransferEvent[];
   historyItems: SaxoHistoryDiscoveryItem[];
+  historyReady: boolean;
   resolveLinkedSimulation: (row: SaxoPositionReconciliationRow) => LinkedSimulationResolution;
   positionActionErrors: Record<string, string>;
   positionActionNotices: Record<string, string>;
@@ -2497,7 +2562,11 @@ function PositionsPreview({
     const symbolConflict = resolveSaxoPositionSymbolResolution(row.position, simulations).sourceConflict;
     return linked === "unlinked" && (row.status === "app_missing" || row.status === "unknown" || row.status === "quantity_diff" || row.status === "price_diff" || symbolConflict);
   });
-  const existingSyntheticPairIds = new Set(syntheticForwardPairs.filter((pair) => Boolean(findSaxoSyntheticForwardSimulationForPair(pair, simulations, resolveSaxoSyntheticForwardFillEvidence(pair, historyItems).parentHistory?.orderId))).map((pair) => pair.id));
+  const existingSyntheticPairIds = new Set(
+    syntheticForwardPairs
+      .filter((pair) => Boolean(findSaxoSyntheticForwardSimulationForPair(pair, simulations, resolveSaxoSyntheticForwardFillEvidence(pair, historyItems).parentHistory?.orderId)))
+      .map((pair) => pair.id),
+  );
   const displaySyntheticForwardPairs = syntheticForwardPairs.filter((pair) => !existingSyntheticPairIds.has(pair.id));
   const actionRequiredRows = actionRequiredRegularRows.length + displaySyntheticForwardPairs.length + syntheticForwardHolds.length + pendingStockTransferRows.length;
   const confirmedCurrentHoldingRows = linkedRegularRows.length + recordedStockTransferRows.length + existingSyntheticPairIds.size;
@@ -2587,7 +2656,10 @@ function PositionsPreview({
             </thead>
             <tbody>
               {displaySyntheticForwardPairs.map((pair) => {
-                const evidence = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems); const existingSynthetic = findSaxoSyntheticForwardSimulationForPair(pair, simulations, evidence.parentHistory?.orderId); const drafted = draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id); const saved = Boolean(existingSynthetic && isSyntheticForwardEntrySaved(existingSynthetic));
+                const evidence = resolveSaxoSyntheticForwardFillEvidence(pair, historyItems);
+                const existingSynthetic = findSaxoSyntheticForwardSimulationForPair(pair, simulations, evidence.parentHistory?.orderId);
+                const drafted = draftedPositionIds.includes(pair.callPosition.id) || draftedPositionIds.includes(pair.putPosition.id);
+                const saved = Boolean(existingSynthetic && isSyntheticForwardEntrySaved(existingSynthetic));
                 return <SyntheticForwardPairRow key={pair.id} pair={pair} filled={evidence.status === "filled"} integrated={Boolean(existingSynthetic)} saved={saved} drafted={drafted} recoveryRequired={drafted && !existingSynthetic} onCreateDraft={onCreateSyntheticForwardDraft} onOpenDashboard={existingSynthetic ? () => onOpenSyntheticForwardDashboard?.(existingSynthetic.id) : undefined} />;
               })}
               {syntheticForwardHolds.map((hold) => (
@@ -2614,6 +2686,7 @@ function PositionsPreview({
                   actionError={row.position ? positionActionErrors[row.position.id] : undefined}
                   actionNotice={row.position ? positionActionNotices[row.position.id] : undefined}
                   historyMatchCount={row.position ? findEntryHistoryMatches(row.position, historyItems).length : 0}
+                  historyReady={historyReady}
                   simulations={simulations}
                 />
               ))}
@@ -3173,6 +3246,14 @@ function HistoryDiscoveryPreview({
                 {ignoredCount > 0 ? ` 無視済みの履歴候補が${ignoredCount}件あります。` : ""}
               </p>
             </div>
+            <div className="grid gap-2 text-xs font-semibold text-slate-700 sm:grid-cols-2">
+              {creatableItems.length > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">追加で作成が必要: {creatableItems.length}件</div> : null}
+              {entryReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2">建玉開始の確認待ち: {entryReflectedCount}件</div> : null}
+              {closeReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2">決済実績の確認待ち: {closeReflectedCount}件</div> : null}
+              {assignmentReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認待ち: {assignmentReflectedCount}件</div> : null}
+              {stockSettlementReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">株式譲渡の確認待ち: {stockSettlementReflectedCount}件</div> : null}
+              {brokenCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">監査用の復旧候補: {brokenCount}件（候補実体が見つかりません。必要な場合だけ行ごとに再作成します）</div> : null}
+            </div>
             <div className="flex flex-wrap gap-2">
               {creatableItems.length > 0 ? (
                 <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white" onClick={() => onCreateDrafts(creatableItems)}>
@@ -3199,14 +3280,9 @@ function HistoryDiscoveryPreview({
                   6-B 株式譲渡記録へ移動（{stockSettlementReflectedCount}件）
                 </button>
               ) : null}
-            </div>
-            <div className="grid gap-2 text-xs font-semibold text-slate-700 sm:grid-cols-2">
-              {creatableItems.length > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">追加で作成が必要: {creatableItems.length}件</div> : null}
-              {entryReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2">建玉開始の確認待ち: {entryReflectedCount}件</div> : null}
-              {closeReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2">決済実績の確認待ち: {closeReflectedCount}件</div> : null}
-              {assignmentReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">権利行使・株式取得の確認待ち: {assignmentReflectedCount}件</div> : null}
-              {stockSettlementReflectedCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">株式譲渡の確認待ち: {stockSettlementReflectedCount}件</div> : null}
-              {brokenCount > 0 ? <div className="rounded bg-white px-3 py-2 sm:col-span-2">監査用の復旧候補: {brokenCount}件（候補実体が見つかりません。必要な場合だけ行ごとに再作成します）</div> : null}
+              <button type="button" className="rounded-md border border-slate-300 px-3 py-2 text-sm font-bold text-slate-800" onClick={onClosePanel}>
+                閉じる
+              </button>
             </div>
           </div>
         ) : historyItems.length > 0 ? (
@@ -3233,8 +3309,9 @@ function HistoryDiscoveryPreview({
           <p className="text-sm text-slate-500">Saxo接続後に履歴候補を取得してください。</p>
         ) : (
           endpoints.map((endpoint) => {
-            const effectiveItemIds = new Set(historyItems.map((item) => item.id));
-            const endpointItems = (endpoint.items ?? []).filter((item) => effectiveItemIds.has(item.id));
+            // A merged trade/closed-position candidate belongs to its explicit trade
+            // row only.  Do not reintroduce the raw closed-position duplicate here.
+            const endpointItems = (endpoint.items ?? []).filter((item) => historyItems.some((effective) => effective.id === item.id));
             const endpointReflectedCount = endpointItems.filter(isActualReflection).length;
             const endpointBrokenCount = endpointItems.filter((item) => reflectionStates[item.id]?.status === "broken").length;
             const endpointCreatableCount = endpointItems.filter((item) => {
@@ -3265,14 +3342,15 @@ function HistoryDiscoveryPreview({
                 <div className="mt-2 space-y-1">
                   {sortHistoryCandidatesForDisplay(endpoint.items, resolveHistoryTarget).slice(0, 5).map((item) => {
                     const target = resolveHistoryTarget(item);
+                    const state = reflectionStates[item.id] ?? { status: "none" as const };
                     return (
                     <HistoryCandidateRow
                       key={item.id}
                       item={item}
                       target={target}
                       hasAssignmentStockItem={Boolean(findSaxoAssignmentStockAcquisitionItem(item, historyItems))}
-                      reflectionState={reflectionStates[item.id] ?? { status: "none" }}
-                      isCreatable={isUserCreatableHistoryItem({ item, target, state: reflectionStates[item.id] ?? { status: "none" }, simulations, historyItems })}
+                      reflectionState={state}
+                      isCreatable={isUserCreatableHistoryItem({ item, target, state, simulations, historyItems })}
                       actionMessage={actionMessages[getSaxoHistoryStableKey(item)]}
                       onGoTarget={
                         target === "close"
@@ -3646,6 +3724,7 @@ function PositionRow({
   actionError,
   actionNotice,
   historyMatchCount,
+  historyReady,
   simulations,
 }: {
   row: SaxoPositionReconciliationRow;
@@ -3666,6 +3745,7 @@ function PositionRow({
   actionError?: string;
   actionNotice?: string;
   historyMatchCount: number;
+  historyReady: boolean;
   simulations: TradeSimulation[];
 }) {
   const position = row.position;
@@ -3683,7 +3763,7 @@ function PositionRow({
   const linkedNeedsEntryConfirmation = linkedResolution.status === "linked" ? needsOptionEntryConfirmation(linkedResolution.simulation) : true;
   const draftSimulationName = linkedResolution.status === "draft" && linkedResolution.simulation ? linkedResolution.simulation.name : undefined;
   const hasDraftBody = linkedResolution.status === "draft" && Boolean(linkedResolution.simulation);
-  const canCreateDraft = Boolean((position?.accountAssignment === "P" || position?.accountAssignment === "N") && !symbolResolution.sourceConflict && resolvedSymbol);
+  const canCreateDraft = Boolean(historyReady && (position?.accountAssignment === "P" || position?.accountAssignment === "N") && !symbolResolution.sourceConflict && resolvedSymbol);
   const createDraftLabel = "確認して建玉入力へ";
   const isPlannedCoveredCallLink = Boolean(
     position &&
@@ -3734,7 +3814,11 @@ function PositionRow({
   const isDirectNewCandidate = Boolean(position && isNewCandidate && linkStatus === "unlinked" && !isReviewCandidate && !symbolResolution.sourceConflict);
   const actionButtons = position ? isDirectNewCandidate ? (
     <div className="flex min-w-[260px] flex-wrap items-start gap-1">
-      <button className="inline-flex items-center gap-1 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-40" onClick={() => onCreateDraft(position)} disabled={drafted || !canCreateDraft}>
+      <button
+        className="inline-flex items-center gap-1 rounded border border-teal-700 bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={() => onCreateDraft(position)}
+        disabled={drafted || !canCreateDraft}
+      >
         <FilePlus2 size={13} />
         {drafted ? "下書き反映済み" : "確認して建玉入力へ"}
       </button>
@@ -3915,7 +3999,7 @@ function PositionRow({
           <p className="mt-1 max-w-[280px] text-xs leading-5 text-slate-500">{row.detail}</p>
           {row.simulation && position && linkStatus !== "linked" && linkStatus !== "draft" ? (
             <p className="mt-1 max-w-[280px] rounded bg-amber-50 px-2 py-1 text-xs leading-5 text-amber-800">
-              既存建玉と一致候補があります。内容を確認して、既存建玉へ反映するか、新規下書きとして扱うか選んでください。
+              既存建玉と一致候補があります。内容を確認してください。
             </p>
           ) : null}
           {isPlannedCoveredCallLink ? (
@@ -3997,6 +4081,11 @@ function PositionRow({
           {actionError ? (
             <p className="mt-1 max-w-[280px] rounded bg-rose-50 px-2 py-1 text-xs font-semibold leading-5 text-rose-800">
               {actionError}
+            </p>
+          ) : null}
+          {symbolResolution.sourceConflict ? (
+            <p className="mt-1 max-w-[280px] rounded bg-rose-50 px-2 py-1 text-xs font-semibold leading-5 text-rose-800">
+              銘柄の取得元が競合しているため、自動下書きは作成しません。
             </p>
           ) : null}
           {actionNotice ? (
@@ -4360,8 +4449,11 @@ function formatHistoryProfitLoss(item: SaxoHistoryDiscoveryItem): string {
       ? formatMaybeValue(item.profitLossAccountCurrency, "JPY")
       : "未取得";
   }
-  if (item.profitLoss !== undefined) return formatMaybeValue(item.profitLoss, item.currency);
-  return item.profitLossBase !== undefined ? formatNumber(item.profitLossBase) : "未取得";
+  return item.profitLoss !== undefined
+    ? formatMaybeValue(item.profitLoss, item.currency)
+    : item.profitLossBase !== undefined
+      ? formatNumber(item.profitLossBase)
+      : "未取得";
 }
 
 function formatDiff(currentValue: number | undefined, saxoValue: number | undefined, currency?: string): string {
@@ -4531,7 +4623,11 @@ function normalizeSaxoPanelDate(value: string): string {
   return value.replace(/\//g, "-").slice(0, 10);
 }
 
-function createHistoryReflectionStates(
+function getStockSettlementStateReason(simulation: TradeSimulation): string | undefined {
+  return describeStockSettlementPendingReason(simulation.stockSettlement);
+}
+
+export function createHistoryReflectionStates(
   endpoints: SaxoHistoryDiscoveryEndpoint[],
   simulations: TradeSimulation[],
   reflectedHistoryIds: string[],
@@ -4639,18 +4735,28 @@ function createHistoryReflectionStates(
     }
     const stockSettlementRecord = target === "stock_settlement"
       ? simulations.find((simulation) => {
-          const settlement = simulation.stockSettlement;
+          const settlement = normalizeStockSettlement(simulation.stockSettlement);
           if (!settlement?.enabled) return false;
-          return historyKeys.some((key) => key && settlement.memo?.includes(key));
+          const settlementHistoryKeys = getStockSettlementHistoryKeys(settlement);
+          return settlementHistoryKeys.length > 0 && historyKeys.some((key) => key && settlementHistoryKeys.includes(key));
         })
       : undefined;
     if (stockSettlementRecord?.stockSettlement) {
-      states[item.id] = {
-        status: "candidate",
-        simulationId: stockSettlementRecord.id,
-        recordId: stockSettlementRecord.stockSettlement.memo ?? stockSettlementRecord.id,
-        target,
-      };
+      const settlement = normalizeStockSettlement(stockSettlementRecord.stockSettlement);
+      if (settlement?.completionStatus === "conflict") {
+        states[item.id] = {
+          status: "broken",
+          target,
+          reason: settlement.invalidReason ?? "株式譲渡候補はありますが、保存済み記録の照合に失敗しています。",
+        };
+      } else {
+        states[item.id] = {
+          status: isConfirmedStockSettlement(settlement) ? "official" : "candidate",
+          simulationId: stockSettlementRecord.id,
+          recordId: settlement?.sourceCandidateId ?? settlement?.sourceTradeId ?? stockSettlementRecord.id,
+          target,
+        };
+      }
       continue;
     }
     states[item.id] = hasReflectedKey
@@ -4729,7 +4835,7 @@ function isTransferredAssignmentReflection(state: HistoryReflectionState | undef
   return state.target === "assignment" && state.assignmentTransferred === true;
 }
 
-function createReflectionSummary({
+export function createReflectionSummary({
   mappedSnapshots,
   accountInputs,
   positionRows,
@@ -4805,11 +4911,24 @@ function createReflectionSummary({
     .map((item): HistorySummaryAction | undefined => {
       const target = resolveHistoryTarget(item);
       const state = historyReflectionStates[item.id] ?? { status: "none" as const };
-      if (item.duplicateResolution === "source_conflict") return { item, target, mode: "review", reason: "取得元の値が競合しています。自動反映できません。履歴一覧で理由を確認してください。" };
-      if (item.duplicateResolution === "ambiguous_duplicate") return { item, target, mode: "review", reason: "同一候補を一意に特定できません。自動反映できません。履歴一覧で理由を確認してください。" };
-      if (target === "unknown" || (target === "close" && !isSaxoHistoryAutoCreatableClose(item))) return { item, target, mode: "review", reason: "売買方向または処理種別が明示されていません。自動反映できません。履歴一覧で理由を確認してください。" };
-      if (state.status === "candidate") return { item, target, mode: "return" };
-      if (isUserCreatableHistoryItem({ item, target, state, simulations, historyItems })) return { item, target, mode: "create" };
+      if (item.duplicateResolution === "source_conflict") {
+        return { item, target, mode: "review" as const, reason: "取得元の値が競合しています。自動反映できません。履歴一覧で理由を確認してください。" };
+      }
+      if (item.duplicateResolution === "ambiguous_duplicate") {
+        return { item, target, mode: "review" as const, reason: "同一候補を一意に特定できません。自動反映できません。履歴一覧で理由を確認してください。" };
+      }
+      if (target === "unknown" || (target === "close" && !isSaxoHistoryAutoCreatableClose(item))) {
+        return { item, target, mode: "review" as const, reason: "売買方向または処理種別が明示されていません。自動反映できません。履歴一覧で理由を確認してください。" };
+      }
+      if (state.status === "candidate") {
+        const stockSettlementSimulation =
+          target === "stock_settlement"
+            ? simulations.find((simulation) => simulation.id === state.simulationId)
+            : undefined;
+        const stockSettlementReason = stockSettlementSimulation ? getStockSettlementStateReason(stockSettlementSimulation) : undefined;
+        return { item, target, mode: "return" as const, reason: stockSettlementReason };
+      }
+      if (isUserCreatableHistoryItem({ item, target, state, simulations, historyItems })) return { item, target, mode: "create" as const };
       return undefined;
     })
     .filter((action): action is HistorySummaryAction => Boolean(action));
@@ -4818,11 +4937,15 @@ function createReflectionSummary({
     const state = historyReflectionStates[item.id];
     return state?.status === "candidate" || state?.status === "official";
   }).length;
+  const officialHistoryCount = actionableHistoryItems.filter((item) => historyReflectionStates[item.id]?.status === "official").length;
+  const pendingHistoryConfirmationCount = actionableHistoryItems.filter((item) => historyReflectionStates[item.id]?.status === "candidate").length;
   const createNeededHistoryCount = newCreatableHistoryItems.length;
-  const allHistoryReflected = actionableHistoryItems.length > 0 && reflectedHistoryCount === actionableHistoryItems.length;
+  const reviewHistoryCount = historyActions.filter((action) => action.mode === "review").length;
+  const historyRequiredCount = historyActions.length;
+  const allHistoryReflected = actionableHistoryItems.length > 0 && reflectedHistoryCount === actionableHistoryItems.length && pendingHistoryConfirmationCount === 0;
   const anyHistoryReflected = reflectedHistoryCount > 0;
   const orderActionable = orders.length > 0;
-  const historyActionable = createNeededHistoryCount > 0 || recoveryHistoryItems.length > 0;
+  const historyActionable = historyRequiredCount > 0;
   const hasNewPositionCandidates = newPositions > 0;
   const positionNeedsAction = newPositions > 0 || unknownPositions > 0 || pendingStockTransferCandidateRows.length > 0;
   const positionHasOptionalReview = matchedPositions > 0 || recordedStockTransferCandidateRows.length > 0 || positionRows.length > 0;
@@ -4830,7 +4953,7 @@ function createReflectionSummary({
   const historyIsSupplemental = positionNeedsAction && historyItems.length > 0;
   const accountActionCount = accountLines.filter((line) => line.actionable).length;
   const positionRequiredCount = newPositions + unknownPositions + pendingStockTransferCandidateRows.length;
-  const requiredActionCount = accountActionCount + positionRequiredCount + createNeededHistoryCount + recoveryHistoryItems.length;
+  const requiredActionCount = accountActionCount + positionRequiredCount + historyRequiredCount;
   const nextActionDetail = hasNewPositionCandidates
     ? `次は建玉候補を反映: 建玉候補を開き、各候補の「建玉入力へ下書き反映」を押してください。履歴候補は建玉反映後の補完確認です。`
     : positionNeedsAction
@@ -4868,18 +4991,18 @@ function createReflectionSummary({
       detail:
         historyItems.length === 0
           ? "未取得または0件"
-          : recoveryHistoryItems.length > 0
-            ? `監査用の復旧候補${recoveryHistoryItems.length}件 / 反映済み${reflectedHistoryCount}件 / 追加で作成が必要${createNeededHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
+          : reviewHistoryCount > 0
+            ? `監査・要確認${reviewHistoryCount}件 / 確認待ち${pendingHistoryConfirmationCount}件 / 反映済み${officialHistoryCount}件 / 追加で作成が必要${createNeededHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
           : allHistoryReflected
-            ? `反映済み${reflectedHistoryCount}件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要0件`
-            : anyHistoryReflected
-              ? `反映済み${reflectedHistoryCount}件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要${createNeededHistoryCount}件`
+            ? `反映済み${officialHistoryCount}件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要0件`
+            : pendingHistoryConfirmationCount > 0 || anyHistoryReflected
+              ? `確認待ち${pendingHistoryConfirmationCount}件 / 反映済み${officialHistoryCount}件 / 追加で作成が必要${createNeededHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
               : createNeededHistoryCount > 0
                 ? `建玉${entryCandidates}件 / 決済${closeCandidates}件 / 権利行使${assignmentCandidates}件 / 株式譲渡${stockSettlementCandidates}件 / 追加で作成が必要${createNeededHistoryCount}件${unknownHistoryCandidates > 0 ? ` / 対象外または確認不要${unknownHistoryCandidates}件` : ""}`
                 : `反映済み0件 / 対象外または確認不要${unknownHistoryCandidates}件 / 追加で作成が必要0件`,
       actionable: historyActionable,
       actionLabel: historyActionable
-        ? recoveryHistoryItems.length > 0
+        ? reviewHistoryCount > 0
           ? "監査用の復旧候補を確認"
           : "履歴候補一覧を見る"
         : "履歴候補は確認済み",
@@ -4919,9 +5042,11 @@ export function enrichHistoryEndpointsWithAccountMappings(
       const mapping = mappings.find(
         (candidate) =>
           candidate.confirmedByUser &&
-          ((Boolean(item.accountKey) && (candidate.accountKey === item.accountKey || maskSaxoIdentifier(candidate.accountKey) === item.accountKey)) ||
-            (Boolean(item.accountId && candidate.accountId) && (candidate.accountId === item.accountId || maskSaxoIdentifier(candidate.accountId) === item.accountId)) ||
-            (Boolean(item.accountNumber && candidate.accountNumber) && (candidate.accountNumber === item.accountNumber || maskSaxoIdentifier(candidate.accountNumber) === item.accountNumber))),
+          (
+            (Boolean(item.accountKey) && (candidate.accountKey === item.accountKey || maskSaxoIdentifier(candidate.accountKey) === item.accountKey)) ||
+            (Boolean(item.accountId && candidate.accountId) && (candidate.accountId === item.accountId || maskSaxoIdentifier(candidate.accountId) === item.accountId))
+            || (Boolean(item.accountNumber && candidate.accountNumber) && (candidate.accountNumber === item.accountNumber || maskSaxoIdentifier(candidate.accountNumber) === item.accountNumber))
+          ),
       );
       if (!mapping || (mapping.mappedCode !== "P" && mapping.mappedCode !== "N")) return item;
       return { ...item, accountCode: mapping.mappedCode };

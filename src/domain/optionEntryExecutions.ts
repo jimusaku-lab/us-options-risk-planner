@@ -70,6 +70,9 @@ export type OptionEntryExecutionSummary = {
   basis: "saxo_broker_statement" | "estimated";
   grossPremiumJPY?: number;
   grossPremiumUSD?: number;
+  cashBookedAmountJPY?: number;
+  cashTransactionCostJPY?: number;
+  currencyConversionCostJPY?: number;
   transactionCostJPY?: number;
   commissionUSD?: number;
   netPremiumJPY?: number;
@@ -124,40 +127,83 @@ function asCost(value: number | undefined): number {
   return Math.abs(value);
 }
 
+function isFiniteNumber(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value);
+}
+
+function getEntryExecutionCashTransactionCostJPY(execution: OptionEntryExecution): number | undefined {
+  if (isFiniteNumber(execution.brokerTransactionCostJPY)) return asCost(execution.brokerTransactionCostJPY);
+  const components = [
+    execution.commissionJPY,
+    execution.brokerFeeJPY,
+    execution.brokerExchangeFeeJPY,
+    execution.brokerOtherTransactionCostJPY,
+    execution.brokerTaxIncludedFeeJPY,
+  ].filter(isFiniteNumber);
+  if (components.length === 0) return undefined;
+  return components.reduce((sum, value) => sum + asCost(value), 0);
+}
+
+function getEntryExecutionEconomicTransactionCostJPY(execution: OptionEntryExecution): number | undefined {
+  if (isFiniteNumber(execution.brokerTotalTransactionCostJPY)) return asCost(execution.brokerTotalTransactionCostJPY);
+  const costs: number[] = [];
+  const cashCost = getEntryExecutionCashTransactionCostJPY(execution);
+  if (cashCost !== undefined) costs.push(cashCost);
+  if (isFiniteNumber(execution.brokerCurrencyConversionCostJPY)) costs.push(asCost(execution.brokerCurrencyConversionCostJPY));
+  if (costs.length === 0) return undefined;
+  return costs.reduce((sum, value) => sum + value, 0);
+}
+
 export function calculateOptionEntryExecutionSummary(simulation: TradeSimulation): OptionEntryExecutionSummary | null {
   const executions = getOptionEntryExecutions(simulation);
   if (executions.length === 0) return null;
   const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
   const hasPBrokerValues =
     !isN &&
-    executions.some((execution) => execution.brokerPremiumJPY !== undefined || execution.brokerTransactionCostJPY !== undefined || execution.brokerBookedAmountJPY !== undefined);
+    executions.some(
+      (execution) =>
+        execution.brokerPremiumJPY !== undefined ||
+        execution.brokerTransactionCostJPY !== undefined ||
+        execution.brokerCurrencyConversionCostJPY !== undefined ||
+        execution.brokerTotalTransactionCostJPY !== undefined ||
+        execution.brokerBookedAmountJPY !== undefined,
+    );
 
   if (!isN && !hasPBrokerValues) return null;
 
   if (hasPBrokerValues) {
+    const hasCashTransactionCostEvidence = executions.some((execution) => getEntryExecutionCashTransactionCostJPY(execution) !== undefined);
+    const hasEconomicTransactionCostEvidence = executions.some((execution) => getEntryExecutionEconomicTransactionCostJPY(execution) !== undefined);
     const grossPremiumJPY = executions.reduce((sum, execution) => {
       const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
       if (execution.brokerPremiumJPY !== undefined) return sum + execution.brokerPremiumJPY;
       return sum + signedLegMultiplier(leg) * execution.fillPriceUSD * CONTRACT_SIZE * execution.contracts * (execution.brokerExchangeRateJPY ?? simulation.fxRateJPY);
     }, 0);
-    const transactionCostJPY = executions.reduce((sum, execution) => {
-      if (execution.brokerTransactionCostJPY !== undefined) return sum + asCost(execution.brokerTransactionCostJPY);
-      return (
-        sum +
-        asCost(execution.commissionJPY) +
-        asCost(execution.brokerFeeJPY) +
-        asCost(execution.brokerExchangeFeeJPY) +
-        asCost(execution.brokerTaxIncludedFeeJPY)
-      );
-    }, 0);
+    const cashBookedAmountJPY = executions.some((execution) => execution.brokerBookedAmountJPY !== undefined)
+      ? executions.reduce((sum, execution) => sum + (execution.brokerBookedAmountJPY ?? 0), 0)
+      : undefined;
+    const cashTransactionCostJPY = hasCashTransactionCostEvidence
+      ? executions.reduce((sum, execution) => sum + (getEntryExecutionCashTransactionCostJPY(execution) ?? 0), 0)
+      : undefined;
+    const currencyConversionCostJPY = executions.some((execution) => isFiniteNumber(execution.brokerCurrencyConversionCostJPY))
+      ? executions.reduce((sum, execution) => sum + asCost(execution.brokerCurrencyConversionCostJPY), 0)
+      : undefined;
+    const transactionCostJPY = hasEconomicTransactionCostEvidence
+      ? executions.reduce((sum, execution) => sum + (getEntryExecutionEconomicTransactionCostJPY(execution) ?? 0), 0)
+      : undefined;
+    const netPremiumJPY =
+      transactionCostJPY !== undefined
+        ? grossPremiumJPY - transactionCostJPY
+        : cashBookedAmountJPY ?? grossPremiumJPY;
     return {
       executions,
       basis: "saxo_broker_statement",
       grossPremiumJPY,
+      cashBookedAmountJPY,
+      cashTransactionCostJPY,
+      currencyConversionCostJPY,
       transactionCostJPY,
-      netPremiumJPY: executions.some((execution) => execution.brokerBookedAmountJPY !== undefined)
-        ? executions.reduce((sum, execution) => sum + (execution.brokerBookedAmountJPY ?? 0), 0)
-        : grossPremiumJPY,
+      netPremiumJPY,
     };
   }
 
@@ -186,9 +232,12 @@ export function getEntryExecutionCostForLegUSD(simulation: TradeSimulation, leg:
   const execution = getOptionEntryExecutions(simulation).find((item) => item.legId === leg.id);
   if (!execution) return undefined;
   const proportion = contracts / Math.max(1, execution.contracts || leg.quantity);
-  if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" && execution.brokerTransactionCostJPY !== undefined) {
+  const jpyEconomicCost = simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT"
+    ? getEntryExecutionEconomicTransactionCostJPY(execution)
+    : undefined;
+  if (jpyEconomicCost !== undefined) {
     const fxRate = execution.brokerExchangeRateJPY || simulation.fxRateJPY || 1;
-    return asCost(execution.brokerTransactionCostJPY) / fxRate * proportion;
+    return jpyEconomicCost / fxRate * proportion;
   }
   return asCost(execution.commissionUSD) * proportion;
 }
@@ -197,7 +246,8 @@ export function getEntryExecutionCostForLegJPY(simulation: TradeSimulation, leg:
   const execution = getOptionEntryExecutions(simulation).find((item) => item.legId === leg.id);
   if (!execution) return undefined;
   const proportion = contracts / Math.max(1, execution.contracts || leg.quantity);
-  if (execution.brokerTransactionCostJPY !== undefined) return asCost(execution.brokerTransactionCostJPY) * proportion;
+  const economicCost = getEntryExecutionEconomicTransactionCostJPY(execution);
+  if (economicCost !== undefined) return economicCost * proportion;
   if (execution.commissionJPY !== undefined) return asCost(execution.commissionJPY) * proportion;
   if (execution.commissionUSD !== undefined) return asCost(execution.commissionUSD) * (execution.referenceFxRateJPY ?? execution.brokerExchangeRateJPY ?? simulation.fxRateJPY) * proportion;
   return undefined;

@@ -3,6 +3,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CandidatePanel } from "./CandidatePanel";
 import type { CandidateSymbol } from "@/types/candidates";
 
+const apiMocks = vi.hoisted(() => ({
+  fetchMoomooScreeningStatus: vi.fn(),
+  runMoomooScreening: vi.fn(),
+  fetchLastMoomooScreeningResult: vi.fn(),
+  probeMoomooOptionData: vi.fn(),
+}));
+
+vi.mock("@/features/moomoo/moomooScreeningApiClient", () => ({
+  ...apiMocks,
+  MoomooScreeningApiError: class MoomooScreeningApiError extends Error {
+    userMessage: string;
+    constructor(message: string, options?: { userMessage?: string }) {
+      super(message);
+      this.name = "MoomooScreeningApiError";
+      this.userMessage = options?.userMessage ?? message;
+    }
+  },
+}));
+
 const baseProps = {
   candidates: [] as CandidateSymbol[],
   importWarnings: [] as string[],
@@ -13,13 +32,12 @@ const baseProps = {
   onWatchOnly: vi.fn(),
   onCreateSimulation: vi.fn(),
   onJournalChange: vi.fn(),
-  onChecklistChange: vi.fn(),
   onDraftReviewChecklistChange: vi.fn(),
 };
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
+  vi.clearAllMocks();
 });
 
 describe("CandidatePanel", () => {
@@ -27,62 +45,15 @@ describe("CandidatePanel", () => {
     render(<CandidatePanel {...baseProps} />);
 
     expect(screen.getByRole("heading", { name: "スクリーニング候補" })).toBeInTheDocument();
-    expect(screen.getByText(/持ち込みデータからスクリーニング候補を確認/)).toBeInTheDocument();
-    expect(screen.getByText(/外部自動取得に接続せず/)).toBeInTheDocument();
+    expect(screen.getByText(/moomooスクリーニング候補を確認/)).toBeInTheDocument();
+    expect(screen.getByText(/ローカル版ではOpenD Read-only取得/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /候補ファイル取込/ })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "サンプルを読み込む" }).length).toBeGreaterThan(0);
-    expect(screen.getByRole("link", { name: "サンプルJSONを開く" })).toHaveAttribute("href", "/samples/us-options-screening-sample-levels-v1.json");
+    expect(screen.getByRole("button", { name: "moomoo自動取得" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Option probe" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "スクリーニング候補を閉じる" })).toBeInTheDocument();
-    expect(screen.getByText(/まずはサンプルで候補画面を試せます/)).toBeInTheDocument();
-    expect(screen.getByText(/候補は売買推奨ではなく確認用の分類/)).toBeInTheDocument();
+    expect(screen.getByText(/moomoo候補JSON\/CSV、または互換CSV/)).toBeInTheDocument();
     expect(screen.queryByText(/TradingView/)).not.toBeInTheDocument();
     expect(screen.queryByText(/tradingview_candidates/)).not.toBeInTheDocument();
-  });
-
-  it("loads the bundled public sample through the existing import path", async () => {
-    const onImport = vi.fn();
-    const samplePackage = {
-      schemaVersion: "us_options_screening_package.v1",
-      generatedAt: "2026-07-05T09:30:00+09:00",
-      source: "manual",
-      dataPolicy: { userProvided: true, containsCredentials: false, redistributionChecked: true },
-      candidates: [
-        {
-          symbol: "PSAMPLE",
-          name: "Public Sample",
-          market: "US",
-          underlyingPrice: 100,
-          priceAsOf: "2026-07-05T09:30:00+09:00",
-        },
-      ],
-    };
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true,
-      text: async () => JSON.stringify(samplePackage),
-    })));
-
-    render(<CandidatePanel {...baseProps} onImport={onImport} />);
-
-    fireEvent.click(screen.getAllByRole("button", { name: "サンプルを読み込む" })[0]);
-
-    await waitFor(() => expect(onImport).toHaveBeenCalledTimes(1));
-    expect(fetch).toHaveBeenCalledWith("/samples/us-options-screening-sample-levels-v1.json", { cache: "no-store" });
-    expect(onImport.mock.calls[0][0][0]).toMatchObject({ symbol: "PSAMPLE", company: "Public Sample" });
-    expect(screen.getByText(/サンプル読込済み 1\/1件/)).toBeInTheDocument();
-  });
-
-  it("shows a status message when bundled sample loading fails", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: false,
-      status: 404,
-      text: async () => "",
-    })));
-
-    render(<CandidatePanel {...baseProps} />);
-
-    fireEvent.click(screen.getAllByRole("button", { name: "サンプルを読み込む" })[0]);
-
-    expect(await screen.findByText(/サンプルJSONを取得できませんでした。HTTP 404/)).toBeInTheDocument();
   });
 
   it("renders candidates with new moomoo source names without breaking actions", () => {
@@ -212,9 +183,10 @@ describe("CandidatePanel", () => {
 
     expect(screen.getByText("取込済み候補")).toBeInTheDocument();
     expect(screen.getByText("1/2件")).toBeInTheDocument();
-    expect(screen.getAllByText("確認優先度").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("コール買い").length).toBeGreaterThan(0);
-    expect(screen.getByText("未確認事項")).toBeInTheDocument();
+    expect(screen.getByText("コール買い: 候補")).toBeInTheDocument();
+    expect(screen.getByText("株価時点不足")).toBeInTheDocument();
+    expect(screen.queryByText("long_call: fit")).not.toBeInTheDocument();
+    expect(screen.queryByText("priceAsOf")).not.toBeInTheDocument();
   });
 
   it("shows public screening completeness, chart, strategy suitability, and draft status in the list", () => {
@@ -282,58 +254,11 @@ describe("CandidatePanel", () => {
     render(<CandidatePanel {...baseProps} candidates={[candidate]} />);
 
     expect(screen.getByText("L4 建玉案レビュー可")).toBeInTheDocument();
-    expect(screen.getAllByText(/上昇継続/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/信頼度: 高/).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/bullish_continuation/)).not.toBeInTheDocument();
-    expect(screen.getAllByText("建玉案レビュー可").length).toBeGreaterThan(0);
-    expect(screen.getByText(/コール買い \/ 手動確認/)).toBeInTheDocument();
-    expect(screen.getByText("上位理由")).toBeInTheDocument();
-    expect(screen.getByText("減点理由")).toBeInTheDocument();
-    expect(screen.getByText("未確認事項")).toBeInTheDocument();
-  });
-
-  it("shows review state and requires explicit proceed when required checks are unfinished", () => {
-    const onCreateSimulation = vi.fn();
-    const candidate: CandidateSymbol = {
-      id: "public-MSFT-review",
-      source: "manual_import",
-      importedAt: "2026-07-05T09:00:00+09:00",
-      rank: 1,
-      symbol: "MSFT",
-      company: "Microsoft",
-      priceUSD: 500,
-      score: 90,
-      suggestedUse: "long call review",
-      strategyPrecisionReviews: [
-        {
-          strategy: "long_call",
-          level: "manual_review_required",
-          chartGate: { level: "pass", reasons: ["週足が上向き"], warnings: [] },
-          expiryReview: { level: "pass", targetDteRange: [150, 9999], actualDte: 180, reasons: ["DTE ok"], warnings: [] },
-          strikeReview: { level: "pass", targetStrikeRatioRange: [1, 1.05], actualStrikeRatio: 1.02, reasons: ["strike ok"], warnings: [] },
-          liquidityReview: { level: "pass", reasons: ["Askあり"], warnings: [] },
-          capitalReview: { level: "pass", reasons: ["最大損失確認"], warnings: [] },
-          manualReviewReasons: [],
-          avoidReasons: [],
-          nextChecks: [],
-          checklist: ["チャート根拠を確認した", "証券会社画面の価格を最終確認する"],
-        },
-      ],
-    };
-
-    render(<CandidatePanel {...baseProps} candidates={[candidate]} onCreateSimulation={onCreateSimulation} />);
-
-    expect(screen.getAllByText("要確認").length).toBeGreaterThan(0);
-    expect(screen.getByText((_, element) => element?.textContent === "確認0/2 必須未確認 2")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTitle("コール買い候補として建玉案を作成"));
-
-    expect(screen.getByRole("dialog", { name: "建玉案レビュー前確認" })).toBeInTheDocument();
-    expect(onCreateSimulation).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "未確認を理解して建玉案レビューへ進む" }));
-
-    expect(onCreateSimulation).toHaveBeenCalledWith(candidate, "long_call");
+    expect(screen.getAllByText("上昇継続").length).toBeGreaterThan(0);
+    expect(screen.getByText("信頼度: 高")).toBeInTheDocument();
+    expect(screen.getByText("建玉案レビュー可")).toBeInTheDocument();
+    expect(screen.getByText("コール買い: 手動確認")).toBeInTheDocument();
+    expect(screen.queryByText("bullish_continuation")).not.toBeInTheDocument();
   });
 
   it("calls onClose from the panel close button", () => {
@@ -343,5 +268,226 @@ describe("CandidatePanel", () => {
     fireEvent.click(getByRole("button", { name: "スクリーニング候補を閉じる" }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("previews moomoo API results without importing until the user applies them", async () => {
+    const onImport = vi.fn();
+    const previewCandidate: CandidateSymbol = {
+      id: "moomoo_opend-NVDA-1",
+      source: "moomoo_opend",
+      importedAt: "2026-06-30T09:01:00+09:00",
+      rank: 1,
+      symbol: "NVDA",
+      company: "NVIDIA",
+      priceUSD: 140,
+      score: 0,
+      suggestedUse: "screening candidate",
+      strategyFitResults: [
+        {
+          strategy: "long_call",
+          fitLevel: "insufficient_data",
+          reasons: [],
+          warnings: [],
+          missingFields: ["optionChainQuality.hasOptionChain"],
+          requiredChecks: [],
+          numericChecks: [],
+        },
+      ],
+      screeningCandidate: {
+        symbol: "NVDA",
+        name: "NVIDIA",
+        market: "US",
+        underlyingPrice: 140,
+        dataSource: "moomoo",
+        delayStatus: "unknown",
+        technicalSnapshot: { trendNotes: [] },
+        optionChainQuality: { hasOptionChain: false, qualityWarnings: ["米国オプション相場権限不足"] },
+        candidateStrategies: [],
+        riskFlags: ["米国オプション権限不足"],
+        missingFields: ["optionChainQuality.hasOptionChain"],
+      },
+    };
+    const summary = {
+      totalRows: 1,
+      importedCount: 1,
+      warningCount: 2,
+      errorCount: 0,
+      source: "moomoo_opend" as const,
+      format: "json" as const,
+      asOf: "2026-06-30T09:00:00+09:00",
+      importedAt: "2026-06-30T09:01:00+09:00",
+    };
+    apiMocks.runMoomooScreening.mockResolvedValue({
+      raw: {
+        asOf: "2026-06-30T09:00:00+09:00",
+        permissions: { usStock: "ok", usOption: "permission_missing" },
+        run: { status: "partial", processedSymbols: 1 },
+        warnings: ["米国オプション相場権限不足"],
+      },
+      importResult: {
+        candidates: [previewCandidate],
+        warnings: ["米国オプション相場権限不足"],
+        summary,
+      },
+    });
+
+    render(<CandidatePanel {...baseProps} onImport={onImport} />);
+
+    fireEvent.change(screen.getByPlaceholderText("NVDA, MSFT"), { target: { value: "NVDA" } });
+    fireEvent.click(screen.getByRole("button", { name: "moomoo自動取得" }));
+
+    await screen.findByText("取得結果プレビュー");
+    expect(onImport).not.toHaveBeenCalled();
+    expect(screen.getByText("権限不足")).toBeInTheDocument();
+    expect(screen.getByText(/米国オプション相場権限が不足/)).toBeInTheDocument();
+    expect(screen.getAllByText(/データ不足/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "候補リストへ反映" }));
+
+    expect(onImport).toHaveBeenCalledTimes(1);
+    expect(onImport).toHaveBeenCalledWith([previewCandidate], ["米国オプション相場権限不足"], summary);
+  });
+
+  it("shows local API startup guidance when status check fails", async () => {
+    apiMocks.fetchMoomooScreeningStatus.mockRejectedValue(
+      new Error("moomooスクリーニングAPIが起動していません。ローカル版で `npm run dev:moomoo-screening-api` を起動してください。"),
+    );
+
+    render(<CandidatePanel {...baseProps} />);
+    fireEvent.click(screen.getByRole("button", { name: "状態確認" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/npm run dev:moomoo-screening-api/)).toBeInTheDocument();
+    });
+  });
+
+  it("shows option data probe permission gate without importing candidates", async () => {
+    const onImport = vi.fn();
+    apiMocks.probeMoomooOptionData.mockResolvedValue({
+      schemaVersion: "us_options_moomoo_option_data_probe.v1",
+      readOnly: true,
+      asOf: "2026-07-06T09:00:00+09:00",
+      status: "permission_missing",
+      permissions: { usStock: "unknown", usOption: "permission_missing" },
+      checked: {
+        symbols: ["NVDA"],
+        expirationDateApi: "permission_missing",
+        optionScreenApi: "not_checked",
+        optionChainApi: "not_checked",
+        optionQuoteApi: "not_checked",
+      },
+      counts: {
+        normalizedOptionCandidates: 0,
+        candidatesWithBidAsk: 0,
+        candidatesWithOiVolume: 0,
+        candidatesWithIvGreeks: 0,
+      },
+      sampleFieldPresence: {
+        bid: false,
+        ask: false,
+        last: false,
+        volume: false,
+        openInterest: false,
+        impliedVolatility: false,
+        delta: false,
+        gamma: false,
+        theta: false,
+        vega: false,
+      },
+      warnings: ["米国オプション相場権限不足"],
+    });
+
+    render(<CandidatePanel {...baseProps} onImport={onImport} />);
+    fireEvent.change(screen.getByPlaceholderText("NVDA, MSFT"), { target: { value: "NVDA" } });
+    fireEvent.click(screen.getByRole("button", { name: "Option probe" }));
+
+    await screen.findByText("オプションデータ確認");
+    expect(apiMocks.probeMoomooOptionData).toHaveBeenCalledWith({ symbols: ["NVDA"], maxSymbols: 3 });
+    expect(screen.getAllByText("権限不足").length).toBeGreaterThan(0);
+    expect(screen.getByText(/成功系として扱いません/)).toBeInTheDocument();
+    expect(screen.getByText(/Level 3-4 \/ PositionDraft \/ option quote lookupの成功系/)).toBeInTheDocument();
+    expect(onImport).not.toHaveBeenCalled();
+  });
+
+  it("runs moomoo stock screening mode as preview only until explicit import", async () => {
+    const onImport = vi.fn();
+    const previewCandidate: CandidateSymbol = {
+      id: "moomoo-opend-NVDA-1",
+      source: "moomoo_opend",
+      importedAt: "2026-07-05T09:01:00+09:00",
+      rank: 1,
+      symbol: "NVDA",
+      company: "NVIDIA",
+      priceUSD: 194,
+      marketCapUSD: 4_700_000_000_000,
+      relativeVolume: 0.9,
+      score: 70,
+      suggestedUse: "moomoo local screening level_2_chart_ready",
+      screeningCompleteness: {
+        level: "level_2_chart_ready",
+        canClassifyStrategy: true,
+        canAnalyzeChart: true,
+        canEvaluateOptionLiquidity: false,
+        canCreatePositionDraft: false,
+        missingFields: ["optionCandidates.bidAsk"],
+        warnings: [],
+      },
+    };
+    apiMocks.runMoomooScreening.mockResolvedValue({
+      raw: {
+        asOf: "2026-07-05T09:00:00+09:00",
+        permissions: { usStock: "ok", usOption: "unknown" },
+        run: { status: "ok", processedSymbols: 1 },
+        universe: {
+          mode: "stock_screen",
+          preset: "large_liquid_core",
+          screenMatchedCount: 2703,
+          screenReturnedCount: 1,
+          snapshotRequestedCount: 1,
+          historyRequestedCount: 1,
+          optionRequestedCount: 0,
+          quota: { status: "ok", remain: 97 },
+        },
+        warnings: [],
+      },
+      importResult: {
+        candidates: [previewCandidate],
+        warnings: [],
+        summary: {
+          totalRows: 1,
+          importedCount: 1,
+          warningCount: 0,
+          errorCount: 0,
+          source: "moomoo_opend",
+          format: "json",
+          asOf: "2026-07-05T09:00:00+09:00",
+          importedAt: "2026-07-05T09:01:00+09:00",
+        },
+      },
+    });
+
+    render(<CandidatePanel {...baseProps} onImport={onImport} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "条件でスクリーニング" }));
+    fireEvent.change(screen.getByLabelText("プリセット"), { target: { value: "bullish_pullback" } });
+    fireEvent.change(screen.getByLabelText("取得上限"), { target: { value: "12" } });
+    fireEvent.change(screen.getByLabelText("履歴足上限"), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "moomoo自動取得" }));
+
+    await screen.findByText("取得結果プレビュー");
+    expect(apiMocks.runMoomooScreening).toHaveBeenCalledWith(expect.objectContaining({
+      universeMode: "stock_screen",
+      stockScreenPreset: "bullish_pullback",
+      maxScreenResults: 12,
+      maxHistorySymbols: 4,
+      includeOptions: false,
+    }));
+    expect(onImport).not.toHaveBeenCalled();
+    expect(screen.getAllByText("条件でスクリーニング").length).toBeGreaterThan(0);
+    expect(screen.queryByText("stock_screen")).not.toBeInTheDocument();
+    expect(screen.getByText("2703")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "候補リストへ反映" }));
+    expect(onImport).toHaveBeenCalledTimes(1);
   });
 });
