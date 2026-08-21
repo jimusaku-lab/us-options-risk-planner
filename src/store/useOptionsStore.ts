@@ -22,8 +22,14 @@ import {
 } from "@/domain/optionCloseExecutions";
 import { normalizeStockSettlement } from "@/domain/stockSettlementState";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
-import { DEFAULT_N_OPTION_STANDARD_COMMISSION_USD } from "@/domain/optionEntryExecutions";
+import { DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, migrateNOptionEntryStandardCommissions } from "@/domain/optionEntryExecutions";
 import { finalizeSyntheticForwardParent } from "@/domain/compositeOptionPosition";
+import {
+  isNShortPutWheelSimulation,
+  isOpenNShortPutWheelSimulation,
+  normalizeWheelTicker,
+  reconcileWheelDerivedState,
+} from "@/domain/wheelReconciliation";
 
 export type WorkspaceMode = "demo" | "live";
 
@@ -178,13 +184,14 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
       simulation.brokerMarginUSD ??
       (accountEnvironment === "PROD_N_USD_SETTLEMENT" && simulation.fxRateJPY > 0 ? simulation.brokerMarginJPY / simulation.fxRateJPY : undefined),
   };
-  const exitOrderPlan = normalizeExitOrderPlan(normalized);
+  const migrated = migrateNOptionEntryStandardCommissions(normalized);
+  const exitOrderPlan = normalizeExitOrderPlan(migrated);
   const exitOrderPlans = normalizeExitOrderPlans({ ...normalized, exitOrderPlan });
   return finalizeSyntheticForwardParent(sanitizeSaxoHistoryCloseExecutions({
-    ...normalized,
-    stockSettlement: normalizeStockSettlement(normalized.stockSettlement),
-    optionEntryExecutions: normalized.optionEntryExecutions ?? [],
-    optionCloseExecutions: normalizeOptionCloseExecutionsForStatus(normalized.optionCloseExecutions, normalized.status),
+    ...migrated,
+    stockSettlement: normalizeStockSettlement(migrated.stockSettlement),
+    optionEntryExecutions: migrated.optionEntryExecutions ?? [],
+    optionCloseExecutions: normalizeOptionCloseExecutionsForStatus(migrated.optionCloseExecutions, migrated.status),
     exitOrderPlan,
     exitOrderPlans,
     profitTakeRule: normalized.profitTakeRule ?? {
@@ -210,6 +217,14 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
             : exitOrderPlan.stopLossBuybackPriceUSD ?? 0,
     },
   }));
+}
+
+/**
+ * Persist only the confirmed N-leg commission correction and any safely-derived
+ * synthetic parent totals that it changes. Other normalization remains in-memory.
+ */
+export function migrateStoredLiveSimulation(simulation: TradeSimulation): TradeSimulation {
+  return finalizeSyntheticForwardParent(migrateNOptionEntryStandardCommissions(simulation));
 }
 
 function normalizeAccountInputs(value: unknown, fallback: AccountInputs): AccountInputs {
@@ -278,6 +293,7 @@ function normalizeWheelCycle(cycle: LegacyWheelCycle): WheelCycle {
     openedAt: cycle.openedAt ?? formatLocalDate(),
     closedAt: cycle.closedAt,
     memo: cycle.memo,
+    reconciliationVersion: cycle.reconciliationVersion,
   };
 }
 
@@ -285,9 +301,10 @@ function repairWheelCyclePhase(cycle: WheelCycle, simulations: TradeSimulation[]
   const linkedSimulations = cycle.linkedSimulationIds
     .map((id) => simulations.find((simulation) => simulation.id === id))
     .filter((simulation): simulation is TradeSimulation => Boolean(simulation));
-  const openNShortPuts = simulations.filter(isOpenNShortPut);
   const openNShortPut =
-    linkedSimulations.find(isOpenNShortPut) ??
+    linkedSimulations.find(
+      (simulation) => isOpenNShortPut(simulation) && normalizeWheelTicker(simulation.ticker) === normalizeWheelTicker(cycle.ticker),
+    ) ??
     simulations.find(
       (simulation) =>
         isOpenNShortPut(simulation) &&
@@ -296,13 +313,7 @@ function repairWheelCyclePhase(cycle: WheelCycle, simulations: TradeSimulation[]
         cycle.currentAccountCode === "N" &&
         cycle.currentShares <= 0 &&
         ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase),
-    ) ??
-    (openNShortPuts.length === 1 &&
-    cycle.currentAccountCode === "N" &&
-    cycle.currentShares <= 0 &&
-    ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase)
-      ? openNShortPuts[0]
-      : undefined);
+    );
   if (openNShortPut) {
     return withRecalculatedWheelCycleFees({
       ...cycle,
@@ -432,11 +443,7 @@ function findRelatedWheelCycle(
 }
 
 function isOpenNShortPut(simulation: TradeSimulation): boolean {
-  return (
-    simulation.strategyType === "short_put" &&
-    simulation.status === "open" &&
-    (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" || simulation.accountCode === "N")
-  );
+  return isOpenNShortPutWheelSimulation(simulation);
 }
 
 function calculateShortPutPremiumUSD(simulation: TradeSimulation): number {
@@ -521,32 +528,6 @@ function updateWheelEventFee(
   );
 }
 
-function findRelatedNShortPutWheelCycle(
-  simulation: TradeSimulation,
-  wheelCycles: WheelCycle[],
-): WheelCycle | undefined {
-  const ticker = simulation.ticker.toUpperCase();
-  const eligibleCycles = wheelCycles.filter(
-    (cycle) =>
-      cycle.currentAccountCode === "N" &&
-      cycle.currentShares <= 0 &&
-      ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase),
-  );
-  return (
-    wheelCycles.find((cycle) => cycle.linkedSimulationIds.includes(simulation.id)) ??
-    (simulation.ticker.trim() !== ""
-      ? wheelCycles.find(
-      (cycle) =>
-        cycle.ticker.toUpperCase() === ticker &&
-        cycle.currentAccountCode === "N" &&
-        cycle.currentShares <= 0 &&
-        ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase),
-    )
-      : undefined) ??
-    (eligibleCycles.length === 1 ? eligibleCycles[0] : undefined)
-  );
-}
-
 export function syncWheelCycleWithNShortPutSimulation(params: {
   simulation: TradeSimulation;
   wheelCycles: WheelCycle[];
@@ -554,80 +535,14 @@ export function syncWheelCycleWithNShortPutSimulation(params: {
   workspace: WorkspaceMode;
   simulations?: TradeSimulation[];
 }): { wheelCycles: WheelCycle[]; wheelEvents: WheelEvent[] } {
-  const { simulation, workspace } = params;
-  if (!isOpenNShortPut(simulation)) return params;
-
-  let wheelCycles = params.wheelCycles;
-  let wheelEvents = params.wheelEvents;
-  const premiumUSD = calculateShortPutPremiumUSD(simulation);
-  const feesUSD = calculateShortPutFeesUSD(simulation);
-  const existingCycle = findRelatedNShortPutWheelCycle(simulation, wheelCycles);
-  const targetCycle: WheelCycle =
-    existingCycle ??
-    {
-      id: `wheel-${workspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      ticker: simulation.ticker,
-      primaryAccountCode: "N",
-      currentPhase: "n_cash",
-      currentAccountCode: "N",
-      currentShares: 0,
-      averageCostUSD: 0,
-      usdCashImpact: 0,
-      cumulativePremiumUSD: 0,
-      cumulativeStockRealizedPnlUSD: 0,
-      cumulativeFeesUSD: 0,
-      cumulativeTotalPnlUSD: 0,
-      referenceFxRateJPY: simulation.referenceFxRateJPY ?? simulation.fxRateJPY,
-      eventIds: [],
-      linkedSimulationIds: [],
-      openedAt: simulation.entryDate,
-    };
-
-  const alreadyOpened = wheelEvents.some(
-    (event) => event.type === "short_put_opened" && event.linkedSimulationId === simulation.id,
-  );
-  const nextEventIds = new Set(targetCycle.eventIds);
-  const nextLinkedSimulationIds = new Set([...targetCycle.linkedSimulationIds, simulation.id]);
-
-  if (!alreadyOpened) {
-    const event: WheelEvent = {
-      id: `wheel-event-${workspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      wheelCycleId: targetCycle.id,
-      type: "short_put_opened",
-      occurredAt: simulation.entryDate,
-      accountCode: "N",
-      description: `${simulation.ticker} N口座プット売りを建玉開始`,
-      feeUSD: feesUSD,
-      usdPnl: 0,
-      phaseAfter: "n_short_put",
-      linkedSimulationId: simulation.id,
-    };
-    wheelEvents = [event, ...wheelEvents];
-    nextEventIds.add(event.id);
-  } else {
-    wheelEvents = updateWheelEventFee(wheelEvents, "short_put_opened", simulation.id, feesUSD);
-  }
-
-  const nextCycle = withRecalculatedWheelCycleFees({
-    ...targetCycle,
-    currentPhase: "n_short_put",
-    currentAccountCode: "N",
-    currentShares: 0,
-    referenceFxRateJPY: targetCycle.referenceFxRateJPY ?? simulation.referenceFxRateJPY ?? simulation.fxRateJPY,
-    cumulativePremiumUSD: alreadyOpened ? targetCycle.cumulativePremiumUSD : targetCycle.cumulativePremiumUSD + premiumUSD,
-    cumulativeFeesUSD: targetCycle.cumulativeFeesUSD,
-    cumulativeTotalPnlUSD: alreadyOpened ? targetCycle.cumulativeTotalPnlUSD : targetCycle.cumulativeTotalPnlUSD + premiumUSD - feesUSD,
-    usdCashImpact: alreadyOpened ? targetCycle.usdCashImpact : targetCycle.usdCashImpact + premiumUSD - feesUSD,
-    closedAt: undefined,
-    memo: "現在はN口座プット売り建玉を管理中です。満期保有、買戻し、または権利行使時の株式取得を確認します。",
-    eventIds: Array.from(nextEventIds),
-    linkedSimulationIds: Array.from(nextLinkedSimulationIds),
-  }, params.simulations ?? [simulation]);
-
-  wheelCycles = existingCycle
-    ? wheelCycles.map((cycle) => (cycle.id === targetCycle.id ? nextCycle : cycle))
-    : [nextCycle, ...wheelCycles];
-  return { wheelCycles, wheelEvents };
+  if (!isNShortPutWheelSimulation(params.simulation)) return params;
+  const result = reconcileWheelDerivedState({
+    cycles: params.wheelCycles,
+    events: params.wheelEvents,
+    simulations: params.simulations ?? [params.simulation],
+    workspace: params.workspace,
+  });
+  return { wheelCycles: result.cycles, wheelEvents: result.events };
 }
 
 export function syncWheelCycleWithCoveredCallSimulation(params: {
@@ -848,7 +763,8 @@ const storedSettings = loadJson<AppSettings>(SETTINGS_KEY, {
   defaultNOptionCommissionUSD: DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
 });
 
-const initialSettings: AppSettings = {
+export function normalizeStoredSettings(storedSettings: AppSettings): AppSettings {
+  return {
   ...storedSettings,
   defaultNisaExpectedAnnualReturnPct:
     storedSettings.defaultNisaExpectedAnnualReturnPct === 6
@@ -858,9 +774,14 @@ const initialSettings: AppSettings = {
     typeof storedSettings.defaultNOptionCommissionUSD === "number" &&
     Number.isFinite(storedSettings.defaultNOptionCommissionUSD) &&
     storedSettings.defaultNOptionCommissionUSD >= 0
-      ? storedSettings.defaultNOptionCommissionUSD
+      ? storedSettings.defaultNOptionCommissionUSD === 2.25
+        ? DEFAULT_N_OPTION_STANDARD_COMMISSION_USD
+        : storedSettings.defaultNOptionCommissionUSD
       : DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
-};
+  };
+}
+const initialSettings: AppSettings = normalizeStoredSettings(storedSettings);
+if (storedSettings.defaultNOptionCommissionUSD === 2.25) saveJson(SETTINGS_KEY, initialSettings);
 
 function createBlankSimulation(workspace: WorkspaceMode, settings: AppSettings): TradeSimulation {
   const today = new Date();
@@ -960,23 +881,21 @@ function loadInitialSimulations(): Record<WorkspaceMode, TradeSimulation[]> {
     demo: legacy && legacy.length > 0 ? legacy : [sampleAmznSimulation],
     live: [],
   });
+  const migratedLive = loaded.live.map(migrateStoredLiveSimulation);
+  const didMigrateLive = migratedLive.some((simulation, index) => simulation !== loaded.live[index]);
+  if (didMigrateLive) saveJson(SIMULATIONS_KEY, { ...loaded, live: migratedLive });
   return {
     demo: loaded.demo.map((simulation) => normalizeSimulation(simulation, "demo")),
-    live: loaded.live.map((simulation) => normalizeSimulation(simulation, "live")),
+    live: migratedLive.map((simulation) => normalizeSimulation(simulation, "live")),
   };
 }
 
-function loadInitialWheelCycles(simulationsByWorkspace: Record<WorkspaceMode, TradeSimulation[]>): Record<WorkspaceMode, WheelCycle[]> {
+function loadInitialWheelCycles(): Record<WorkspaceMode, WheelCycle[]> {
   const loaded = loadJson<Record<WorkspaceMode, WheelCycle[]>>(WHEEL_KEY, {
     demo: [],
     live: [],
   });
-  const repaired = {
-    demo: loaded.demo.map(normalizeWheelCycle).map((cycle) => repairWheelCyclePhase(cycle, simulationsByWorkspace.demo)),
-    live: loaded.live.map(normalizeWheelCycle).map((cycle) => repairWheelCyclePhase(cycle, simulationsByWorkspace.live)),
-  };
-  saveJson(WHEEL_KEY, repaired);
-  return repaired;
+  return { demo: loaded.demo.map(normalizeWheelCycle), live: loaded.live.map(normalizeWheelCycle) };
 }
 
 function loadInitialWheelEvents(): Record<WorkspaceMode, WheelEvent[]> {
@@ -1015,8 +934,16 @@ function accountStatesToInputs(accountStates: AccountState[] | undefined, fallba
 
 const initialWorkspace: WorkspaceMode = loadJson<WorkspaceMode>("us-options-active-workspace", "demo");
 const initialSimulationsByWorkspace = loadInitialSimulations();
-const initialWheelCyclesByWorkspace = loadInitialWheelCycles(initialSimulationsByWorkspace);
-const initialWheelEventsByWorkspace = loadInitialWheelEvents();
+const loadedWheelCyclesByWorkspace = loadInitialWheelCycles();
+const loadedWheelEventsByWorkspace = loadInitialWheelEvents();
+const initialDemoWheelReconciliation = reconcileWheelDerivedState({ cycles: loadedWheelCyclesByWorkspace.demo, events: loadedWheelEventsByWorkspace.demo, simulations: initialSimulationsByWorkspace.demo, workspace: "demo" });
+const initialLiveWheelReconciliation = reconcileWheelDerivedState({ cycles: loadedWheelCyclesByWorkspace.live, events: loadedWheelEventsByWorkspace.live, simulations: initialSimulationsByWorkspace.live, workspace: "live" });
+const initialWheelCyclesByWorkspace = { demo: initialDemoWheelReconciliation.cycles, live: initialLiveWheelReconciliation.cycles };
+const initialWheelEventsByWorkspace = { demo: initialDemoWheelReconciliation.events, live: initialLiveWheelReconciliation.events };
+if (initialLiveWheelReconciliation.changed) {
+  saveJson(WHEEL_KEY, initialWheelCyclesByWorkspace);
+  saveJson(WHEEL_EVENTS_KEY, initialWheelEventsByWorkspace);
+}
 const initialStockTransfersByWorkspace = loadInitialStockTransfers();
 const initialAccountInputsByWorkspace = loadInitialAccountInputs();
 const initialSelectedIds: Record<WorkspaceMode, string> = {
@@ -1169,6 +1096,9 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       });
       wheelCycles = shortPutSynced.wheelCycles;
       wheelEvents = shortPutSynced.wheelEvents;
+      const reconciled = reconcileWheelDerivedState({ cycles: wheelCycles, events: wheelEvents, simulations, workspace: state.activeWorkspace });
+      wheelCycles = reconciled.cycles;
+      wheelEvents = reconciled.events;
       const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: wheelCycles };
       const wheelEventsByWorkspace = { ...state.wheelEventsByWorkspace, [state.activeWorkspace]: wheelEvents };
       saveJson(SIMULATIONS_KEY, simulationsByWorkspace);
@@ -1185,10 +1115,14 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
         }, state.activeWorkspace),
       );
       const accountInputs = accountStatesToInputs(incoming.accountStates, state.accountInputsByWorkspace[state.activeWorkspace]);
-      const wheelCycles = (incoming.wheelCycles ?? state.wheelCyclesByWorkspace[state.activeWorkspace])
-        .map(normalizeWheelCycle)
-        .map((cycle) => repairWheelCyclePhase(cycle, simulations));
-      const wheelEvents = incoming.wheelEvents ?? state.wheelEventsByWorkspace[state.activeWorkspace];
+      const reconciled = reconcileWheelDerivedState({
+        cycles: (incoming.wheelCycles ?? state.wheelCyclesByWorkspace[state.activeWorkspace]).map(normalizeWheelCycle),
+        events: incoming.wheelEvents ?? state.wheelEventsByWorkspace[state.activeWorkspace],
+        simulations,
+        workspace: state.activeWorkspace,
+      });
+      const wheelCycles = reconciled.cycles;
+      const wheelEvents = reconciled.events;
       const stockTransfers = incoming.stockTransfers ?? state.stockTransfersByWorkspace[state.activeWorkspace];
       const simulationsByWorkspace = { ...state.simulationsByWorkspace, [state.activeWorkspace]: simulations };
       const accountInputsByWorkspace = { ...state.accountInputsByWorkspace, [state.activeWorkspace]: accountInputs };
@@ -1237,6 +1171,11 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
   createWheelCycleFromSimulation: (simulation) =>
     set((state) => {
       const normalized = normalizeSimulation(simulation, state.activeWorkspace);
+      const isNPutPolicyManaged =
+        (normalized.accountEnvironment === "PROD_N_USD_SETTLEMENT" || normalized.accountCode === "N") &&
+        (normalized.strategyType === "short_put" || normalized.strategyType === "synthetic_forward") &&
+        normalized.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
+      if (isNPutPolicyManaged) return {};
       const existing = state.wheelCyclesByWorkspace[state.activeWorkspace].find(
         (cycle) => cycle.ticker === normalized.ticker && cycle.linkedSimulationIds.includes(normalized.id),
       );

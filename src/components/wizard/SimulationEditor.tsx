@@ -15,6 +15,7 @@ import {
   updateStandardEntryCommissionForContracts,
 } from "@/domain/optionEntryExecutions";
 import { getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardParentFinalization, getSyntheticForwardTicketNetPremiumUSD, isCompositeOptionStrategy, isSyntheticForwardEntrySaved, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "@/domain/compositeOptionPosition";
+import { applySyntheticPutAssignmentPolicy, getSyntheticPutAssignmentPolicy } from "@/domain/currentPositionEstimate";
 import {
   calculateOptionCloseExecutionResults,
   createOptionCloseExecutionDraft,
@@ -368,8 +369,22 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
       stopLossEnabled: isManualExitMode ? legPlan.stopLossEnabled : ["closing_stop", "oco", "ifd_oco"].includes(brokerOrderType),
     });
   };
-  const findEditorFocusInput = (target: HTMLElement | null, anchorId: string): HTMLInputElement | null | undefined => {
+  const findEditorFocusInput = (target: HTMLElement | null, anchorId: string): HTMLElement | null | undefined => {
     if (!target) return null;
+    if (anchorId.startsWith("exit-rule-")) {
+      const legId = anchorId.slice("exit-rule-".length);
+      const leg = shortExitLegs.find((candidate) => candidate.id === legId);
+      const plan = leg ? exitOrderPlans.find((candidate) => candidate.legId === leg.id) ?? getDefaultExitOrderPlanForLeg(leg) : undefined;
+      if (plan) {
+        if (!plan.profitTakeEnabled) return document.getElementById(`exit-rule-profit-take-enabled-${legId}`);
+        if (!plan.stopLossEnabled) return document.getElementById(`exit-rule-stop-loss-enabled-${legId}`);
+        const stopValue = plan.stopLossType === "loss_amount"
+          ? simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? plan.stopLossAmountUSD ?? 0 : plan.stopLossAmountJPY ?? 0
+          : plan.stopLossType === "stock_price_line" ? plan.stopLossStockPriceUSD ?? 0 : plan.stopLossBuybackPriceUSD ?? 0;
+        if (stopValue <= 0) return document.getElementById(`exit-rule-stop-loss-value-${legId}`);
+        if (!plan.latestCloseDaysBeforeExpiryUserSet) return document.getElementById(`exit-rule-close-deadline-${legId}`);
+      }
+    }
     if (anchorId.startsWith("option-close-execution-")) {
       target.querySelector<HTMLDetailsElement>("details")?.setAttribute("open", "");
       return target.querySelector<HTMLInputElement>("#broker-realized-pnl-jpy") ?? target.querySelector<HTMLInputElement>('input[id^="broker-booked-amount-jpy-"]') ?? target.querySelector<HTMLInputElement>("input");
@@ -537,9 +552,13 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
     const execution = optionEntryExecutions.find((entry) => entry.id === executionId);
     if (!execution) return;
     const isNEntry = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+    const hasManualTradeDate = execution.openingFieldSources?.tradeDate === "manual";
+    const hasTradeDateConflict = Boolean(
+      hasManualTradeDate && item.tradeDate && execution.tradeDate && item.tradeDate !== execution.tradeDate,
+    );
     const nextExecution = applySaxoActualEntryCommission({
       ...execution,
-      tradeDate: item.tradeDate ?? execution.tradeDate,
+      tradeDate: hasManualTradeDate ? execution.tradeDate : (item.tradeDate ?? execution.tradeDate),
       contracts: item.quantity !== undefined ? Math.max(1, Math.abs(item.quantity)) : execution.contracts,
       fillPriceUSD: item.price ?? execution.fillPriceUSD,
       brokerBookedAmountJPY: !isNEntry ? item.bookedAmount ?? item.profitLossBase ?? execution.brokerBookedAmountJPY : execution.brokerBookedAmountJPY,
@@ -558,9 +577,13 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
     const missingItems = getEntryExecutionMissingItems(nextExecution, isNEntry);
     updateOptionEntryExecution(executionId, {
       ...nextExecution,
-      historyCompletionStatus: missingItems.length > 0 ? "history_match_missing_fields" : "history_match_complete",
+      historyCompletionStatus: hasTradeDateConflict
+        ? "source_conflict"
+        : missingItems.length > 0 ? "history_match_missing_fields" : "history_match_complete",
       memo:
-        missingItems.length > 0
+        hasTradeDateConflict
+          ? "入力元: 手入力の取引日 + Saxo取引履歴 / 履歴補完: 取引日が競合しています。Saxo画面で確認してください。"
+          : missingItems.length > 0
           ? `入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 要手入力。不足項目: ${missingItems.join("、")}`
           : "入力元: Saxo現在建玉 + Saxo取引履歴 / 履歴補完: 補完済み。正式保存前にSaxo履歴と照合してください。",
     });
@@ -1179,7 +1202,8 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                 </div>
               ) : null}
               {isSaxoFilledSyntheticForward && simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? <p className="mt-2 text-xs font-semibold text-amber-800">実績総手数料は未取得です。建玉中の状態は維持し、3-Aで確認してください。</p> : null}
-              <label className="mt-3 flex items-start gap-2 text-xs font-semibold"><input type="checkbox" checked={simulation.syntheticForwardTicket?.assignmentAccepted ?? false} onChange={(event) => updateSyntheticForwardTicket({ assignmentAccepted: event.target.checked })} />P売りの割当を受容し、同一口座のUSD現金残高を別途確認した</label>
+              <Select label="シンセティックのP売り方針" value={getSyntheticPutAssignmentPolicy(simulation)} onChange={(value) => { if (value === "accept" || value === "avoid") onChange(applySyntheticPutAssignmentPolicy(simulation, value)); }} options={[["unknown", "方針未確認（既存値は変更しない）"], ["accept", "満期まで残して株式取得を許容する"], ["avoid", "満期前にC買い・P売りを二脚とも反対売買で閉じる（株取得しない）"]]} />
+              <label className="mt-3 flex items-start gap-2 text-xs font-semibold"><input type="checkbox" checked={simulation.syntheticForwardTicket?.assignmentAccepted ?? false} onChange={(event) => updateSyntheticForwardTicket({ assignmentAccepted: event.target.checked })} />割当可能性と必要資金を確認した</label>
               <p className="mt-2 text-xs">証拠金余力・買付可能額はUSD現金残高ではありません。割当資金の充足判定には使いません。</p>
             </div>
           ) : null}
@@ -1403,7 +1427,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                 Number.isFinite(execution.brokerBookedAmountJPY) &&
                 (execution.brokerPremiumJPY === undefined || execution.brokerTransactionCostJPY === undefined || execution.brokerExchangeRateJPY === undefined);
               const diagnosticCandidates = getEntryDiagnosticCandidates(execution, entryCandidates, saxoHistoryCandidates);
-              const usdPremium = execution.fillPriceUSD * 100 * execution.contracts;
+              const usdPremium = Math.round((execution.fillPriceUSD * 100 * execution.contracts + Number.EPSILON) * 100) / 100;
               const referenceFxRate = execution.referenceFxRateJPY ?? execution.brokerExchangeRateJPY ?? simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
               const referenceJpy = usdPremium * referenceFxRate - (execution.commissionUSD ?? 0) * referenceFxRate;
               return (
@@ -1587,7 +1611,10 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       label="取引日"
                       value={execution.tradeDate}
                       type="date"
-                      onChange={(tradeDate) => updateOptionEntryExecution(execution.id, { tradeDate })}
+                      onChange={(tradeDate) => updateOptionEntryExecution(
+                        execution.id,
+                        buildManualOpeningFieldPatch(execution, "tradeDate", { tradeDate: tradeDate || undefined }),
+                      )}
                     />
                     <NumberInput
                       label="約定価格 USD"
@@ -1632,18 +1659,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                             })
                           }
                         />
-                        <NumberInput
-                          label="参考為替"
-                          value={referenceFxRate}
-                          suffix="JPY/USD"
-                          min={0}
-                          onChange={(referenceFxRateJPY) => updateOptionEntryExecution(execution.id, { referenceFxRateJPY })}
-                        />
-                        <div className="rounded-md border border-slate-200 bg-white p-3 text-sm">
-                          <div className="text-xs font-semibold text-slate-500">参考JPY換算</div>
-                          <div className="numeric-input mt-1 font-bold text-slate-950">{formatJPY(referenceJpy)}</div>
-                          <div className="mt-1 text-xs leading-5 text-slate-500">N口座の本体損益はUSDです。</div>
-                        </div>
+                        <div className="rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-600">参考為替: 対象外（N口座はUSD管理）</div>
                       </>
                     ) : (
                       <>
@@ -1781,7 +1797,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
         </div>
       ) : null}
 
-      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+      <div id="exit-rules" className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
         <h3 className="text-sm font-bold text-slate-950">4. 出口ルール</h3>
         <p className="mt-1 text-xs leading-5 text-slate-500">
           ここでは、Saxoに置く出口注文、または手動判断用の利確・損切り基準を決めます。途中決済時の現在価格は、下の反対売買判断に入力します。
@@ -1816,6 +1832,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
             return (
               <div
                 key={exitLeg.id}
+                id={`exit-rule-${exitLeg.id}`}
                 className={`rounded-md border bg-white p-3 ${
                   putAvoidAssignment || nakedCall ? "border-amber-300 bg-amber-50/40" : "border-slate-200"
                 }`}
@@ -1897,14 +1914,14 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                   {manualMode && !callKeepStock && !nakedCall ? (
                     <>
                       <label className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                        <input className="mt-1" type="checkbox" checked={plan.profitTakeEnabled} onChange={(event) => updateExitOrderPlan(exitLeg.id, { profitTakeEnabled: event.target.checked })} />
+                        <input id={`exit-rule-profit-take-enabled-${exitLeg.id}`} className="mt-1" type="checkbox" checked={plan.profitTakeEnabled} onChange={(event) => updateExitOrderPlan(exitLeg.id, { profitTakeEnabled: event.target.checked })} />
                         <span>
                           <span className="font-semibold text-slate-900">利確ラインを表示する</span>
                           <span className="block text-xs leading-5 text-slate-500">この脚の手動判断基準として使います。</span>
                         </span>
                       </label>
                       <label className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                        <input className="mt-1" type="checkbox" checked={plan.stopLossEnabled} onChange={(event) => updateExitOrderPlan(exitLeg.id, { stopLossEnabled: event.target.checked })} />
+                        <input id={`exit-rule-stop-loss-enabled-${exitLeg.id}`} className="mt-1" type="checkbox" checked={plan.stopLossEnabled} onChange={(event) => updateExitOrderPlan(exitLeg.id, { stopLossEnabled: event.target.checked })} />
                         <span>
                           <span className="font-semibold text-slate-900">損切りラインを表示する</span>
                           <span className="block text-xs leading-5 text-slate-500">この脚の手動判断基準として使います。</span>
@@ -1936,7 +1953,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                     </>
                   ) : null}
                   {callKeepStock || nakedCall ? null : (
-                    <NumberInput label="満期何日前までに判断" value={plan.latestCloseDaysBeforeExpiry ?? 7} suffix="日前" min={0} onChange={(latestCloseDaysBeforeExpiry) => updateExitOrderPlan(exitLeg.id, { latestCloseDaysBeforeExpiry, latestCloseDaysBeforeExpiryUserSet: true })} />
+                    <NumberInput inputId={`exit-rule-close-deadline-${exitLeg.id}`} label="満期何日前までに判断" value={plan.latestCloseDaysBeforeExpiry ?? 7} suffix="日前" min={0} onChange={(latestCloseDaysBeforeExpiry) => updateExitOrderPlan(exitLeg.id, { latestCloseDaysBeforeExpiry, latestCloseDaysBeforeExpiryUserSet: true })} />
                   )}
                   {nakedCall ? (
                     <>
@@ -2009,6 +2026,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                         ]}
                       />
                       <NumberInput
+                        inputId={`exit-rule-stop-loss-value-${exitLeg.id}`}
                         label={plan.stopLossType === "stock_price_line" ? "損切り株価ライン" : plan.stopLossType === "loss_amount" ? "損切り損失額" : "損切り買戻し価格"}
                         value={plan.stopLossType === "stock_price_line" ? plan.stopLossStockPriceUSD ?? 0 : plan.stopLossType === "loss_amount" ? (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? plan.stopLossAmountUSD ?? 0 : plan.stopLossAmountJPY ?? 0) : plan.stopLossBuybackPriceUSD ?? 0}
                         suffix={plan.stopLossType === "loss_amount" ? (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "USD" : "JPY") : plan.stopLossType === "stock_price_line" ? "USD" : "USD/株"}
@@ -2995,6 +3013,7 @@ function formatEntryExecutionSource(execution: OptionEntryExecution): string {
 function formatEntryCommissionSource(execution: OptionEntryExecution): string {
   if (execution.commissionSource === "saxo_actual") return "Saxo実費";
   if (execution.commissionSource === "manual") return "手入力";
+  if (execution.commissionSource === "saxo_ticket_confirmed_standard") return "Saxoチケット確認済み開始標準（2026-08-14）";
   if (execution.commissionSource === "standard_default") return "標準取引費用";
   return "未設定";
 }

@@ -292,6 +292,34 @@ describe("Saxo read-only account sync", () => {
       },
     });
   });
+
+  it("keeps a manual trade date and marks a conflicting later history date for review", () => {
+    const resolution = {
+      executionTimeUtc: { value: "2026-08-14", source: "trade_history" as const, sourceField: "tradeDate", capturedAt: "2026-08-14T00:00:00.000Z", completeness: "direct" as const },
+      historyStatus: "history_match_complete" as const,
+    };
+    const execution = {
+      id: "entry-manual-date",
+      legId: "leg",
+      tradeDate: "2026-08-13",
+      contracts: 1,
+      fillPriceUSD: 10,
+      settlementCurrency: "USD" as const,
+      openingFieldSources: { tradeDate: "manual" as const },
+      openingFieldEvidence: { tradeDate: { source: "manual" as const, sourceField: "manual", capturedAt: "2026-08-13T00:00:00.000Z", completeness: "direct" as const } },
+      source: "saxo_api_estimate" as const,
+      saxoSourceType: "current_position" as const,
+      historyCompletionStatus: "history_not_fetched" as const,
+      confirmed: false,
+    };
+
+    expect(mergeOpeningExecutionIntoEntryExecution(execution, resolution)).toMatchObject({
+      tradeDate: "2026-08-13",
+      historyCompletionStatus: "source_conflict",
+      openingFieldSources: { tradeDate: "manual" },
+      openingFieldEvidence: { tradeDate: { source: "manual" } },
+    });
+  });
   it("uses an instrument-details underlying symbol as the canonical ticker without a symbol missing warning", () => {
     const position = {
       id: "anonymous-option", accountKey: "masked", accountAssignment: "P" as const, kind: "option" as const,
@@ -511,7 +539,7 @@ describe("Saxo read-only account sync", () => {
       accountKey: "p-key",
       accountAssignment: "P",
       accountCode: "P",
-      symbol: "NVDA",
+      symbol: "MNO",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -532,14 +560,14 @@ describe("Saxo read-only account sync", () => {
     expect(rows[0].simulation?.id).toBe(simulation.id);
   });
 
-  it("groups NVDA C210 long and P210 short into one synthetic-forward candidate and uses its parent fill", () => {
+  it("groups MNO C210 long and P210 short into one synthetic-forward candidate and uses its parent fill", () => {
     const base = {
-      accountKey: "n-account-1234",
+      accountKey: "masked-account",
       accountAssignment: "N" as const,
       accountCode: "N" as const,
-      symbol: "NVDA",
-      underlyingSymbol: "NVDA",
-      underlyingIdentity: "uic:12345:stock",
+      symbol: "MNO",
+      underlyingSymbol: "MNO",
+      underlyingIdentity: "uic:101:stock",
       assetType: "StockOption",
       kind: "option" as const,
       quantity: 1,
@@ -555,16 +583,16 @@ describe("Saxo read-only account sync", () => {
     const pairs = findSaxoSyntheticForwardPairs([call, put]);
 
     expect(pairs).toHaveLength(1);
-    expect(pairs[0]).toMatchObject({ ticker: "NVDA", accountCode: "N", expiry: "2026-12-18", strike: 210, quantity: 1 });
+    expect(pairs[0]).toMatchObject({ ticker: "MNO", accountCode: "N", expiry: "2026-12-18", strike: 210, quantity: 1 });
     expect(findSaxoSyntheticForwardParentHistory(pairs[0], [
-      { id: "other", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", price: 99 },
-      { id: "parent", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", price: 5.2 },
-    ])).toMatchObject({ orderId: "5425367936", price: 5.2 });
+      { id: "other", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO", assetType: "StockOption", price: 99 },
+      { id: "parent", orderId: "anonymous-parent-order", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO SyntheticUnderlying", assetType: "SyntheticUnderlying", price: 5.2 },
+    ])).toMatchObject({ orderId: "anonymous-parent-order", price: 5.2 });
     expect(findSaxoSyntheticForwardPairs([{ ...put, strike: 211 }, call])).toHaveLength(0);
     expect(findSaxoSyntheticForwardPairs([
-      { ...call, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "NVDA/18Z26C210:XCBF" },
-      { ...put, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "NVDA/18Z26P210:XCBF" },
-    ])).toMatchObject([{ expiry: "2026-12-18", strike: 210, ticker: "NVDA" }]);
+      { ...call, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "MNO/18Z26C210:XCBF" },
+      { ...put, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "MNO/18Z26P210:XCBF" },
+    ])).toMatchObject([{ expiry: "2026-12-18", strike: 210, ticker: "MNO" }]);
     const held = findSaxoSyntheticForwardPairing([
       { ...call, underlyingIdentity: undefined, underlyingSymbol: undefined, symbol: "" },
       { ...put, underlyingIdentity: undefined, underlyingSymbol: undefined, symbol: "" },
@@ -574,28 +602,28 @@ describe("Saxo read-only account sync", () => {
   });
 
   it("resolves only the matching synthetic-forward parent and never a different ticker", () => {
-    const base = { accountKey: "n-account-1234", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "NVDA", underlyingSymbol: "NVDA", underlyingIdentity: "uic:12345:stock", assetType: "StockOption", kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z" };
+    const base = { accountKey: "masked-account", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "MNO", underlyingSymbol: "MNO", underlyingIdentity: "uic:101:stock", assetType: "StockOption", kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z" };
     const pair = findSaxoSyntheticForwardPairs([{ ...base, id: "call", quantity: 1, side: "long", optionType: "call" }, { ...base, id: "put", quantity: -1, side: "short", optionType: "put" }])[0];
-    const target = createOpenPutSimulation({ id: "nvda-synthetic", status: "entry_confirmation", name: "NVDA Synthetic Forward", ticker: "NVDA", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", expiryDate: "2026-12-18", optionLegs: [{ id: "call-leg", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "call" }, { id: "put-leg", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "put" }] });
+    const target = createOpenPutSimulation({ id: "nvda-synthetic", status: "entry_confirmation", name: "MNO Synthetic Forward", ticker: "MNO", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", expiryDate: "2026-12-18", optionLegs: [{ id: "call-leg", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "call" }, { id: "put-leg", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "put" }] });
     const visa = { ...target, id: "visa-long-call", ticker: "V", name: "VISA C340", optionLegs: [{ ...target.optionLegs[0], strikeUSD: 340 }, target.optionLegs[1]] };
     expect(findSaxoSyntheticForwardSimulationForPair(pair, [visa, target])?.id).toBe("nvda-synthetic");
   });
 
   it("requires the parent and both leg trades before treating a synthetic forward as filled", () => {
     const base = {
-      accountKey: "n-account-1234", accountAssignment: "N" as const, accountCode: "N" as const,
-      symbol: "NVDA", underlyingSymbol: "NVDA", underlyingIdentity: "uic:12345:stock", assetType: "StockOption",
+      accountKey: "masked-account", accountAssignment: "N" as const, accountCode: "N" as const,
+      symbol: "MNO", underlyingSymbol: "MNO", underlyingIdentity: "uic:101:stock", assetType: "StockOption",
       kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z",
     };
     const call: SaxoApiPositionSnapshot = { ...base, id: "call", positionId: "call-position", quantity: 1, side: "long", optionType: "call", premiumOpenPrice: 26.25 };
     const put: SaxoApiPositionSnapshot = { ...base, id: "put", positionId: "put-position", quantity: -1, side: "short", optionType: "put", premiumOpenPrice: 21.05 };
     const pair = findSaxoSyntheticForwardPairs([call, put])[0];
-    const parent: SaxoHistoryDiscoveryItem = { id: "parent-trade", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", quantity: 1, buySell: "buy", price: 5.2, tradeDate: "2026-07-16", currency: "USD" };
-    const callTrade: SaxoHistoryDiscoveryItem = { id: "call-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "call", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "buy", openClose: "open", price: 26.25, tradeDate: "2026-07-16", currency: "USD" };
-    const putTrade: SaxoHistoryDiscoveryItem = { id: "put-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "put", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "sell", openClose: "open", price: 21.05, tradeDate: "2026-07-16", currency: "USD" };
+    const parent: SaxoHistoryDiscoveryItem = { id: "parent-trade", orderId: "anonymous-parent-order", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO SyntheticUnderlying", assetType: "SyntheticUnderlying", quantity: 1, buySell: "buy", price: 5.2, tradeDate: "2026-07-16", currency: "USD" };
+    const callTrade: SaxoHistoryDiscoveryItem = { id: "call-trade", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO", assetType: "StockOption", optionType: "call", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "buy", openClose: "open", price: 26.25, tradeDate: "2026-07-16", currency: "USD" };
+    const putTrade: SaxoHistoryDiscoveryItem = { id: "put-trade", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO", assetType: "StockOption", optionType: "put", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "sell", openClose: "open", price: 21.05, tradeDate: "2026-07-16", currency: "USD" };
 
     expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade, putTrade])).toMatchObject({
-      status: "filled", parentHistory: { orderId: "5425367936", price: 5.2 }, callHistory: { price: 26.25 }, putHistory: { price: 21.05 }, missing: [],
+      status: "filled", parentHistory: { orderId: "anonymous-parent-order", price: 5.2 }, callHistory: { price: 26.25 }, putHistory: { price: 21.05 }, missing: [],
     });
     expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade])).toMatchObject({ status: "incomplete", missing: ["put"] });
   });
@@ -604,7 +632,7 @@ describe("Saxo read-only account sync", () => {
     const simulation = createOpenPutSimulation({
       id: "planned-covered-call",
       status: "planned",
-      name: "NVDA covered call planned",
+      name: "MNO covered call planned",
       strategyType: "covered_call",
       accountCode: "N",
       accountEnvironment: "PROD_N_USD_SETTLEMENT",
@@ -635,7 +663,7 @@ describe("Saxo read-only account sync", () => {
       accountKey: "n-key",
       accountAssignment: "N",
       accountCode: "N",
-      symbol: "NVDA",
+      symbol: "MNO",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -678,11 +706,11 @@ describe("Saxo read-only account sync", () => {
       fetchedAt: "2026-06-09T00:00:00.000Z",
     };
 
-    expect(resolveSaxoPositionSymbol(position, [simulation])).toBe("NVDA");
+    expect(resolveSaxoPositionSymbol(position, [simulation])).toBe("MNO");
 
     const draft = createSaxoPositionDraftSummary(position, [simulation]);
-    expect(draft.ticker).toBe("NVDA");
-    expect(draft.name).toContain("NVDA");
+    expect(draft.ticker).toBe("MNO");
+    expect(draft.name).toContain("MNO");
   });
 
   it("resolves the underlying ticker from a Saxo option instrument code when position symbol is blank", () => {
@@ -692,7 +720,7 @@ describe("Saxo read-only account sync", () => {
       accountAssignment: "N",
       accountCode: "N",
       symbol: "",
-      instrumentCode: "NVDA/24N26P195:XCBF",
+      instrumentCode: "MNO/24N26P195:XCBF",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -706,8 +734,8 @@ describe("Saxo read-only account sync", () => {
       fetchedAt: "2026-07-01T00:00:00.000Z",
     };
 
-    expect(resolveSaxoPositionSymbol(position)).toBe("NVDA");
-    expect(createSaxoPositionDraftSummary(position).ticker).toBe("NVDA");
+    expect(resolveSaxoPositionSymbol(position)).toBe("MNO");
+    expect(createSaxoPositionDraftSummary(position).ticker).toBe("MNO");
   });
 
   it("reconciles assigned Saxo option positions even when Saxo omits the symbol but the option shape is unique", () => {
@@ -742,7 +770,7 @@ describe("Saxo read-only account sync", () => {
         id: "pos-1",
         accountKey: "unknown-key",
         accountAssignment: "unassigned",
-        symbol: "NVDA",
+        symbol: "MNO",
         assetType: "StockOption",
         kind: "option",
         quantity: -1,
@@ -767,7 +795,7 @@ describe("Saxo read-only account sync", () => {
         accountKey: "p-key",
         accountAssignment: "P",
         accountCode: "P",
-        symbol: "NVDA",
+        symbol: "MNO",
         assetType: "StockOption",
         quantity: 1,
         side: "buy",
@@ -785,7 +813,7 @@ describe("Saxo read-only account sync", () => {
         accountKey: "n-key",
         accountAssignment: "N",
         accountCode: "N",
-        symbol: "NVDA",
+        symbol: "MNO",
         assetType: "StockOption",
         quantity: 1,
         side: "buy",
@@ -847,7 +875,7 @@ describe("Saxo read-only account sync", () => {
         id: "covered-call-unknown-close-buy",
         kind: "trade",
         assetType: "StockOption",
-        symbol: "NVDA/10N26C225:XCBF",
+        symbol: "MNO/10N26C225:XCBF",
         buySell: "buy",
         openClose: "unknown",
         quantity: 1,
@@ -868,7 +896,7 @@ describe("Saxo read-only account sync", () => {
         id: "covered-call-open-sell",
         kind: "trade",
         assetType: "StockOption",
-        symbol: "NVDA/10N26C225:XCBF",
+        symbol: "MNO/10N26C225:XCBF",
         buySell: "sell",
         openClose: "open",
         quantity: 1,
@@ -881,7 +909,7 @@ describe("Saxo read-only account sync", () => {
         id: "stock-transfer-sell",
         kind: "trade",
         assetType: "Stock",
-        symbol: "NVDA",
+        symbol: "MNO",
         buySell: "sell",
         openClose: "open",
         quantity: 100,
@@ -893,7 +921,7 @@ describe("Saxo read-only account sync", () => {
         id: "stock-transfer-buy",
         kind: "trade",
         assetType: "Stock",
-        symbol: "NVDA",
+        symbol: "MNO",
         buySell: "buy",
         openClose: "close",
         quantity: 100,
@@ -906,7 +934,7 @@ describe("Saxo read-only account sync", () => {
         kind: "trade",
         accountCode: "N",
         assetType: "Stock",
-        symbol: "NVDA",
+        symbol: "MNO",
         buySell: "sell",
         quantity: 100,
         price: 202.76,
@@ -1122,7 +1150,7 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       sourceIdMasked: "1234...abcd",
       accountKey: "7780...5082",
-      instrumentCode: "NVDA/05M26P200:XCBF",
+      instrumentCode: "MNO/05M26P200:XCBF",
       tradeDate: "2026-06-02",
       buySell: "buy",
       openClose: "open",
@@ -1142,12 +1170,12 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       accountKey: "p-key",
       accountCode: "P",
-      symbol: "NVDA",
+      symbol: "MNO",
       assetType: "StockOption",
       optionType: "put",
       strike: 207.5,
       expiry: "2026-06-12",
-      instrumentCode: "NVDA/12M26P207.5:XCBF",
+      instrumentCode: "MNO/12M26P207.5:XCBF",
       quantity: 1,
       buySell: "buy",
       openClose: "close",
@@ -1166,7 +1194,7 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       accountKey: "p-key",
       accountCode: "P",
-      symbol: "NVDA/12M26P207.5:XCBF",
+      symbol: "MNO/12M26P207.5:XCBF",
       assetType: "StockOption",
       quantity: 1,
       buySell: "buy",
@@ -1186,12 +1214,12 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       accountKey: "p-key",
       accountCode: "P",
-      symbol: "NVDA",
+      symbol: "MNO",
       assetType: "StockOption",
       optionType: "put",
       strike: 207.5,
       expiry: "2026-06-12",
-      instrumentCode: "NVDA/12M26P207.5:XCBF",
+      instrumentCode: "MNO/12M26P207.5:XCBF",
       quantity: 1,
       buySell: "buy",
       openClose: "close",
@@ -1204,7 +1232,7 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       accountKey: "p-key",
       accountCode: "P",
-      symbol: "NVDA:XNAS",
+      symbol: "MNO:XNAS",
       assetType: "Stock",
       quantity: 100,
       buySell: "buy",
@@ -1227,12 +1255,12 @@ describe("Saxo read-only account sync", () => {
       id: "entry-p200-option-symbol",
       kind: "trade",
       accountCode: "P",
-      symbol: "NVDA/05M26P200:XCBF",
+      symbol: "MNO/05M26P200:XCBF",
       assetType: "StockOption",
       optionType: "put",
       strike: 200,
       expiry: "2026-06-05",
-      instrumentCode: "NVDA/05M26P200:XCBF",
+      instrumentCode: "MNO/05M26P200:XCBF",
       buySell: "sell",
       openClose: "open",
       quantity: -1,
@@ -1249,9 +1277,9 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-buyback",
       kind: "trade",
       accountCode: "N",
-      symbol: "NVDA/10N26C225:XCBF",
+      symbol: "MNO/10N26C225:XCBF",
       assetType: "StockOption",
-      instrumentCode: "NVDA/10N26C225:XCBF",
+      instrumentCode: "MNO/10N26C225:XCBF",
       buySell: "buy",
       openClose: "close",
       quantity: 1,
@@ -1339,9 +1367,9 @@ describe("Saxo read-only account sync", () => {
         { id: "synthetic-put", type: "put", side: "sell", strikeUSD: 205, premiumUSD: 7, quantity: 1, expiryDate: "2026-09-18" },
       ],
     });
-    const callEntry: SaxoHistoryDiscoveryItem = { id: "synthetic-call-entry", kind: "trade", accountCode: "N", symbol: "NVDA/18U26C205:XCBF", assetType: "StockOption", buySell: "buy", openClose: "open", quantity: 1, price: 8, tradeDate: "2026-07-16" };
+    const callEntry: SaxoHistoryDiscoveryItem = { id: "synthetic-call-entry", kind: "trade", accountCode: "N", symbol: "MNO/18U26C205:XCBF", assetType: "StockOption", buySell: "buy", openClose: "open", quantity: 1, price: 8, tradeDate: "2026-07-16" };
     const callClose: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-call-close", buySell: "sell", openClose: "close", price: 9, tradeDate: "2026-07-17" };
-    const putEntry: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-put-entry", symbol: "NVDA/18U26P205:XCBF", buySell: "sell", price: 7 };
+    const putEntry: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-put-entry", symbol: "MNO/18U26P205:XCBF", buySell: "sell", price: 7 };
 
     expect(getSaxoHistoryCandidateTargetForSimulations(callEntry, [simulation])).toBe("entry");
     expect(isSaxoHistoryMatchingOptionLeg(simulation, simulation.optionLegs[0], callEntry, "entry")).toBe(true);
@@ -1356,9 +1384,9 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-buyback",
       kind: "trade",
       accountCode: "N",
-      symbol: "NVDA/10N26C225:XCBF",
+      symbol: "MNO/10N26C225:XCBF",
       assetType: "StockOption",
-      instrumentCode: "NVDA/10N26C225:XCBF",
+      instrumentCode: "MNO/10N26C225:XCBF",
       buySell: "buy",
       openClose: "close",
       quantity: 1,
@@ -1375,7 +1403,7 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-p-account",
       kind: "trade",
       accountCode: "P",
-      symbol: "NVDA/10N26C225:XCBF",
+      symbol: "MNO/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1395,8 +1423,8 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-p-account-relaxed",
       kind: "trade",
       accountCode: "P",
-      symbol: "NVDA/10N26C225:XCBF",
-      instrumentCode: "NVDA/10N26C225:XCBF",
+      symbol: "MNO/10N26C225:XCBF",
+      instrumentCode: "MNO/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1425,7 +1453,7 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-ambiguous",
       kind: "trade",
       accountCode: "P",
-      symbol: "NVDA/10N26C225:XCBF",
+      symbol: "MNO/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1451,7 +1479,7 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c220-p-account",
       kind: "trade",
       accountCode: "P",
-      symbol: "NVDA/10N26C220:XCBF",
+      symbol: "MNO/10N26C220:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1471,7 +1499,7 @@ describe("Saxo read-only account sync", () => {
     const closeHistory: SaxoHistoryDiscoveryItem = {
       id: "nvda-c225-unmapped",
       kind: "trade",
-      symbol: "NVDA/10N26C225:XCBF",
+      symbol: "MNO/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1488,7 +1516,7 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c220-buyback",
       kind: "trade",
       accountCode: "N",
-      symbol: "NVDA/10N26C220:XCBF",
+      symbol: "MNO/10N26C220:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "unknown",
@@ -1522,12 +1550,12 @@ describe("Saxo read-only account sync", () => {
       id: "assignment-2075",
       kind: "trade",
       accountCode: "P",
-      symbol: "NVDA/12M26P207.5:XCBF",
+      symbol: "MNO/12M26P207.5:XCBF",
       assetType: "StockOption",
       optionType: "put",
       strike: 207.5,
       expiry: "2026-06-12",
-      instrumentCode: "NVDA/12M26P207.5:XCBF",
+      instrumentCode: "MNO/12M26P207.5:XCBF",
       buySell: "buy",
       openClose: "close",
       quantity: 1,
@@ -1557,7 +1585,7 @@ describe("Saxo read-only account sync", () => {
       id: "assignment-2075-implicit",
       kind: "trade",
       accountCode: "P",
-      symbol: "NVDA/12M26P207.5:XCBF",
+      symbol: "MNO/12M26P207.5:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "unknown",
@@ -1588,7 +1616,7 @@ describe("Saxo read-only account sync", () => {
     const closeHistory = {
       id: "close-p200",
       kind: "trade",
-      symbol: "NVDA",
+      symbol: "MNO",
       optionType: "put",
       strike: 200,
       expiry: "2026-06-05",
@@ -1608,7 +1636,7 @@ describe("Saxo read-only account sync", () => {
       id: "n-account-entry",
       kind: "trade",
       accountCode: "N",
-      symbol: "NVDA",
+      symbol: "MNO",
       optionType: "put",
       strike: 200,
       expiry: "2026-06-05",
@@ -1628,7 +1656,7 @@ describe("Saxo read-only account sync", () => {
       accountKey: "p-key",
       accountAssignment: "P",
       accountCode: "P",
-      symbol: "NVDA",
+      symbol: "MNO",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -1646,8 +1674,8 @@ describe("Saxo read-only account sync", () => {
       {
         id: "entry-2075",
         kind: "trade",
-        symbol: "NVDA/12M26P207.5:XCBF",
-        instrumentCode: "NVDA/12M26P207.5:XCBF",
+        symbol: "MNO/12M26P207.5:XCBF",
+        instrumentCode: "MNO/12M26P207.5:XCBF",
         optionType: "put",
         strike: 207.5,
         expiry: "2026-06-12",
@@ -1721,7 +1749,7 @@ describe("Saxo read-only account sync", () => {
       accountKey: "p-key",
       accountAssignment: "P",
       accountCode: "P",
-      symbol: "NVDA",
+      symbol: "MNO",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -1740,7 +1768,7 @@ describe("Saxo read-only account sync", () => {
         id: "entry-2075",
         kind: "trade",
         assetType: "StockOption",
-        symbol: "NVDA",
+        symbol: "MNO",
         optionType: "put",
         strike: 207.5,
         expiry: "2026-06-05",
@@ -1754,7 +1782,7 @@ describe("Saxo read-only account sync", () => {
         id: "close-200",
         kind: "trade",
         assetType: "StockOption",
-        symbol: "NVDA",
+        symbol: "MNO",
         optionType: "put",
         strike: 200,
         expiry: "2026-06-05",
@@ -1774,8 +1802,8 @@ function createOpenPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSim
   return {
     id: "sim-1",
     status: "open",
-    name: "NVDA short put",
-    ticker: "NVDA",
+    name: "MNO short put",
+    ticker: "MNO",
     strategyType: "short_put",
     currentPriceUSD: 142,
     fxRateJPY: 157,
@@ -1811,8 +1839,8 @@ function createOpenCoveredCallSimulation(patch: Partial<TradeSimulation> = {}): 
   return {
     id: "sim-covered-call",
     status: "open",
-    name: "NVDA covered call",
-    ticker: "NVDA",
+    name: "MNO covered call",
+    ticker: "MNO",
     strategyType: "covered_call",
     currentPriceUSD: 210,
     fxRateJPY: 157,

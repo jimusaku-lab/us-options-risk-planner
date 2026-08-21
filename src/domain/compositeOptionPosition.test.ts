@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
+import { migrateNOptionEntryStandardCommissions } from "@/domain/optionEntryExecutions";
 import type { TradeSimulation } from "@/types/domain";
 import { finalizeSyntheticForwardParent, getCompositeAssignmentFunding, getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, getSyntheticForwardParentFinalization, getSyntheticForwardTicketNetPremiumUSD, isSyntheticForwardEntryConfirmation, isSyntheticForwardEntrySaved, shouldIncludeCompositeCloseResultsInPerformance, shouldRecoverSaxoSyntheticForwardEntryConfirmation, validateCompositeOptionPosition, validateSyntheticForwardTicketForOpen } from "./compositeOptionPosition";
 
 function composite(strategyType: "synthetic_forward" | "combo", callStrike = 205, putStrike = 205): TradeSimulation {
   const call = { id: "combo-call", type: "call" as const, side: "buy" as const, strikeUSD: callStrike, premiumUSD: 8, quantity: 1, expiryDate: "2026-09-18" };
   const put = { id: "combo-put", type: "put" as const, side: "sell" as const, strikeUSD: putStrike, premiumUSD: 7, quantity: 1, expiryDate: "2026-09-18", putIntent: "accept_assignment" as const };
-  return { ...sampleAmznSimulation, id: `test-${strategyType}`, status: "open", ticker: "NVDA", strategyType, accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", expiryDate: "2026-09-18", optionLegs: [call, put], optionEntryExecutions: [], optionCloseExecutions: [] };
+  return { ...sampleAmznSimulation, id: `test-${strategyType}`, status: "open", ticker: "MNO", strategyType, accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", expiryDate: "2026-09-18", optionLegs: [call, put], optionEntryExecutions: [], optionCloseExecutions: [] };
 }
 function entry(legId: string, contracts = 1, fillPriceUSD = 1, commissionUSD?: number) { return { id: `entry-${legId}-${contracts}`, legId, tradeDate: "2026-07-16", contracts, fillPriceUSD, settlementCurrency: "USD" as const, source: "manual" as const, commissionUSD, confirmed: true }; }
 function close(legId: string, contracts = 1) { return { id: `close-${legId}-${contracts}`, legId, closeDate: "2026-07-17", contracts, closePriceUSD: 1, settlementCurrency: "USD" as const, source: "manual" as const, confirmed: true }; }
@@ -29,7 +30,7 @@ describe("composite option positions", () => {
     position.syntheticForwardTicket = { orderId: "5425367936", netFillPriceUSD: 5.2, actualTotalCommissionUSD: 4.5, entryCostUSD: 524.5, requiredMarginUSD: 4_000 };
     expect(isSyntheticForwardEntrySaved(position)).toBe(true); position.status = "entry_confirmation"; expect(isSyntheticForwardEntrySaved(position)).toBe(false);
   });
-  it("finalizes the filled NVDA C210/P210 parent from both legs without inferring margin", () => {
+  it("finalizes the filled MNO C210/P210 parent from both legs without inferring margin", () => {
     const position = composite("synthetic_forward", 210, 210);
     position.fixtureMeta = { source: "live", isRealMoney: true, broker: "SaxoBank", purpose: "development-fixture", createdAt: "2026-07-16", notes: "Saxo SyntheticUnderlying親注文と二脚の約定履歴を照合" };
     position.syntheticForwardTicket = { orderId: "5425367936", requiredMarginUSD: 4_000, requiredMarginSource: "saxo_order_snapshot" };
@@ -45,8 +46,30 @@ describe("composite option positions", () => {
     position.syntheticForwardTicket = { orderId: "5425367936", netFillPriceUSD: 5.85, actualTotalCommissionUSD: 4.5 };
     position.optionEntryExecutions = [{ ...entry("combo-call", 1, 26.25), source: "saxo_api_estimate", historyCandidateIds: ["call-trade"] }, { ...entry("combo-put", 1, 21.05), source: "saxo_api_estimate", historyCandidateIds: ["put-trade"] }];
     const repaired = finalizeSyntheticForwardParent(position);
-    expect(repaired.syntheticForwardTicket).toMatchObject({ netFillPriceUSD: 5.2, actualTotalCommissionUSD: 4.5, entryCostUSD: 524.5 });
+    expect(repaired.syntheticForwardTicket).toMatchObject({ netFillPriceUSD: 5.2, actualTotalCommissionUSD: 4.48, entryCostUSD: 524.48 });
     expect(getSyntheticForwardParentFinalization(repaired)?.missingFields).toContain("注文時必要証拠金"); expect(repaired.syntheticForwardTicket?.requiredMarginUSD).toBeUndefined(); expect(isSyntheticForwardEntrySaved(repaired)).toBe(false); expect(finalizeSyntheticForwardParent(repaired)).toBe(repaired);
+  });
+  it("reaggregates an N synthetic legacy parent after both confirmed legs migrate from $2.25 to $2.24", () => {
+    const position = composite("synthetic_forward", 210, 210);
+    position.syntheticForwardTicket = { netFillPriceUSD: 5.2, actualTotalCommissionUSD: 4.5, entryCostUSD: 524.5, netFillSource: "leg_aggregate", actualTotalCommissionSource: "leg_aggregate", entryCostSource: "leg_aggregate" };
+    position.optionEntryExecutions = [{ ...entry("combo-call", 1, 26.25, 2.25), commissionSource: "standard_default" }, { ...entry("combo-put", 1, 21.05, 2.25), commissionSource: "standard_default" }];
+    const repaired = finalizeSyntheticForwardParent(migrateNOptionEntryStandardCommissions(position));
+    expect(repaired.optionEntryExecutions?.map((execution) => execution.commissionUSD)).toEqual([2.24, 2.24]);
+    expect(repaired.syntheticForwardTicket).toMatchObject({ actualTotalCommissionUSD: 4.48, entryCostUSD: 524.48, actualTotalCommissionSource: "leg_aggregate", entryCostSource: "leg_aggregate" });
+    expect(finalizeSyntheticForwardParent(repaired)).toBe(repaired);
+  });
+  it("recognizes only the exact legacy parent totals when source metadata is absent", () => {
+    const position = composite("synthetic_forward", 210, 210);
+    position.syntheticForwardTicket = { netFillPriceUSD: 5.2, actualTotalCommissionUSD: 4.5, entryCostUSD: 524.5 };
+    position.optionEntryExecutions = [{ ...entry("combo-call", 1, 26.25, 2.25), commissionSource: "standard_default" }, { ...entry("combo-put", 1, 21.05, 2.25), commissionSource: "standard_default" }];
+    const repaired = finalizeSyntheticForwardParent(migrateNOptionEntryStandardCommissions(position));
+    expect(repaired.syntheticForwardTicket).toMatchObject({ actualTotalCommissionUSD: 4.48, entryCostUSD: 524.48, actualTotalCommissionSource: "leg_aggregate", entryCostSource: "leg_aggregate" });
+  });
+  it.each(["manual", "saxo_parent"] as const)("does not overwrite %s parent facts", (source) => {
+    const position = composite("synthetic_forward", 210, 210);
+    position.syntheticForwardTicket = { netFillPriceUSD: 5.2, actualTotalCommissionUSD: 4.73, entryCostUSD: 524.73, actualTotalCommissionSource: source, entryCostSource: source };
+    position.optionEntryExecutions = [{ ...entry("combo-call", 1, 26.25, 2.24), commissionSource: "saxo_ticket_confirmed_standard" }, { ...entry("combo-put", 1, 21.05, 2.24), commissionSource: "saxo_ticket_confirmed_standard" }];
+    expect(finalizeSyntheticForwardParent(position).syntheticForwardTicket).toMatchObject({ actualTotalCommissionUSD: 4.73, entryCostUSD: 524.73 });
   });
   it("recovers only unconfirmed Saxo synthetic imports into entry confirmation", () => {
     const position = composite("synthetic_forward"); position.status = "planned"; expect(shouldRecoverSaxoSyntheticForwardEntryConfirmation(position, true)).toBe(true);

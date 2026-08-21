@@ -287,10 +287,10 @@ export function SummaryCards({
         ? "反対売買損益分岐価格"
         : isSyntheticAnnualRateNotApplicable ? premiumDisplay.label : historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
       value: longOptionDisplay
-        ? `${formatUSD(longOptionDisplay.exitBreakevenPriceUSD)} / 株`
+        ? longOptionDisplay.exitBreakevenPriceUSD === undefined ? "未計算（決済想定手数料 未確認）" : `${formatUSD(longOptionDisplay.exitBreakevenPriceUSD)} / 株`
         : isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
       note: longOptionDisplay
-        ? `この価格以上で売却できれば、建玉時支払額と想定決済手数料を回収できます。建玉時支払額 ${formatUSD(longOptionDisplay.totalCostUSD)} / 想定決済手数料 ${formatUSD(longOptionDisplay.closeCommissionUSD)}。`
+        ? longOptionDisplay.closeCommissionUSD === undefined ? "決済想定手数料が未確認のため、損益分岐価格は計算しません。" : `この価格以上で売却できれば、建玉時支払額と想定決済手数料を回収できます。建玉時支払額 ${formatUSD(longOptionDisplay.totalCostUSD)} / 想定決済手数料 ${formatUSD(longOptionDisplay.closeCommissionUSD)}。`
         : premiumCardNote,
     },
     ...(longOptionDisplay

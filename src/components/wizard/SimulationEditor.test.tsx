@@ -159,9 +159,30 @@ describe("SimulationEditor", () => {
 
     render(<Harness />);
 
-    await waitFor(() => expect(screen.getByText(/費用出所: 標準取引費用/)).toBeInTheDocument());
-    expect(screen.getAllByDisplayValue("2.25").length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByText(/費用出所: Saxoチケット確認済み開始標準/)).toBeInTheDocument());
+    expect(screen.getAllByDisplayValue("2.24").length).toBeGreaterThan(0);
     expect(screen.queryByText(/不足項目: .*取引費用USD/)).not.toBeInTheDocument();
+  });
+
+  it("stores a manually transcribed trade date with evidence", () => {
+    const onChange = vi.fn();
+    render(
+      <SimulationEditor
+        simulation={buildVisaLongCallSimulation({ status: "entry_confirmation" })}
+        workspace="live"
+        canUseExternalQuotes={false}
+        externalQuoteModeLabel="無効"
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("取引日"), { target: { value: "2026-08-13" } });
+    const afterManualInput = onChange.mock.calls.at(-1)?.[0] as TradeSimulation;
+    expect(afterManualInput.optionEntryExecutions?.[0]).toMatchObject({
+      tradeDate: "2026-08-13",
+      openingFieldSources: { tradeDate: "manual" },
+    });
+    expect(afterManualInput.optionEntryExecutions?.[0].openingFieldEvidence?.tradeDate?.source).toBe("manual");
   });
 
   it("shows the synthetic-forward saved panel and hides draft actions after both legs are confirmed", () => {
@@ -215,6 +236,28 @@ describe("SimulationEditor", () => {
     expect(saveButton).toBeDisabled();
     fireEvent.click(saveButton);
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("focuses the first missing avoid-assignment put exit-rule control", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    const simulation = buildAvoidAssignmentShortPutSimulation();
+
+    render(
+      <SimulationEditor
+        simulation={simulation}
+        workspace="live"
+        canUseExternalQuotes={false}
+        externalQuoteModeLabel="無効"
+        onChange={vi.fn()}
+        focusRequest={{ anchorId: "exit-rule-avoid-put-leg", requestId: 1 }}
+      />,
+    );
+
+    await waitFor(() => expect(document.getElementById("exit-rule-profit-take-enabled-avoid-put-leg")).toHaveFocus());
+    expect(document.getElementById("exit-rule-avoid-put-leg")).toBeInTheDocument();
+    expect(document.getElementById("exit-rules")).toBeInTheDocument();
+    expect(scrollIntoView).toHaveBeenCalled();
   });
 });
 
@@ -312,6 +355,27 @@ function buildVisaLongCallSimulation(patch: Partial<TradeSimulation> = {}): Trad
     },
     ...patch,
   };
+}
+
+function buildAvoidAssignmentShortPutSimulation(): TradeSimulation {
+  return buildVisaLongCallSimulation({
+    status: "planned",
+    strategyType: "short_put",
+    optionLegs: [
+      {
+        id: "avoid-put-leg",
+        type: "put",
+        side: "sell",
+        strikeUSD: 300,
+        premiumUSD: 5,
+        quantity: 1,
+        expiryDate: "2026-11-20",
+        putIntent: "do_not_want_to_buy",
+        assignmentPolicy: "unknown",
+      },
+    ],
+    optionEntryExecutions: [],
+  });
 }
 
 function buildSampleLongOptionCloseSimulation(type: "call" | "put", executionLegId = "sample-long-leg"): TradeSimulation {

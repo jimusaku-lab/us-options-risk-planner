@@ -6,7 +6,8 @@ import { formatJPY, formatUSD } from "@/lib/format";
 import type { FxQuote } from "@/lib/marketData";
 import { calculateReferenceTotalAssetsBreakdownJPY, formatReferenceTotalAssetsJPY } from "@/domain/referenceTotalAssets";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { resolveAccountMarginUsageWarning } from "@/domain/accountMarginWarning";
 
 export function AccountOverview({
   workspace,
@@ -28,12 +29,21 @@ export function AccountOverview({
   onChange: (accountCode: SaxoAccountCode, accountInputs: Partial<AccountState>) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [focusMarginAccount, setFocusMarginAccount] = useState<SaxoAccountCode | null>(null);
   const isDemo = workspace === "demo";
   const referenceTotalAssets = calculateReferenceTotalAssetsBreakdownJPY({
     pSaxoTotalValueJPY: accountInputs.P.saxoTotalValue,
     nSaxoTotalValueUSD: accountInputs.N.saxoTotalValue,
     fxQuote: referenceFxQuote,
   });
+  const accountMarginWarnings = [accountInputs.P, ...(!isDemo ? [accountInputs.N] : [])]
+    .map(resolveAccountMarginUsageWarning)
+    .filter((warning): warning is NonNullable<typeof warning> => Boolean(warning));
+  useEffect(() => {
+    if (!isOpen || !focusMarginAccount) return;
+    document.querySelector<HTMLInputElement>(`#account-margin-usage-${focusMarginAccount} input`)?.focus();
+    setFocusMarginAccount(null);
+  }, [focusMarginAccount, isOpen]);
   return (
     <>
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -78,6 +88,38 @@ export function AccountOverview({
           </button>
         </div>
       </div>
+
+      {accountMarginWarnings.length > 0 ? (
+        <div className="mt-4 grid gap-2" aria-label="口座証拠金使用率の警告">
+          {accountMarginWarnings.map((warning) => (
+            <div
+              key={warning.accountCode}
+              role="status"
+              aria-label={`${warning.accountCode}口座の証拠金使用率警告`}
+              className={`rounded-md border p-3 ${warning.level === "strong" ? "border-red-300 bg-red-50 text-red-950" : "border-amber-300 bg-amber-50 text-amber-950"}`}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold">{warning.accountCode}口座の証拠金使用率が高いです</h3>
+                  <p className="mt-1 text-xs leading-5">
+                    口座全体の保存値 {warning.usagePercent.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}%（更新 {formatAccountUpdatedAt(warning.updatedAt)} / {warning.sourceLabel}）。建玉数を増やしたとの判定ではありません。保存値と取得元を確認してください。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md border border-current bg-white px-3 py-2 text-xs font-bold"
+                  onClick={() => {
+                    setFocusMarginAccount(warning.accountCode);
+                    setIsOpen(true);
+                  }}
+                >
+                  口座情報を確認
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {pendingCashEffects.length > 0 ? (
         <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3">
@@ -219,14 +261,20 @@ function AccountEditor({ account, displayName, referenceFxRateJPY, onChange }: {
           suffix={account.currency}
           onChange={(marginAvailable) => onChange({ marginAvailable })}
         />
-        <NumberInput
-          label="証拠金使用率"
-          value={account.marginUsagePercent}
-          suffix="%"
-          onChange={(marginUsagePercent) => onChange({ marginUsagePercent })}
-        />
+        <div id={`account-margin-usage-${account.accountCode}`}>
+          <NumberInput
+            label="証拠金使用率"
+            value={account.marginUsagePercent}
+            suffix="%"
+            onChange={(marginUsagePercent) => onChange({ marginUsagePercent })}
+          />
+        </div>
       </div>
       {referenceNote ? <p className="mt-2 text-xs leading-5 text-slate-500">{referenceNote}</p> : null}
     </div>
   );
+}
+
+function formatAccountUpdatedAt(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : value || "未確認";
 }

@@ -14,6 +14,8 @@ export type SaxoMappedCode = SaxoAccountCode | "ignore" | "unmapped";
 
 export type SaxoApiStatus = {
   mode: "saxo_readonly";
+  apiContractVersion?: string;
+  capabilities?: { optionPremiumCandidate?: boolean; bulkOptionPremiumPreview?: boolean };
   connected: boolean;
   connectionState?: "disconnected" | "connected" | "reconnect_required";
   environment: SaxoEnvironment;
@@ -325,9 +327,20 @@ export function mergeOpeningExecutionIntoEntryExecution(
   if (execution.confirmed) return execution;
   const nextFieldSources = { ...(execution.openingFieldSources ?? {}) };
   const nextFieldEvidence = { ...(execution.openingFieldEvidence ?? {}) };
+  const hasManualTradeDate = execution.openingFieldSources?.tradeDate === "manual";
+  const hasDirectHistoryTradeDate = resolution.executionTimeUtc?.source === "trade_history";
+  const hasManualTradeDateConflict = Boolean(
+    hasManualTradeDate &&
+      hasDirectHistoryTradeDate &&
+      execution.tradeDate &&
+      resolution.executionTimeUtc?.value &&
+      execution.tradeDate !== resolution.executionTimeUtc.value,
+  );
   const nextExecution: OptionEntryExecution = {
     ...execution,
-    historyCompletionStatus: mapOpeningExecutionHistoryStatusToEntryCompletionStatus(resolution.historyStatus),
+    historyCompletionStatus: hasManualTradeDateConflict
+      ? "source_conflict"
+      : mapOpeningExecutionHistoryStatusToEntryCompletionStatus(resolution.historyStatus),
   };
   const canAutofill = (field: keyof NonNullable<OptionEntryExecution["openingFieldSources"]>) => nextFieldSources[field] !== "manual";
   const applyEvidence = (field: keyof NonNullable<OptionEntryExecution["openingFieldEvidence"]>, evidence: OpeningExecutionEvidence<unknown> | undefined) => {

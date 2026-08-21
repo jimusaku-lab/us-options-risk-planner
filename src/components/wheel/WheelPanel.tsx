@@ -20,29 +20,11 @@ const phaseLabels: Record<WheelPhase, string> = {
 const nRoute: WheelPhase[] = ["n_cash", "n_short_put", "n_stock_holding", "n_covered_call", "n_called_away"];
 const pRoute: WheelPhase[] = ["p_short_put", "p_assigned_stock", "p_to_n_transfer_pending", "n_stock_holding", "n_covered_call"];
 
-function isCurrentNShortPutLike(simulation: TradeSimulation): boolean {
-  const hasShortPutLeg = simulation.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
-  const hasConfirmedEntry = (simulation.optionEntryExecutions ?? []).some((execution) => execution.confirmed);
-  const isNLike =
-    simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ||
-    simulation.accountCode === "N" ||
-    simulation.accountCurrency === "USD";
-  return (
-    (simulation.strategyType === "short_put" || hasShortPutLeg) &&
-    simulation.status !== "closed" &&
-    simulation.status !== "expired" &&
-    (simulation.status !== "planned" || hasConfirmedEntry) &&
-    isNLike
-  );
-}
-
 export function WheelPanel({
   cycles,
   events = [],
   stockTransfers = [],
   simulations = [],
-  selectedSimulation,
-  selectedNShortPutActive = false,
   stockEvaluationsByCycleId = {},
   focusRequest,
   onCreateFromSelected,
@@ -54,8 +36,6 @@ export function WheelPanel({
   events?: WheelEvent[];
   stockTransfers?: StockTransferEvent[];
   simulations?: TradeSimulation[];
-  selectedSimulation?: TradeSimulation;
-  selectedNShortPutActive?: boolean;
   stockEvaluationsByCycleId?: Record<string, StockHoldingEvaluation>;
   focusRequest?: { ticker?: string; requestId: number } | null;
   onCreateFromSelected?: () => void;
@@ -134,13 +114,6 @@ export function WheelPanel({
               events={events.filter((event) => event.wheelCycleId === cycle.id)}
               stockTransfers={stockTransfers.filter((transfer) => transfer.destinationWheelCycleId === cycle.id)}
               simulations={simulations}
-              selectedSimulation={selectedSimulation}
-              forceCurrentNShortPut={
-                selectedNShortPutActive &&
-                (cycles.length === 1 ||
-                  !selectedSimulation?.ticker.trim() ||
-                  selectedSimulation.ticker.toUpperCase() === cycle.ticker.toUpperCase())
-              }
               stockEvaluation={stockEvaluationsByCycleId[cycle.id]}
               onCreateCoveredCallFromCycle={onCreateCoveredCallFromCycle}
               highlighted={Boolean(highlightedTicker) && cycle.ticker.toUpperCase() === highlightedTicker}
@@ -157,8 +130,6 @@ function WheelCycleCard({
   events,
   stockTransfers,
   simulations,
-  selectedSimulation,
-  forceCurrentNShortPut,
   stockEvaluation,
   onCreateCoveredCallFromCycle,
   highlighted,
@@ -167,61 +138,13 @@ function WheelCycleCard({
   events: WheelEvent[];
   stockTransfers: StockTransferEvent[];
   simulations: TradeSimulation[];
-  selectedSimulation?: TradeSimulation;
-  forceCurrentNShortPut?: boolean;
   stockEvaluation?: StockHoldingEvaluation;
   onCreateCoveredCallFromCycle?: (cycle: WheelCycle) => void;
   highlighted?: boolean;
 }) {
   const fx = cycle.referenceFxRateJPY ?? 0;
-  const relatedCoveredCalls = simulations.filter(
-    (simulation) =>
-      simulation.strategyType === "covered_call" &&
-      simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" &&
-      simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase(),
-  );
-  const hasActiveCoveredCall = relatedCoveredCalls.some((simulation) => ["planned", "open"].includes(simulation.status));
-  const hasClosedCoveredCall = relatedCoveredCalls.some((simulation) => ["closed", "assigned", "expired"].includes(simulation.status));
-  const hasCoveredCallOpenedEvent = events.some((event) => event.type === "covered_call_opened");
-  const candidateSimulations = Array.from(
-    new Map((selectedSimulation ? [selectedSimulation, ...simulations] : simulations).map((simulation) => [simulation.id, simulation])).values(),
-  );
-  const openNShortPuts = candidateSimulations.filter(
-    (simulation) =>
-      isCurrentNShortPutLike(simulation) &&
-      (simulation.ticker.trim() === "" || simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase()),
-  );
-  const hasTickerMatchedOpenNShortPut = openNShortPuts.some(
-    (simulation) =>
-      simulation.ticker.trim() !== "" &&
-      simulation.ticker.toUpperCase() === cycle.ticker.toUpperCase(),
-  );
-  const hasOpenNShortPut =
-    forceCurrentNShortPut ||
-    hasTickerMatchedOpenNShortPut ||
-    (openNShortPuts.length === 1 &&
-      cycle.currentAccountCode === "N" &&
-      cycle.currentShares <= 0 &&
-      ["n_cash", "n_called_away", "n_short_put"].includes(cycle.currentPhase));
-  const inferredSoldAfterClosedCoveredCall =
-    cycle.currentPhase === "n_stock_holding" &&
-    cycle.currentShares > 0 &&
-    hasClosedCoveredCall &&
-    !hasActiveCoveredCall &&
-    hasCoveredCallOpenedEvent;
-  const canDisplayOpenNShortPut =
-    hasOpenNShortPut &&
-    cycle.currentAccountCode === "N" &&
-    (cycle.currentPhase === "n_short_put" ||
-      cycle.currentPhase === "n_cash" ||
-      cycle.currentPhase === "n_called_away" ||
-      inferredSoldAfterClosedCoveredCall);
-  const displayPhase: WheelPhase = canDisplayOpenNShortPut
-    ? "n_short_put"
-    : inferredSoldAfterClosedCoveredCall
-      ? "n_called_away"
-      : cycle.currentPhase;
-  const displayShares = canDisplayOpenNShortPut || inferredSoldAfterClosedCoveredCall ? 0 : cycle.currentShares;
+  const displayPhase: WheelPhase = cycle.currentPhase;
+  const displayShares = cycle.currentShares;
   const isNWheelActive = displayPhase.startsWith("n_");
   const hasCurrentShares = displayShares > 0;
   const route = isNWheelActive ? nRoute : pRoute;
@@ -255,7 +178,7 @@ function WheelCycleCard({
         <Metric label="株式売買損益" value={formatUSD(cycle.cumulativeStockRealizedPnlUSD)} />
         <Metric label="累積手数料" value={formatUSD(cycle.cumulativeFeesUSD)} />
         <Metric
-          label="累積損益"
+          label="累積実現損益"
           value={`${formatUSD(cycle.cumulativeTotalPnlUSD)}${fx > 0 ? ` / 参考 ${formatJPY(cycle.cumulativeTotalPnlUSD * fx)}` : ""}`}
         />
         <Metric label="現在株数" value={`${displayShares}株`} />

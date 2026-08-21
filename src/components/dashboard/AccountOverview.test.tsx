@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccountInputs } from "@/store/useOptionsStore";
@@ -30,5 +30,28 @@ describe("AccountOverview reference total assets", () => {
     expect(assetCard).not.toBe(marginCard);
     expect(assetCard.textContent).toBe("P口座資産　¥1,000,000N口座資産　¥3,005,000参考総資産　¥4,005,000");
     expect(assetCard.querySelector(".flex-nowrap")).toBeTruthy();
+  });
+
+  it("renders one warning per affected account with source and update evidence", () => {
+    render(createElement(AccountOverview, {
+      workspace: "live" as const,
+      accountInputs: {
+        P: { ...accountInputs.P, marginUsagePercent: 69.9 },
+        N: { ...accountInputs.N, marginUsagePercent: 70, saxoSyncHistory: [{ id: "anonymous", source: "saxo_api", accountKey: "masked", fetchedAt: "2026-08-10T00:00:00.000Z", appliedAt: "2026-08-10T00:01:00.000Z", appliedFields: ["marginUsagePercent"] }] },
+      },
+      onChange: vi.fn(),
+    }));
+    expect(screen.getAllByRole("status")).toHaveLength(2);
+    expect(screen.getByRole("status", { name: "P口座の証拠金使用率警告" })).toHaveTextContent("取得元未確認");
+    expect(screen.getByRole("status", { name: "N口座の証拠金使用率警告" })).toHaveTextContent("Saxo API");
+    expect(screen.getAllByText(/建玉数を増やしたとの判定ではありません/)).toHaveLength(2);
+  });
+
+  it("shows no warning at 59.9 and opens the selected account margin input from the CTA", async () => {
+    render(createElement(AccountOverview, { workspace: "live" as const, accountInputs: { P: { ...accountInputs.P, marginUsagePercent: 59.9 }, N: { ...accountInputs.N, marginUsagePercent: 60 } }, onChange: vi.fn() }));
+    expect(screen.queryByRole("status", { name: "P口座の証拠金使用率警告" })).toBeNull();
+    const warning = screen.getByRole("status", { name: "N口座の証拠金使用率警告" });
+    fireEvent.click(within(warning).getByRole("button", { name: "口座情報を確認" }));
+    await waitFor(() => expect(document.querySelector("#account-margin-usage-N input")).toHaveFocus());
   });
 });

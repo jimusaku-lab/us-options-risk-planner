@@ -1,4 +1,4 @@
-import type { AccountState, OptionLeg, TradeSimulation } from "@/types/domain";
+import type { AccountState, OptionLeg, SyntheticForwardTicket, TradeSimulation } from "@/types/domain";
 import { ensureNOptionEntryStandardCommission } from "@/domain/optionEntryExecutions";
 
 const CONTRACT_SIZE = 100;
@@ -121,6 +121,10 @@ function getConfirmedEntryExecutions(simulation: TradeSimulation, legId: string)
   return (simulation.optionEntryExecutions ?? []).filter((execution) => execution.legId === legId && execution.confirmed);
 }
 
+function isProtectedParentValueSource(source: SyntheticForwardTicket["actualTotalCommissionSource"]): boolean {
+  return source === "manual" || source === "saxo_parent";
+}
+
 /** Calculates parent ticket facts from both confirmed legs without inferring required margin. */
 export function getSyntheticForwardParentFinalization(simulation: TradeSimulation): SyntheticForwardParentFinalization | undefined {
   if (simulation.strategyType !== "synthetic_forward") return undefined;
@@ -141,21 +145,46 @@ export function getSyntheticForwardParentFinalization(simulation: TradeSimulatio
   const aggregatedCommission = canAggregate && [...callExecutions, ...putExecutions].every((execution) => isFiniteNumber(execution.commissionUSD))
     ? roundUSD([...callExecutions, ...putExecutions].reduce((sum, execution) => sum + Math.abs(execution.commissionUSD ?? 0), 0))
     : undefined;
+  const confirmedContractsArePositiveIntegers = canAggregate && [...callExecutions, ...putExecutions].every(
+    (execution) => Number.isInteger(execution.contracts) && execution.contracts > 0,
+  );
+  const legacyStandardCommissionUSD = confirmedContractsArePositiveIntegers
+    ? roundUSD([...callExecutions, ...putExecutions].reduce((sum, execution) => sum + execution.contracts * 2.25, 0))
+    : undefined;
   const sourceConfirmed = hasSaxoSyntheticSource(simulation);
-  const canRepairLegacyImportedTicket = hasImportedSaxoEvidence(simulation) && ticket?.netFillSource === undefined;
+  const canRepairLegacyImportedNetFill = hasImportedSaxoEvidence(simulation) && ticket?.netFillSource === undefined;
   const netFillPriceUSD = ticket?.netFillSource === "manual"
     ? ticket.netFillPriceUSD
-    : canRepairLegacyImportedTicket && aggregatedNet !== undefined ? aggregatedNet : ticket?.netFillPriceUSD ?? aggregatedNet;
-  const actualTotalCommissionUSD = ticket?.actualTotalCommissionSource === "manual"
-    ? ticket.actualTotalCommissionUSD
-    : canRepairLegacyImportedTicket && aggregatedCommission !== undefined ? aggregatedCommission : ticket?.actualTotalCommissionUSD ?? aggregatedCommission;
+    : canRepairLegacyImportedNetFill && aggregatedNet !== undefined ? aggregatedNet : ticket?.netFillPriceUSD ?? aggregatedNet;
+  const canReaggregateParentCommission =
+    aggregatedCommission !== undefined &&
+    !isProtectedParentValueSource(ticket?.actualTotalCommissionSource) &&
+    (ticket?.actualTotalCommissionSource === "leg_aggregate" ||
+      (ticket?.actualTotalCommissionSource === undefined && ticket?.actualTotalCommissionUSD === legacyStandardCommissionUSD));
+  const actualTotalCommissionUSD = isProtectedParentValueSource(ticket?.actualTotalCommissionSource)
+    ? ticket?.actualTotalCommissionUSD
+    : canReaggregateParentCommission && aggregatedCommission !== undefined ? aggregatedCommission : ticket?.actualTotalCommissionUSD ?? aggregatedCommission;
   const quantity = validation.callLeg?.quantity;
   const calculatedEntryCost = isFiniteNumber(netFillPriceUSD) && isFiniteNumber(actualTotalCommissionUSD) && quantity && quantity > 0
     ? roundUSD(netFillPriceUSD * CONTRACT_SIZE * quantity + actualTotalCommissionUSD)
     : undefined;
-  const entryCostUSD = ticket?.entryCostSource === "manual"
-    ? ticket.entryCostUSD
-    : canRepairLegacyImportedTicket && calculatedEntryCost !== undefined ? calculatedEntryCost : ticket?.entryCostUSD ?? calculatedEntryCost;
+  const legacyEntryCostUSD =
+    isFiniteNumber(netFillPriceUSD) && legacyStandardCommissionUSD !== undefined && quantity && quantity > 0
+      ? roundUSD(netFillPriceUSD * CONTRACT_SIZE * quantity + legacyStandardCommissionUSD)
+      : undefined;
+  const netFillSupportsParentEntryAggregate = isFiniteNumber(netFillPriceUSD) && (
+    ticket?.netFillSource !== undefined || ticket?.netFillPriceUSD === aggregatedNet
+  );
+  const canReaggregateParentEntryCost =
+    calculatedEntryCost !== undefined &&
+    !isProtectedParentValueSource(ticket?.entryCostSource) &&
+    !isProtectedParentValueSource(ticket?.actualTotalCommissionSource) &&
+    netFillSupportsParentEntryAggregate &&
+    (ticket?.entryCostSource === "leg_aggregate" ||
+      (ticket?.entryCostSource === undefined && ticket?.entryCostUSD === legacyEntryCostUSD));
+  const entryCostUSD = isProtectedParentValueSource(ticket?.entryCostSource)
+    ? ticket?.entryCostUSD
+    : canReaggregateParentEntryCost && calculatedEntryCost !== undefined ? calculatedEntryCost : ticket?.entryCostUSD ?? calculatedEntryCost;
   const requiredMarginUSD = ticket?.requiredMarginUSD;
   if (!sourceConfirmed) missingFields.push("親注文IDまたは二脚のSaxo履歴");
   if (!isFiniteNumber(netFillPriceUSD)) missingFields.push("ネット約定価格");
@@ -173,12 +202,14 @@ export function finalizeSyntheticForwardParent(simulation: TradeSimulation): Tra
   const finalization = getSyntheticForwardParentFinalization(withFees);
   if (!finalization || !finalization.entryComplete) return withFees;
   const ticket = withFees.syntheticForwardTicket ?? {};
-  const imported = hasImportedSaxoEvidence(withFees);
+  const parentCommissionChanged = ticket.actualTotalCommissionUSD !== undefined && ticket.actualTotalCommissionUSD !== finalization.actualTotalCommissionUSD && !isProtectedParentValueSource(ticket.actualTotalCommissionSource);
+  const parentEntryCostChanged = ticket.entryCostUSD !== undefined && ticket.entryCostUSD !== finalization.entryCostUSD && !isProtectedParentValueSource(ticket.entryCostSource);
+  const netFillChanged = ticket.netFillPriceUSD !== undefined && ticket.netFillPriceUSD !== finalization.netFillPriceUSD && ticket.netFillSource !== "manual";
   const nextTicket = {
     ...ticket,
-    ...(ticket.netFillSource === "manual" || !isFiniteNumber(finalization.netFillPriceUSD) ? {} : { netFillPriceUSD: finalization.netFillPriceUSD, netFillSource: ticket.netFillSource ?? (imported ? "leg_aggregate" as const : undefined) }),
-    ...(ticket.actualTotalCommissionSource === "manual" || !isFiniteNumber(finalization.actualTotalCommissionUSD) ? {} : { actualTotalCommissionUSD: finalization.actualTotalCommissionUSD, actualTotalCommissionSource: ticket.actualTotalCommissionSource ?? (imported ? "leg_aggregate" as const : undefined) }),
-    ...(ticket.entryCostSource === "manual" || !isFiniteNumber(finalization.entryCostUSD) ? {} : { entryCostUSD: finalization.entryCostUSD, entryCostSource: ticket.entryCostSource ?? (imported ? "leg_aggregate" as const : undefined) }),
+    ...(ticket.netFillSource === "manual" || !isFiniteNumber(finalization.netFillPriceUSD) ? {} : { netFillPriceUSD: finalization.netFillPriceUSD, netFillSource: ticket.netFillSource ?? (netFillChanged || ticket.netFillPriceUSD === undefined ? "leg_aggregate" as const : undefined) }),
+    ...(isProtectedParentValueSource(ticket.actualTotalCommissionSource) || !isFiniteNumber(finalization.actualTotalCommissionUSD) ? {} : { actualTotalCommissionUSD: finalization.actualTotalCommissionUSD, actualTotalCommissionSource: ticket.actualTotalCommissionSource ?? (parentCommissionChanged || ticket.actualTotalCommissionUSD === undefined ? "leg_aggregate" as const : undefined) }),
+    ...(isProtectedParentValueSource(ticket.entryCostSource) || !isFiniteNumber(finalization.entryCostUSD) ? {} : { entryCostUSD: finalization.entryCostUSD, entryCostSource: ticket.entryCostSource ?? (parentEntryCostChanged || ticket.entryCostUSD === undefined ? "leg_aggregate" as const : undefined) }),
   };
   const ticketChanged = nextTicket.netFillPriceUSD !== ticket.netFillPriceUSD || nextTicket.netFillSource !== ticket.netFillSource || nextTicket.actualTotalCommissionUSD !== ticket.actualTotalCommissionUSD || nextTicket.actualTotalCommissionSource !== ticket.actualTotalCommissionSource || nextTicket.entryCostUSD !== ticket.entryCostUSD || nextTicket.entryCostSource !== ticket.entryCostSource;
   return ticketChanged ? { ...withFees, syntheticForwardTicket: nextTicket } : withFees;

@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
 import type { OptionLeg, TradeSimulation } from "@/types/domain";
 import type { AccountInputs } from "@/store/useOptionsStore";
@@ -8,6 +8,7 @@ import {
   CloseDecisionCard,
   buildLongOptionValueSnapshot,
   buildOptionValueTimeline,
+  buildOptionPriceComparison,
   buildSaxoOptionPremiumCandidateInput,
   calculateLongOptionCloseAnnualizedReturnPercent,
   calculateLongOptionExitBreakevenPriceUSD,
@@ -44,6 +45,73 @@ function createAccountInputs(): AccountInputs {
     },
   };
 }
+
+function createSimulationWithLeg(leg: OptionLeg): TradeSimulation {
+  return {
+    id: `simulation-${leg.id}`,
+    name: "Anonymous option",
+    ticker: "ABC",
+    strategyType: leg.side === "buy" ? "long_call" : "short_put",
+    accountEnvironment: "PROD_N_USD_SETTLEMENT",
+    accountCode: "N",
+    accountCurrency: "USD",
+    status: "open",
+    entryDate: "2026-06-01",
+    expiryDate: leg.expiryDate,
+    dte: 140,
+    currentPriceUSD: 100,
+    fxRateJPY: 155,
+    brokerCommissionUSD: 2.24,
+    denominatorMode: "broker_margin_only",
+    nisaExpectedAnnualReturnPct: 5,
+    optionLegs: [leg],
+  } as TradeSimulation;
+}
+
+describe("at-a-glance option price comparison", () => {
+  it("compares a short option entry price and buyback price in the same per-share unit", () => {
+    expect(buildOptionPriceComparison(3.3, 2.31, "short")).toEqual({
+      entryPriceUSD: 3.3,
+      currentPriceUSD: 2.31,
+      differenceUSD: expect.closeTo(-0.99),
+      changePct: expect.closeTo(-30),
+      isFavorable: true,
+    });
+  });
+
+  it("does not calculate a difference when the current price is missing", () => {
+    expect(buildOptionPriceComparison(3.3, undefined, "short")).toEqual({
+      entryPriceUSD: 3.3,
+      currentPriceUSD: null,
+      differenceUSD: null,
+      changePct: null,
+      isFavorable: null,
+    });
+  });
+
+  it("shows the comparison first and keeps fee totals in a collapsed breakdown", () => {
+    const simulation = createSimulationWithLeg({
+      id: "short-put-comparison",
+      type: "put",
+      side: "sell",
+      strikeUSD: 320,
+      premiumUSD: 3.3,
+      closeCostUSD: 2.31,
+      quantity: 1,
+      expiryDate: "2026-08-21",
+      putIntent: "avoid_assignment",
+    });
+    render(createElement(CloseDecisionCard, { simulation, onChange: vi.fn(), defaultOpen: true }));
+
+    const comparison = screen.getByRole("region", { name: "オプション価格比較" });
+    expect(comparison).toHaveTextContent("建玉時");
+    expect(comparison).toHaveTextContent("$3.30 / 株");
+    expect(comparison).toHaveTextContent("$2.31 / 株");
+    expect(comparison).toHaveTextContent("-$0.99 / 株（-30.0%）");
+    expect(screen.getByText("計算内訳")).toBeInTheDocument();
+    expect(screen.getByText("今閉じた場合の概算損益（手数料後）")).toBeInTheDocument();
+  });
+});
 
 function createLongCallSimulation(overrides: Partial<TradeSimulation> = {}): TradeSimulation {
   return {
@@ -198,7 +266,7 @@ describe("Saxo premium candidate price selection", () => {
       source: "trade/v1/infoprices/list",
       bid: 21.9,
       message: "候補価格を取得しました。",
-    })).toBe(21.9);
+    }, "buy")).toBe(21.9);
   });
 
   it("treats NoAccess as price feed permission missing and never adopts quote fields", () => {
@@ -450,5 +518,18 @@ describe("long call time value decay snapshots", () => {
     expect(timeline.map((snapshot) => snapshot.snapshotDate)).toEqual(["2026-07-01", "2026-07-03"]);
     expect(timeline[1].optionExitPrice).toBe(36.4);
     expect(timeline[1].source).toBe("saxo");
+  });
+
+  it("confirms a close-fee candidate without creating a close execution or changing status", () => {
+    const leg: OptionLeg = { id: "fee-leg", type: "put", side: "sell", strikeUSD: 100, premiumUSD: 2, quantity: 2, expiryDate: "2026-11-20", closeCostUSD: 1 };
+    const simulation = createLongCallSimulation({ accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", optionLegs: [leg] });
+    const onChange = vi.fn();
+    render(createElement(CloseDecisionCard, { simulation, onChange, defaultOpen: true }));
+    expect(screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.includes("Saxo決済チケット確認済み標準 / 2契約 / 2026-08-14確認") === true)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /この標準手数料で見込み計算/ })).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(simulation.status).toBe("open");
+    expect(simulation.optionCloseExecutions).toBeUndefined();
+    expect(simulation.optionLegs[0].closePlan).toBeUndefined();
   });
 });

@@ -1,5 +1,6 @@
 import type { DenominatorResult, OptionLeg, TaxResult, TradeSimulation } from "@/types/domain";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
+import { calculateCurrentPositionEstimate } from "@/domain/currentPositionEstimate";
 import {
   calculateNetInitialPremiumJPY,
   calculateNetInitialPremiumUSD,
@@ -9,11 +10,14 @@ import {
   calculateTotalFeesUSD,
 } from "@/domain/calculations";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
+import type { FxQuote } from "@/lib/marketData";
+import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
 
 type AnnualReturnFormulaProps = {
   simulation: TradeSimulation;
   primaryDenominator: DenominatorResult;
   taxResult: TaxResult;
+  currentEstimateFxQuote?: FxQuote | null;
 };
 
 function legLabel(leg: OptionLeg): string {
@@ -42,8 +46,12 @@ export function AnnualReturnFormula({
   simulation,
   primaryDenominator,
   taxResult,
+  currentEstimateFxQuote,
 }: AnnualReturnFormulaProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
+  const currentEstimate = calculateCurrentPositionEstimate(simulation, new Date(), currentEstimateFxQuote);
+  if (currentEstimate.kind === "available") return <section className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm"><h2 className="text-base font-bold text-slate-950">現在決済年率</h2><p className="mt-1 text-sm leading-6 text-slate-600">現在の反対売買候補価格による概算です。{currentEstimate.currency === "JPY" ? `概算損益 ${formatJPY(currentEstimate.profitJPY, { signed: true })}` : `合算概算損益 ${formatUSD(currentEstimate.profitUSD)}`} / {formatPct(currentEstimate.profitPct)}、年率 {formatPct(currentEstimate.annualizedReturnPct)}。{currentEstimate.currency === "JPY" ? formatCurrentEstimateFxEvidence(currentEstimate.fx) : ""}</p></section>;
+  if (currentEstimate.kind === "missing") return <section className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm"><h2 className="text-base font-bold text-slate-950">現在決済年率: 未計算</h2><p className="mt-1 text-sm leading-6 text-slate-600">{currentEstimate.reason}。建玉時ネット額を現在損益やプレミアム年率へ代用しません。</p></section>;
   if (premiumDisplay.annualReturnApplicability === "not_applicable_synthetic") {
     return (
       <section className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">

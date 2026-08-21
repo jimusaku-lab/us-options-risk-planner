@@ -1,6 +1,32 @@
 import { describe, expect, it } from "vitest";
 import type { TradeSimulation } from "@/types/domain";
-import { normalizeSimulation } from "./useOptionsStore";
+import { migrateStoredLiveSimulation, normalizeSimulation, normalizeStoredSettings } from "./useOptionsStore";
+
+describe("stored N-option standard setting migration", () => {
+  it("migrates only the legacy 2.25 setting and preserves explicit custom settings", () => {
+    const base = { beginnerMode: true, defaultMarginBufferMultiplier: 2, defaultNisaExpectedAnnualReturnPct: 9 };
+    expect(normalizeStoredSettings({ ...base, defaultNOptionCommissionUSD: 2.25 }).defaultNOptionCommissionUSD).toBe(2.24);
+    expect(normalizeStoredSettings({ ...base, defaultNOptionCommissionUSD: 3.1 }).defaultNOptionCommissionUSD).toBe(3.1);
+  });
+  it("persists the corresponding aggregate parent correction once for a confirmed N synthetic", () => {
+    const synthetic = {
+      id: "stored-nvda-synthetic", status: "open", ticker: "MNO", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", fxRateJPY: 150, expiryDate: "2026-12-18",
+      optionLegs: [
+        { id: "call", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18" },
+        { id: "put", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", putIntent: "accept_assignment" },
+      ],
+      optionEntryExecutions: [
+        { id: "call-entry", legId: "call", tradeDate: "2026-08-13", contracts: 1, fillPriceUSD: 26.25, settlementCurrency: "USD", commissionUSD: 2.25, commissionSource: "standard_default", source: "manual", confirmed: true },
+        { id: "put-entry", legId: "put", tradeDate: "2026-08-13", contracts: 1, fillPriceUSD: 21.05, settlementCurrency: "USD", commissionUSD: 2.25, commissionSource: "standard_default", source: "manual", confirmed: true },
+      ],
+      optionCloseExecutions: [],
+      syntheticForwardTicket: { netFillPriceUSD: 5.2, actualTotalCommissionUSD: 4.5, entryCostUSD: 524.5, netFillSource: "leg_aggregate", actualTotalCommissionSource: "leg_aggregate", entryCostSource: "leg_aggregate" },
+    } as unknown as TradeSimulation;
+    const migrated = migrateStoredLiveSimulation(synthetic);
+    expect(migrated.syntheticForwardTicket).toMatchObject({ actualTotalCommissionUSD: 4.48, entryCostUSD: 524.48 });
+    expect(migrateStoredLiveSimulation(migrated)).toBe(migrated);
+  });
+});
 
 describe("normalizeSimulation manual opening total cost persistence", () => {
   const baseSimulation: TradeSimulation = {
@@ -94,6 +120,27 @@ describe("normalizeSimulation manual opening total cost persistence", () => {
     });
   });
 
+  it("preserves a manually evidenced trade date through JSON serialize/deserialize and normalization", () => {
+    const reloaded = normalizeSimulation(JSON.parse(JSON.stringify({
+      ...baseSimulation,
+      optionEntryExecutions: [{
+        ...baseSimulation.optionEntryExecutions?.[0],
+        tradeDate: "2026-08-13",
+        openingFieldSources: { ...(baseSimulation.optionEntryExecutions?.[0].openingFieldSources ?? {}), tradeDate: "manual" },
+        openingFieldEvidence: {
+          ...(baseSimulation.optionEntryExecutions?.[0].openingFieldEvidence ?? {}),
+          tradeDate: { source: "manual", sourceField: "manual", capturedAt: "2026-08-13T00:00:00.000Z", completeness: "direct" },
+        },
+      }],
+    })), "live");
+
+    expect(reloaded.optionEntryExecutions?.[0]).toMatchObject({
+      tradeDate: "2026-08-13",
+      openingFieldSources: { tradeDate: "manual" },
+      openingFieldEvidence: { tradeDate: { source: "manual", sourceField: "manual" } },
+    });
+  });
+
   it("keeps an explicit zero distinct from an undefined missing value", () => {
     const explicitZero = normalizeSimulation(
       JSON.parse(JSON.stringify({
@@ -140,8 +187,8 @@ describe("normalizeSimulation stock settlement migration", () => {
   const baseSimulation: TradeSimulation = {
     id: "legacy-stock-settlement-simulation",
     status: "closed",
-    name: "NVDA covered call",
-    ticker: "NVDA",
+    name: "MNO covered call",
+    ticker: "MNO",
     underlyingName: "NVIDIA",
     strategyType: "covered_call",
     currentPriceUSD: 202.76,

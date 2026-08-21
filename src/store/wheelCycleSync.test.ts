@@ -6,8 +6,8 @@ function createCoveredCall(overrides: Partial<TradeSimulation> = {}): TradeSimul
   return {
     id: "cc-nvda",
     status: "closed",
-    name: "NVDA N covered call",
-    ticker: "NVDA",
+    name: "MNO N covered call",
+    ticker: "MNO",
     underlyingName: "",
     strategyType: "covered_call",
     currentPriceUSD: 220,
@@ -87,7 +87,7 @@ function createNShortPut(overrides: Partial<TradeSimulation> = {}): TradeSimulat
     ...createCoveredCall({
       id: "put-nvda",
       status: "open",
-      name: "NVDA N short put",
+      name: "MNO N short put",
       strategyType: "short_put",
       entryDate: "2026-06-23",
       expiryDate: "2026-07-24",
@@ -104,6 +104,7 @@ function createNShortPut(overrides: Partial<TradeSimulation> = {}): TradeSimulat
           quantity: 1,
           expiryDate: "2026-07-24",
           putIntent: "want_to_buy",
+          assignmentPolicy: "accept",
         },
       ],
       optionEntryExecutions: [
@@ -129,7 +130,7 @@ function createNShortPut(overrides: Partial<TradeSimulation> = {}): TradeSimulat
 function createWheelCycle(overrides: Partial<WheelCycle> = {}): WheelCycle {
   return {
     id: "wheel-nvda",
-    ticker: "NVDA",
+    ticker: "MNO",
     primaryAccountCode: "N",
     currentPhase: "n_covered_call",
     currentAccountCode: "N",
@@ -235,6 +236,10 @@ describe("wheel cycle covered call synchronization", () => {
         sellPriceUSD: 202.76,
         costBasisUSD: 207.5,
         commissionUSD: 18.26,
+        source: "manual",
+        confirmationStatus: "confirmed",
+        completionStatus: "complete",
+        confirmedAt: "2026-06-24T10:00:00.000Z",
       },
     });
     const shortPut = createNShortPut();
@@ -260,8 +265,10 @@ describe("wheel cycle covered call synchronization", () => {
       simulations: [coveredCall, shortPut],
     });
 
-    expect(shortPutSynced.wheelCycles[0].cumulativeFeesUSD).toBeCloseTo(25.01, 8);
-    expect(repeated.wheelCycles[0].cumulativeFeesUSD).toBeCloseTo(25.01, 8);
+    const shortPutCycle = shortPutSynced.wheelCycles.find((cycle) => cycle.linkedSimulationIds.includes(shortPut.id));
+    const repeatedShortPutCycle = repeated.wheelCycles.find((cycle) => cycle.linkedSimulationIds.includes(shortPut.id));
+    expect(shortPutCycle?.cumulativeFeesUSD).toBeCloseTo(2.25, 8);
+    expect(repeatedShortPutCycle?.cumulativeFeesUSD).toBeCloseTo(2.25, 8);
     expect(repeated.wheelEvents.filter((event) => event.type === "covered_call_opened")).toHaveLength(1);
     expect(repeated.wheelEvents.filter((event) => event.type === "covered_call_closed")).toHaveLength(1);
     expect(repeated.wheelEvents.filter((event) => event.type === "stock_sold")).toHaveLength(1);
@@ -271,7 +278,7 @@ describe("wheel cycle covered call synchronization", () => {
 });
 
 describe("wheel cycle N short put synchronization", () => {
-  it("moves a sold N stock cycle to current N short put when an open N short put is saved", () => {
+  it("creates an isolated current N short put cycle without reusing an unlinked sold-stock cycle", () => {
     const result = syncWheelCycleWithNShortPutSimulation({
       simulation: createNShortPut(),
       wheelCycles: [createWheelCycle({ currentPhase: "n_called_away", currentShares: 0, linkedSimulationIds: ["cc-nvda"] })],
@@ -279,13 +286,14 @@ describe("wheel cycle N short put synchronization", () => {
       workspace: "live",
     });
 
-    expect(result.wheelCycles[0].currentPhase).toBe("n_short_put");
-    expect(result.wheelCycles[0].currentShares).toBe(0);
-    expect(result.wheelCycles[0].linkedSimulationIds).toContain("put-nvda");
+    const active = result.wheelCycles.find((cycle) => cycle.linkedSimulationIds.includes("put-nvda"));
+    expect(active?.currentPhase).toBe("n_short_put");
+    expect(active?.currentShares).toBe(0);
+    expect(result.wheelCycles[0].linkedSimulationIds).toEqual(["cc-nvda"]);
     expect(result.wheelEvents).toHaveLength(1);
     expect(result.wheelEvents[0].type).toBe("short_put_opened");
     expect(result.wheelEvents[0].feeUSD).toBe(2.25);
-    expect(result.wheelCycles[0].cumulativeFeesUSD).toBe(2.25);
+    expect(active?.cumulativeFeesUSD).toBe(2.25);
   });
 
   it("does not duplicate short_put_opened events on repeated saves", () => {
@@ -304,11 +312,12 @@ describe("wheel cycle N short put synchronization", () => {
     });
 
     expect(second.wheelEvents.filter((event) => event.type === "short_put_opened")).toHaveLength(1);
-    expect(second.wheelCycles[0].currentPhase).toBe("n_short_put");
-    expect(second.wheelCycles[0].cumulativeFeesUSD).toBe(2.25);
+    const active = second.wheelCycles.find((cycle) => cycle.linkedSimulationIds.includes(simulation.id));
+    expect(active?.currentPhase).toBe("n_short_put");
+    expect(active?.cumulativeFeesUSD).toBe(2.25);
   });
 
-  it("uses the only eligible sold N cycle even when the imported N short put has a blank ticker", () => {
+  it("does not use the only eligible cycle when the short put ticker is blank", () => {
     const result = syncWheelCycleWithNShortPutSimulation({
       simulation: createNShortPut({ ticker: "" }),
       wheelCycles: [createWheelCycle({ currentPhase: "n_called_away", currentShares: 0, linkedSimulationIds: ["cc-nvda"] })],
@@ -316,8 +325,9 @@ describe("wheel cycle N short put synchronization", () => {
       workspace: "live",
     });
 
-    expect(result.wheelCycles[0].ticker).toBe("NVDA");
-    expect(result.wheelCycles[0].currentPhase).toBe("n_short_put");
-    expect(result.wheelEvents[0].type).toBe("short_put_opened");
+    expect(result.wheelCycles[0].ticker).toBe("MNO");
+    expect(result.wheelCycles[0].currentPhase).toBe("n_called_away");
+    expect(result.wheelCycles[0].linkedSimulationIds).not.toContain("put-nvda");
+    expect(result.wheelEvents).toHaveLength(0);
   });
 });

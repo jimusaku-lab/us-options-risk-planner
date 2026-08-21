@@ -174,6 +174,17 @@ export type ClosePlan = {
   latestCloseDate?: string;
   orderType?: "limit" | "market" | "stop" | "stop_limit";
   commissionUSD?: number;
+  /** Provenance of an explicitly confirmed future close-fee estimate. */
+  commissionSource?: "user_confirmed_standard" | "manual" | "saxo_readonly_candidate";
+  /** ISO timestamp recorded only when the user confirms a candidate or manual value. */
+  commissionConfirmedAt?: string;
+  priceSource?: "saxo" | "manual" | "moomoo";
+  priceSelectedField?: "bid" | "ask" | "manual";
+  priceFetchedAt?: string;
+  priceQuoteStatus?: string;
+  priceType?: string;
+  priceReferenceConfirmed?: boolean;
+  priceReferenceConfirmedAt?: string;
 };
 
 export type OptionValueSnapshotSource = "manual" | "saxo" | "moomoo";
@@ -441,7 +452,7 @@ export type OptionEntryExecution = {
   brokerTaxIncludedFeeJPY?: number;
   commissionUSD?: number;
   /** Origin of the N-account USD option entry fee. */
-  commissionSource?: "standard_default" | "saxo_actual" | "manual";
+  commissionSource?: "standard_default" | "saxo_ticket_confirmed_standard" | "saxo_actual" | "manual";
   commissionJPY?: number;
   referenceFxRateJPY?: number;
   inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";
@@ -662,6 +673,7 @@ export type WheelCycle = {
   openedAt: string;
   closedAt?: string;
   memo?: string;
+  reconciliationVersion?: number;
 };
 
 export type WheelPhase =
@@ -726,5 +738,9 @@ export type WheelEvent = {
   sharesChange?: number;
   phaseAfter: WheelPhase;
   linkedSimulationId?: string;
+  /** Identifies the exact option leg when a composite parent participates in the wheel. */
+  linkedOptionLegId?: string;
+  /** Typed marker for events maintained by the pure wheel reconciliation. */
+  derivationSource?: "wheel_reconciliation" | "history" | "manual";
   linkedTransferId?: string;
 };

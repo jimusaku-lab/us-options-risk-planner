@@ -4,6 +4,7 @@ import { calculatePendingAccountCashEffects, createAccountCashAdjustment } from 
 import type { PendingAccountCashEffect } from "@/domain/accountCashEffects";
 import { calculateCoveredCallAssignmentPreview } from "@/domain/coveredCallAssignment";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
+import { calculateCurrentPositionEstimate } from "@/domain/currentPositionEstimate";
 import { resolveEffectiveCoveredCallSimulation } from "@/domain/coveredCallCoverage";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import {
@@ -33,6 +34,7 @@ import { getShortCallLegs } from "@/domain/calculations";
 import { shouldRecoverSaxoSyntheticForwardEntryConfirmation } from "@/domain/compositeOptionPosition";
 import { CandidatePanel } from "@/components/candidates/CandidatePanel";
 import { AccountOverview } from "@/components/dashboard/AccountOverview";
+import { resolveAccountMarginUsageWarning } from "@/domain/accountMarginWarning";
 import { Dashboard } from "@/components/dashboard/Dashboard";
 import { YearlyPerformanceSummaryCard } from "@/components/dashboard/YearlyPerformanceSummaryCard";
 import { DataPanel } from "@/components/data/DataPanel";
@@ -598,7 +600,7 @@ export default function App() {
     const ticker = resolveSaxoPositionSymbol(position, simulations) ?? historyTicker;
     const fillPriceUSD = bestHistory?.price ?? position.premiumOpenPrice ?? position.currentOptionPrice ?? 0;
     const contracts = bestHistory?.quantity !== undefined ? Math.max(1, Math.abs(bestHistory.quantity)) : quantity;
-    const entryTradeDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : entryDate;
+    const entryTradeDate = bestHistory?.tradeDate ?? "";
     const draftExecution: OptionEntryExecution = {
       id: `saxo-entry-${position.id}-${Date.now()}`,
       legId,
@@ -639,8 +641,8 @@ export default function App() {
           ? Math.abs(bestHistory.transactionCost)
           : getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD)
         : undefined,
-      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
-      referenceFxRateJPY: bestHistory?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
+      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "saxo_ticket_confirmed_standard") : undefined,
+      referenceFxRateJPY: isNAccount ? undefined : bestHistory?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
       inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
       source: "saxo_api_estimate",
       saxoSourceType: "current_position",
@@ -670,7 +672,7 @@ export default function App() {
       expiryDate,
       dte,
       accountCurrency: isNAccount ? "USD" : "JPY",
-      referenceFxRateJPY: selected?.referenceFxRateJPY ?? selected?.fxRateJPY ?? 0,
+      referenceFxRateJPY: isNAccount ? undefined : selected?.referenceFxRateJPY ?? selected?.fxRateJPY ?? 0,
       stockPosition: {
         shares: 0,
         averageCostUSD: position.averageOpenPrice ?? 0,
@@ -736,7 +738,7 @@ export default function App() {
     const isFilled = fillEvidence.status === "filled";
     const isEntryConfirmation = isFilled || forceEntryConfirmation;
     const parentHistory = fillEvidence.parentHistory;
-    const entryDate = parentHistory?.tradeDate ?? formatLocalDate(new Date());
+    const entryDate = parentHistory?.tradeDate ?? "";
     const parentOrderId = parentHistory?.orderId ?? parentHistory?.id;
     const parentNetFill = parentHistory?.price;
     const parentCommission = parentHistory?.transactionCost === undefined ? undefined : Math.abs(parentHistory.transactionCost);
@@ -763,8 +765,8 @@ export default function App() {
             ? Math.abs(history!.transactionCost!)
             : getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD)
           : undefined,
-        commissionSource: pair.accountCode === "N" ? (hasSaxoActualCommission ? "saxo_actual" : "standard_default") : undefined,
-        referenceFxRateJPY: history?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
+        commissionSource: pair.accountCode === "N" ? (hasSaxoActualCommission ? "saxo_actual" : "saxo_ticket_confirmed_standard") : undefined,
+        referenceFxRateJPY: pair.accountCode === "N" ? undefined : history?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
         inputMode: pair.accountCode === "N" ? "USD_EXECUTION_CALC" as const : "P_JPY_BROKER_STATEMENT" as const,
         source: "saxo_api_estimate" as const,
         saxoSourceType: history ? "history" as const : "current_position" as const,
@@ -897,10 +899,10 @@ export default function App() {
       return false;
     }
 
-    const today = formatLocalDate(new Date());
     const historyMatches = findEntryHistoryMatches(normalizedPosition, historyItems);
     const opening = resolveOpeningExecution(normalizedPosition, historyMatches, historyFetchState);
     const bestHistory = historyMatches.length === 1 ? historyMatches[0].item : undefined;
+    const existingEntry = (target.optionEntryExecutions ?? []).find((execution) => execution.legId === targetLeg.id);
     const actualExpiry = normalizedPosition.expiry ?? targetLeg.expiryDate ?? target.expiryDate;
     const actualStrike = normalizedPosition.strike ?? targetLeg.strikeUSD;
     const actualPremium = bestHistory?.price ?? normalizedPosition.premiumOpenPrice ?? normalizedPosition.currentOptionPrice ?? targetLeg.premiumUSD;
@@ -910,13 +912,16 @@ export default function App() {
         : normalizedPosition.quantity !== undefined
           ? Math.max(1, Math.abs(normalizedPosition.quantity))
           : targetLeg.quantity;
-    const actualTradeDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : bestHistory?.tradeDate ?? target.entryDate ?? today;
+    const actualTradeDate = bestHistory?.tradeDate ?? existingEntry?.tradeDate ?? "";
     const accountCode = normalizedPositionAccountCode;
     const isNAccount = accountCode === "N";
     const optionType = normalizedPosition.optionType === "put" || normalizedPosition.optionType === "call"
       ? normalizedPosition.optionType
       : targetLeg.type;
-    const existingEntry = (target.optionEntryExecutions ?? []).find((execution) => execution.legId === targetLeg.id);
+    const hasManualTradeDate = existingEntry?.openingFieldSources?.tradeDate === "manual";
+    const hasTradeDateConflict = Boolean(
+      hasManualTradeDate && bestHistory?.tradeDate && existingEntry?.tradeDate && bestHistory.tradeDate !== existingEntry.tradeDate,
+    );
     const diffs = describeSaxoPositionLinkDiffs(normalizedPosition, target, targetLeg, actualPremium, actualQuantity);
     const historyTicker = bestHistory
       ? resolveSaxoHistoryUnderlyingSymbol(bestHistory) ?? normalizeTicker(bestHistory.symbol ?? bestHistory.instrumentCode ?? "")
@@ -938,7 +943,7 @@ export default function App() {
       ...existingEntry,
       id: `saxo-entry-${normalizedPosition.id}-${Date.now()}`,
       legId: targetLeg.id,
-      tradeDate: existingEntry?.openingFieldSources?.tradeDate === "manual" ? existingEntry.tradeDate : (existingEntry?.tradeDate || actualTradeDate),
+      tradeDate: hasManualTradeDate ? existingEntry!.tradeDate : actualTradeDate,
       contracts: actualQuantity,
       fillPriceUSD: actualPremium,
       settlementCurrency: isNAccount ? "USD" : "JPY",
@@ -957,12 +962,14 @@ export default function App() {
           ? Math.abs(bestHistory.transactionCost)
           : getNOptionStandardCommissionUSD(actualQuantity, standardNOptionCommissionUSD)
         : undefined,
-      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "standard_default") : undefined,
+      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "saxo_ticket_confirmed_standard") : undefined,
       referenceFxRateJPY: bestHistory?.exchangeRate ?? target.referenceFxRateJPY ?? target.fxRateJPY ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
       inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
       source: "saxo_api_estimate",
       saxoSourceType: "current_position",
-      historyCompletionStatus: existingEntry?.confirmed
+      historyCompletionStatus: hasTradeDateConflict
+        ? "source_conflict"
+        : existingEntry?.confirmed
         ? (existingEntry.historyCompletionStatus ?? "matched")
         : mapOpeningExecutionHistoryStatusToEntryCompletionStatus(opening.historyStatus),
       openingFieldSources: existingEntry?.openingFieldSources,
@@ -1609,10 +1616,15 @@ export default function App() {
     selectSimulation(id);
     setIsEditorOpen(false);
   };
-  const goToCloseDecision = (simulationId: string, warning: RiskWarning) => {
+  const goToWarningAction = (simulationId: string, warning: RiskWarning) => {
     setJournalFocusSimulationId(null);
     if (!warning.actionAnchorId) {
-      setQuoteStatus("反対売買判断を開けませんでした。対象建玉を確認してください。");
+      setQuoteStatus("警告の操作を開けませんでした。対象建玉を確認してください。");
+      return;
+    }
+    const targetSimulation = simulations.find((simulation) => simulation.id === simulationId);
+    if (!targetSimulation) {
+      setQuoteStatus("警告の対象建玉を開けませんでした。対象建玉を確認してください。");
       return;
     }
     selectSimulation(simulationId);
@@ -1626,6 +1638,21 @@ export default function App() {
     if (["option-entry-executions", "option-close-executions", "stock-acquisition-record", "stock-settlement-record"].includes(warning.actionAnchorId)) {
       setIsEditorOpen(true);
       setEditorFocusRequest({ anchorId: warning.actionAnchorId, requestId: Date.now() + Math.random() });
+      return;
+    }
+    if (warning.actionAnchorId.startsWith("exit-rule-")) {
+      const targetLegId = warning.actionLegId ?? warning.actionAnchorId.slice("exit-rule-".length);
+      if (!targetSimulation.optionLegs.some((leg) => leg.id === targetLegId)) {
+        setQuoteStatus("出口ルールを開けませんでした。対象のP売り脚を確認してください。");
+        return;
+      }
+      setActiveView("positions");
+      setIsEditorOpen(true);
+      setEditorFocusRequest({ anchorId: warning.actionAnchorId, requestId: Date.now() + Math.random() });
+      return;
+    }
+    if (!warning.actionAnchorId.startsWith("close-decision-")) {
+      setQuoteStatus("警告の操作先を開けませんでした。対象建玉を確認してください。");
       return;
     }
     setActiveView("positions");
@@ -1648,6 +1675,16 @@ export default function App() {
     }
     setIsEditorOpen(true);
     setEditorFocusRequest({ anchorId, requestId: Date.now() + Math.random() });
+  };
+  const goToCurrentEstimateInput = (simulationId: string, legId?: string, field?: string) => {
+    setJournalFocusSimulationId(null);
+    selectSimulation(simulationId);
+    setActiveView("positions");
+    setIsEditorOpen(false);
+    setCloseDecisionSectionOpen(true);
+    setCoveredCallReferenceOpen(true);
+    const inputKind = field === "exit_price" ? "price" : "fee";
+    setCloseDecisionFocusRequest({ anchorId: legId ? `current-estimate-${inputKind}-${legId}` : "current-estimate-completion", requestId: Date.now() + Math.random() });
   };
   const goToPendingCashEffectSource = (effect: PendingAccountCashEffect) => {
     setJournalFocusSimulationId(null);
@@ -1791,9 +1828,12 @@ export default function App() {
                 accountInputs={accountInputs}
                 historyOpen={dashboardHistoryOpen}
                 onHistoryOpenChange={setDashboardHistoryOpen}
-                onWarningAction={goToCloseDecision}
+                onWarningAction={goToWarningAction}
                 onWorkflowTaskAction={goToWorkflowTask}
                 onJournalAction={openEntryRationaleJournal}
+                onCurrentEstimateAction={goToCurrentEstimateInput}
+                currentEstimateFxQuote={sameDayUsdJpyQuote}
+                onRefreshFx={refreshAllFx}
                 journalFocusSimulationId={journalFocusSimulationId}
                 onClearJournalFocus={() => setJournalFocusSimulationId(null)}
               />
@@ -1832,7 +1872,7 @@ export default function App() {
               <CollapsibleSection title="Saxo API詳細" collapsed>
                 <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
               </CollapsibleSection>
-              <CollapsibleSection title="口座全体の余力・証拠金詳細" collapsed>
+              <CollapsibleSection title="口座全体の余力・証拠金詳細" collapsed={![accountInputs.P, ...(activeWorkspace === "live" ? [accountInputs.N] : [])].some((account) => resolveAccountMarginUsageWarning(account) !== undefined)}>
                 <AccountOverview
                   workspace={activeWorkspace}
                   accountInputs={accountInputs}
@@ -1909,9 +1949,12 @@ export default function App() {
   const denominators = historyPerformance.denominators;
   const primaryWithNet = historyPerformance.primaryDenominator;
   const denominatorPremiumDisplay = calculateDashboardPremiumDisplay(selectedWithAccount);
+  const currentPositionEstimate = calculateCurrentPositionEstimate(selectedWithAccount, new Date(), sameDayUsdJpyQuote);
   const isSyntheticAnnualRateNotApplicable = denominatorPremiumDisplay.annualReturnApplicability === "not_applicable_synthetic";
   const denominatorsForDisplay =
-    isSyntheticAnnualRateNotApplicable
+    currentPositionEstimate.kind === "available"
+      ? denominators.map((row) => ({ ...row, annualReturnPct: currentPositionEstimate.annualizedReturnPct }))
+      : isSyntheticAnnualRateNotApplicable
       ? denominators.map((row) => ({ ...row, annualReturnApplicability: "not_applicable_synthetic" as const }))
       : !historyResultMode && denominatorPremiumDisplay.annualReturnPct !== undefined
       ? denominators.map((row) =>
@@ -1970,11 +2013,6 @@ export default function App() {
     selectedCoveredCallCoverage.requiredShares > 0 &&
     selectedCoveredCallCoverage.coveredShares >= selectedCoveredCallCoverage.requiredShares &&
     selectedCoveredCallCoverage.missingShares === 0;
-  const selectedNShortPutActiveForWheel =
-    selectedWithAccount.status !== "closed" &&
-    selectedWithAccount.status !== "expired" &&
-    selectedWithAccount.accountCurrency === "USD" &&
-    selectedWithAccount.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
   const isLongOptionDetailMode =
     (selectedWithAccount.strategyType === "long_call" || selectedWithAccount.strategyType === "long_put") &&
     selectedWithAccount.optionLegs.some((leg) => leg.side === "buy" && (leg.type === "call" || leg.type === "put"));
@@ -1987,8 +2025,10 @@ export default function App() {
   const saxoPanelSubtitle = saxoHasPendingReflection
     ? "API接続・取得・反映待ちは必要時だけ確認します。"
     : "反映待ち候補がないため、接続・同期は必要時だけ開きます。";
-  const collapseAccountOverview =
-    compactCoveredCallMode || (selected.status === "open" && pendingCashEffects.length === 0);
+  const hasAccountMarginUsageWarning = [accountInputs.P, ...(activeWorkspace === "live" ? [accountInputs.N] : [])]
+    .some((account) => resolveAccountMarginUsageWarning(account) !== undefined);
+  const collapseAccountOverview = !hasAccountMarginUsageWarning &&
+    (compactCoveredCallMode || (selected.status === "open" && pendingCashEffects.length === 0));
 
   return (
     <main className="min-h-screen bg-slate-100 text-slate-950">
@@ -2041,9 +2081,12 @@ export default function App() {
               accountInputs={accountInputs}
               historyOpen={dashboardHistoryOpen}
               onHistoryOpenChange={setDashboardHistoryOpen}
-              onWarningAction={goToCloseDecision}
+              onWarningAction={goToWarningAction}
               onWorkflowTaskAction={goToWorkflowTask}
               onJournalAction={openEntryRationaleJournal}
+              onCurrentEstimateAction={goToCurrentEstimateInput}
+              currentEstimateFxQuote={sameDayUsdJpyQuote}
+              onRefreshFx={refreshAllFx}
               journalFocusSimulationId={journalFocusSimulationId}
               onClearJournalFocus={() => setJournalFocusSimulationId(null)}
             />
@@ -2209,7 +2252,7 @@ export default function App() {
                   blockingCount={countableWarnings.filter((warning) => warning.blocking).length}
                   coveredCallAssignmentPreview={historyResultMode ? null : coveredCallAssignmentPreview}
                   primaryWarning={countableWarnings.find((warning) => warning.blocking) ?? countableWarnings[0]}
-                  onWarningAction={(warning) => goToCloseDecision(selected.id, warning)}
+                  onWarningAction={(warning) => goToWarningAction(selected.id, warning)}
                   historyMode={showSelectedHistoryDetails}
                   stockHoldingMode={assignedPutStockHoldingMode}
                   denominatorFormula={assignedPutDenominatorFormula}
@@ -2242,7 +2285,7 @@ export default function App() {
             ) : !historyResultMode && orderPrepCoveredCallMode ? (
               <>
                 <CollapsibleSection title="注文前チェックリスト詳細" subtitle="上部のチェックリストと同じ内容です。リスク警告を含めて確認する場合に開きます。" collapsed>
-                  <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                  <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToWarningAction(selected.id, warning)} />
                 </CollapsibleSection>
                 <DenominatorTable
                   denominators={denominators}
@@ -2256,6 +2299,7 @@ export default function App() {
                     simulation={selectedWithAccount}
                     primaryDenominator={primaryWithNet}
                     taxResult={taxResult}
+                    currentEstimateFxQuote={sameDayUsdJpyQuote}
                   />
                 </CollapsibleSection>
                 <CollapsibleSection title="税務・NISA等の参考情報" subtitle="注文前の予定値です。実績成績にはまだ含めません。" collapsed>
@@ -2280,6 +2324,7 @@ export default function App() {
                     simulation={selected}
                     saxoOrderCandidates={saxoOrderCandidates}
                     accountInputs={accountInputs}
+                    currentEstimateFxQuote={sameDayUsdJpyQuote}
                     onChange={upsertSimulation}
                     focusRequest={closeDecisionFocusRequest}
                     onExecutionDraft={() => {
@@ -2307,6 +2352,7 @@ export default function App() {
                       simulation={selected}
                       saxoOrderCandidates={saxoOrderCandidates}
                       accountInputs={accountInputs}
+                      currentEstimateFxQuote={sameDayUsdJpyQuote}
                       onChange={upsertSimulation}
                       focusRequest={closeDecisionFocusRequest}
                       onExecutionDraft={() => {
@@ -2314,7 +2360,7 @@ export default function App() {
                         setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
                       }}
                     />
-                    <RiskPanel warnings={warnings} checklist={[]} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                    <RiskPanel warnings={warnings} checklist={[]} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToWarningAction(selected.id, warning)} />
                     <DenominatorTable
                       denominators={denominatorsForDisplay}
                       collapsible
@@ -2326,6 +2372,7 @@ export default function App() {
                       simulation={selectedWithAccount}
                       primaryDenominator={primaryWithNet}
                       taxResult={taxResult}
+                      currentEstimateFxQuote={sameDayUsdJpyQuote}
                     />
                     <TaxComparisonCard
                       taxResult={taxResult}
@@ -2352,6 +2399,7 @@ export default function App() {
                     simulation={selected}
                     saxoOrderCandidates={saxoOrderCandidates}
                     accountInputs={accountInputs}
+                    currentEstimateFxQuote={sameDayUsdJpyQuote}
                     onChange={upsertSimulation}
                     focusRequest={closeDecisionFocusRequest}
                     defaultOpen
@@ -2361,14 +2409,14 @@ export default function App() {
                     }}
                   />
                   {hasActionableWarnings || !checklistComplete ? (
-                    <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                    <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToWarningAction(selected.id, warning)} />
                   ) : (
                     <CollapsibleSection
                       title="リスク警告・注文前チェックリスト詳細"
                       subtitle="警告なし、全チェック済みのため折り畳んでいます。"
                       collapsed
                     >
-                      <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                      <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToWarningAction(selected.id, warning)} />
                     </CollapsibleSection>
                   )}
                 </section>
@@ -2389,6 +2437,7 @@ export default function App() {
                       simulation={selectedWithAccount}
                       primaryDenominator={primaryWithNet}
                       taxResult={taxResult}
+                      currentEstimateFxQuote={sameDayUsdJpyQuote}
                     />
                   </div>
                 </CollapsibleSection>
@@ -2448,6 +2497,7 @@ export default function App() {
                       simulation={selected}
                       saxoOrderCandidates={saxoOrderCandidates}
                       accountInputs={accountInputs}
+                      currentEstimateFxQuote={sameDayUsdJpyQuote}
                       onChange={upsertSimulation}
                       focusRequest={closeDecisionFocusRequest}
                       onExecutionDraft={() => {
@@ -2457,14 +2507,14 @@ export default function App() {
                     />
                   </CollapsibleSection>
                   {hasActionableWarnings || !checklistComplete ? (
-                    <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                    <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToWarningAction(selected.id, warning)} />
                   ) : (
                     <CollapsibleSection
                       title="リスク警告・注文前チェックリスト詳細"
                       subtitle="警告なし、全チェック済みのため折り畳んでいます。"
                       collapsed
                     >
-                      <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToCloseDecision(selected.id, warning)} />
+                      <RiskPanel warnings={warnings} checklist={checklist} onChecklistChange={updateChecklist} onWarningAction={(warning) => goToWarningAction(selected.id, warning)} />
                     </CollapsibleSection>
                   )}
                 </section>
@@ -2487,6 +2537,7 @@ export default function App() {
                           simulation={selectedWithAccount}
                           primaryDenominator={primaryWithNet}
                           taxResult={taxResult}
+                          currentEstimateFxQuote={sameDayUsdJpyQuote}
                         />
                       </div>
                     </CollapsibleSection>
@@ -2525,6 +2576,7 @@ export default function App() {
                         simulation={selectedWithAccount}
                         primaryDenominator={primaryWithNet}
                         taxResult={taxResult}
+                        currentEstimateFxQuote={sameDayUsdJpyQuote}
                       />
                     </section>
                     <section className="grid gap-4">
@@ -2561,9 +2613,13 @@ export default function App() {
                   simulations={simulations}
                   stockEvaluationsByCycleId={stockEvaluationsByWheelId}
                   focusRequest={wheelFocusRequest}
-                  onCreateFromSelected={() => createWheelCycleFromSimulation(selected)}
-                  selectedSimulation={selectedWithAccount}
-                  selectedNShortPutActive={selectedNShortPutActiveForWheel}
+                  onCreateFromSelected={
+                    (selected.accountEnvironment === "PROD_N_USD_SETTLEMENT" || selected.accountCode === "N") &&
+                    (selected.strategyType === "short_put" || selected.strategyType === "synthetic_forward") &&
+                    selected.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell")
+                      ? undefined
+                      : () => createWheelCycleFromSimulation(selected)
+                  }
                   selectedTransferRecorded={selectedStockTransferRecorded}
                   onCreateTransferFromSelected={canCreateStockTransferFromSelected ? () => createStockTransferFromSimulation(selected) : undefined}
                   onCreateCoveredCallFromCycle={(cycle) => createCoveredCallFromWheelCycle(cycle.id)}

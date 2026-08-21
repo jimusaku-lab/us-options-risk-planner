@@ -4,6 +4,7 @@ import { Fragment } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
+import { calculateCurrentPositionEstimate, getSyntheticPutAssignmentPolicy } from "@/domain/currentPositionEstimate";
 import { getCompositeAssignmentFunding, getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, isCompositeOptionStrategy } from "@/domain/compositeOptionPosition";
 import { resolveEffectiveCoveredCallSimulation } from "@/domain/coveredCallCoverage";
 import { getJournalStatusLabel, getJournalStatusTone } from "@/domain/entryRationaleJournal";
@@ -12,6 +13,9 @@ import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
 import { getPrimaryWorkflowTask, getWorkflowTasks } from "@/domain/workflowTasks";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
+import type { FxQuote } from "@/lib/marketData";
+import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
+import type { CurrentOptionPricePreviewRow } from "@/domain/bulkOptionPrice";
 
 const statusClassName = {
   planned: "bg-sky-100 text-sky-800",
@@ -53,8 +57,15 @@ export function Dashboard({
   onWarningAction,
   onWorkflowTaskAction,
   onJournalAction,
+  onCurrentEstimateAction,
   journalFocusSimulationId,
   onClearJournalFocus,
+  currentEstimateFxQuote,
+  onRefreshFx,
+  bulkOptionPricePreview,
+  bulkOptionPriceMessage,
+  bulkOptionPriceAvailable = false,
+  onFetchBulkOptionPrices,
 }: {
   simulations: TradeSimulation[];
   stockTransfers?: StockTransferEvent[];
@@ -70,8 +81,15 @@ export function Dashboard({
   onWarningAction?: (simulationId: string, warning: RiskWarning) => void;
   onWorkflowTaskAction?: (simulationId: string, task: WorkflowTask) => void;
   onJournalAction?: (simulationId: string) => void;
+  onCurrentEstimateAction?: (simulationId: string, legId?: string, field?: string) => void;
   journalFocusSimulationId?: string | null;
   onClearJournalFocus?: () => void;
+  currentEstimateFxQuote?: FxQuote | null;
+  onRefreshFx?: () => void;
+  bulkOptionPricePreview?: CurrentOptionPricePreviewRow[] | null;
+  bulkOptionPriceMessage?: string;
+  bulkOptionPriceAvailable?: boolean;
+  onFetchBulkOptionPrices?: () => void;
 }) {
   const showHistory = historyOpen;
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "entry_confirmation" || simulation.status === "open");
@@ -112,7 +130,7 @@ export function Dashboard({
             </>
           )}
         </div>
-        {isJournalFocusMode ? (
+        <div className="flex items-center gap-2"><button type="button" disabled={!bulkOptionPriceAvailable} title="公開版ではSaxoローカルAPIに接続しません" className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white disabled:bg-slate-400" onClick={onFetchBulkOptionPrices}>価格を一括更新</button>{isJournalFocusMode ? (
           <button
             className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
             onClick={onClearJournalFocus}
@@ -128,8 +146,9 @@ export function Dashboard({
             {showHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             履歴 {historySimulations.length}件を{showHistory ? "畳む" : "表示"}
           </button>
-        )}
+        )}</div>
       </div>
+      {bulkOptionPriceMessage ? <p className="mt-2 text-right text-xs text-slate-500">{bulkOptionPriceMessage}</p> : null}
       {simulations.length === 0 ? (
         <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-5 text-sm leading-6 text-slate-600">
           このワークスペースにはまだ建玉がありません。上部の「新規建玉」から、Saxo画面を見ながら建玉を登録できます。
@@ -166,10 +185,6 @@ export function Dashboard({
                   simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
                     ? accountInputs.N.cashBalance * (simulation.referenceFxRateJPY ?? simulation.fxRateJPY)
                     : accountInputs.P.cashBalance,
-                marginUsagePercent:
-                  simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
-                    ? accountInputs.N.marginUsagePercent
-                    : accountInputs.P.marginUsagePercent,
               };
               const { simulation: simulationWithAccount, coverage: coveredCallCoverage } = resolveEffectiveCoveredCallSimulation(
                 simulationWithAccountBase,
@@ -181,6 +196,7 @@ export function Dashboard({
               const syntheticMarginCheck = getSyntheticForwardMarginCheck(simulation);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
+              const currentEstimate = !isHistoryRow ? calculateCurrentPositionEstimate(simulationWithAccount, new Date(), currentEstimateFxQuote) : { kind: "not_applicable" } as const;
               const longOptionDisplay = !isHistoryRow ? premiumDisplay.longOptionOrderDisplay : undefined;
               const historyCloseResults = historyPerformance?.optionCloseExecutionResults ?? [];
               const historyRealizedUsd = historyCloseResults.reduce((sum, result) => sum + result.realizedPnlUSD, 0);
@@ -226,6 +242,11 @@ export function Dashboard({
               const journalStatusTone = getJournalStatusTone(journalStatusLabel);
               const isFirstHistory = !isJournalFocusMode && showHistory && index === currentSimulations.length && historySimulations.length > 0;
               const isSyntheticAnnualRateNotApplicable = premiumDisplay.annualReturnApplicability === "not_applicable_synthetic";
+              const isNStandaloneShortPut = simulation.strategyType === "short_put" && isNAccountRow && putLeg?.type === "put" && putLeg.side === "sell";
+              const shortPutPolicy = isNStandaloneShortPut && (putLeg.assignmentPolicy === "accept" || putLeg.assignmentPolicy === "avoid") ? putLeg.assignmentPolicy : "unknown";
+              const shortPutAvoidsAssignment = shortPutPolicy === "avoid";
+              const showsShortPutCurrentPnl = isNStandaloneShortPut && shortPutPolicy !== "avoid";
+              const usesCurrentEstimate = !isHistoryRow && currentEstimate.kind !== "not_applicable" && (simulation.strategyType === "synthetic_forward" || simulation.strategyType === "long_call" || simulation.strategyType === "long_put" || shortPutAvoidsAssignment);
               const annualReturnLabel =
                 isSyntheticAnnualRateNotApplicable
                   ? "適用外"
@@ -318,6 +339,7 @@ export function Dashboard({
                         <div>ネット約定 {simulation.syntheticForwardTicket?.netFillPriceUSD === undefined ? "未入力" : `${formatUSD(simulation.syntheticForwardTicket.netFillPriceUSD)} / 株`}</div>
                         <div>実績総手数料 {simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.actualTotalCommissionUSD)} / 建玉時支払額 {simulation.syntheticForwardTicket?.entryCostUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.entryCostUSD)}</div>
                         <div>注文時証拠金 {syntheticMarginCheck?.status === "sufficient" ? "充足" : syntheticMarginCheck?.status === "insufficient" ? "不足" : "要確認"}</div>
+                        <div>{getSyntheticPutAssignmentPolicy(simulation) === "accept" ? "方針: 株取得可" : getSyntheticPutAssignmentPolicy(simulation) === "avoid" ? "方針: 株取得しない" : "方針未確認"}</div>
                       </div>
                     ) : null}
                     {compositeFunding ? <div className={`mt-1 text-xs ${compositeFunding.status === "sufficient" ? "text-emerald-700" : "text-amber-700"}`}>P割当資金 {formatUSD(compositeFunding.requiredUSD)}: {compositeFunding.status === "sufficient" ? "充足" : compositeFunding.status === "insufficient" ? "不足" : "未確認"}</div> : null}
@@ -356,18 +378,12 @@ export function Dashboard({
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {longOptionDisplay ? (
                       <>
-                        <span className="mb-1 block text-[11px] font-bold text-slate-500">反対売買損益分岐価格</span>
-                        <span className="block text-slate-950">{formatUSD(longOptionDisplay.exitBreakevenPriceUSD)} / 株</span>
+                        <span className="mb-1 block text-[11px] font-bold text-slate-500">建玉時支払額</span>
+                        <span className="block text-slate-950">{formatUSD(longOptionDisplay.totalCostUSD)}</span>
                         <span className="block text-xs text-slate-500">
                           {hasEffectiveFx && Math.abs(longOptionDisplay.totalCostJPY) > 0.5
-                            ? `建玉時支払額 参考 -${formatJPY(longOptionDisplay.totalCostJPY)}`
+                            ? `参考 ${formatJPY(longOptionDisplay.totalCostJPY)}`
                             : "参考JPY未計算"}
-                        </span>
-                        <span className="mt-1 block text-[11px] font-semibold text-slate-500">
-                          支払済みリスク上限 {formatUSD(longOptionDisplay.maximumLossUSD)}
-                        </span>
-                        <span className="mt-1 block text-[11px] font-semibold text-slate-500">
-                          満期損益分岐点（参考） {formatUSD(longOptionDisplay.breakevenUSD)}
                         </span>
                       </>
                     ) : primary.currency === "USD" ? (
@@ -386,37 +402,12 @@ export function Dashboard({
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {isSyntheticAnnualRateNotApplicable ? (
-                      <span className="block text-[11px] font-bold text-slate-500">年率</span>
+                    {usesCurrentEstimate ? (
+                      <span className="block text-[11px] font-bold text-slate-500">現在決済年率</span>
                     ) : !isHistoryRow && premiumDisplay.annualReturnPct !== undefined ? (
                       <span className="block text-[11px] font-bold text-slate-500">プレミアム年率</span>
                     ) : null}
-                    {annualReturnLabel}
-                    {isSyntheticAnnualRateNotApplicable ? (
-                      <span className="mt-1 block text-left text-[11px] font-medium leading-4 text-slate-500">
-                        シンセティックは建玉時ネット支払額をプレミアム年率として評価しません
-                      </span>
-                    ) : null}
-                    {longOptionDisplay ? (
-                      <span className="mt-1 block rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-indigo-900">
-                        <span className="block">
-                          現在オプション価格 {longOptionDisplay.closePriceUSD !== undefined ? formatUSD(longOptionDisplay.closePriceUSD) : "未入力"}
-                        </span>
-                        <span className="block">
-                          損益分岐までの余裕 {longOptionDisplay.exitBreakevenBufferUSD !== undefined ? formatSignedUSD(longOptionDisplay.exitBreakevenBufferUSD) : "未計算"} / 株
-                        </span>
-                        <span className="block">
-                          評価損益 {longOptionDisplay.estimatedProfitUSD !== undefined ? formatSignedUSD(longOptionDisplay.estimatedProfitUSD) : "未計算"}
-                          {longOptionDisplay.profitPct !== undefined ? ` / ${longOptionDisplay.profitPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.profitPct)}` : ""}
-                        </span>
-                        <span className="block">
-                          利確/損切りライン {formatUSD(longOptionDisplay.profitTargetPriceUSD)} / {formatUSD(longOptionDisplay.stopLossPriceUSD)}
-                        </span>
-                        <span className="block">
-                          {longOptionDisplay.currentPriceUSD !== undefined ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)}` : "現在株価未取得"} / 残存 {longOptionDisplay.remainingDays}日
-                        </span>
-                      </span>
-                    ) : null}
+                    {usesCurrentEstimate && currentEstimate.kind === "available" ? <><span className={`block ${currentEstimate.annualizedReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{currentEstimate.annualizedReturnPct >= 0 ? "+" : ""}{formatPct(currentEstimate.annualizedReturnPct)}</span>{currentEstimate.currency === "JPY" ? <><span className={`block text-[11px] ${currentEstimate.profitJPY >= 0 ? "text-emerald-700" : "text-red-700"}`}>概算損益 {formatJPY(currentEstimate.profitJPY, { signed: true })} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span><span className="block text-[10px] text-slate-500">{formatCurrentEstimateFxEvidence(currentEstimate.fx)}</span></> : <span className={`block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>{simulation.strategyType === "synthetic_forward" ? "合算概算損益" : "概算損益"} {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span>}</> : usesCurrentEstimate && currentEstimate.kind === "missing" ? <><span className="block text-slate-500">未計算</span><span className="block text-[11px] text-slate-500">{currentEstimate.reason}</span>{currentEstimate.reason === "為替レート 未確認" ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={onRefreshFx}>為替を取得</button> : ["exit_price", "close_fee"].includes(currentEstimate.missingRequirements[0]?.field ?? "") ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={() => onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field)}>不足情報を確認</button> : null}</> : <>{annualReturnLabel}{showsShortPutCurrentPnl && currentEstimate.kind === "available" && currentEstimate.currency !== "JPY" ? <span className={`mt-1 block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>現在買戻し概算損益 {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span> : showsShortPutCurrentPnl && currentEstimate.kind === "missing" ? <><span className="mt-1 block text-[11px] text-slate-500">現在買戻し概算損益 未計算 / {currentEstimate.reason}</span>{["exit_price", "close_fee"].includes(currentEstimate.missingRequirements[0]?.field ?? "") ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => { event.stopPropagation(); onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field); }}>不足情報を確認</button> : null}</> : null}{isSyntheticAnnualRateNotApplicable ? <span className="mt-1 block text-left text-[11px] font-medium leading-4 text-slate-500">建玉時ネット額はプレミアム年率として評価しません</span> : null}</>}
                     {isHistoryRow ? <span className="mt-1 block text-[11px] font-semibold text-slate-500">税前 / 税後</span> : null}
                     {!isHistoryRow && premiumDisplay.coveredCallAssignmentEstimate ? (
                       <span className="mt-2 block rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-sky-950">

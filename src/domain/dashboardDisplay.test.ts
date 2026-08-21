@@ -6,8 +6,8 @@ function createPlannedCoveredCall(overrides: Partial<TradeSimulation> = {}): Tra
   const simulation: TradeSimulation = {
     id: "cc-draft",
     status: "planned",
-    name: "NVDA N covered call draft",
-    ticker: "NVDA",
+    name: "MNO N covered call draft",
+    ticker: "MNO",
     underlyingName: "",
     strategyType: "covered_call",
     currentPriceUSD: 207.5,
@@ -204,7 +204,7 @@ describe("dashboard premium display", () => {
       ...createPlannedCoveredCall({
         id: "nvda-p195-n",
         status: "open",
-        name: "NVDA P195 N short put",
+        name: "MNO P195 N short put",
         strategyType: "short_put",
         currentPriceUSD: 201.8,
         fxRateJPY: 0,
@@ -256,8 +256,8 @@ describe("dashboard premium display", () => {
       ...createPlannedCoveredCall({
         id: "nvda-synthetic-forward",
         status: "open",
-        name: "NVDA synthetic forward",
-        ticker: "NVDA",
+        name: "MNO synthetic forward",
+        ticker: "MNO",
         strategyType: "synthetic_forward",
         entryDate: "2026-07-16",
         expiryDate: "2026-12-18",
@@ -289,7 +289,7 @@ describe("dashboard premium display", () => {
       ...createPlannedCoveredCall({
         id: "nvda-p195-n-shifted-entry",
         status: "open",
-        name: "NVDA P195 N short put",
+        name: "MNO P195 N short put",
         strategyType: "short_put",
         currentPriceUSD: 201.8,
         fxRateJPY: 0,
@@ -382,7 +382,8 @@ describe("dashboard premium display", () => {
     expect(display.longOptionOrderDisplay?.paidPremiumJPY).toBeCloseTo(355_630, 8);
     expect(display.longOptionOrderDisplay?.totalCostJPY).toBeCloseTo(355_993.7125, 8);
     expect(display.longOptionOrderDisplay?.maximumLossJPY).toBeCloseTo(355_993.7125, 8);
-    expect(display.longOptionOrderDisplay?.exitBreakevenPriceUSD).toBeCloseTo(22.045, 8);
+    expect(display.longOptionOrderDisplay?.closeCommissionUSD).toBe(2.24);
+    expect(display.longOptionOrderDisplay?.exitBreakevenPriceUSD).toBeCloseTo(22.0449, 8);
     expect(display.longOptionOrderDisplay?.breakevenUSD).toBeCloseTo(357.0225, 8);
     expect(display.longOptionOrderDisplay?.currentPriceUSD).toBe(336);
     expect(display.longOptionOrderDisplay?.strikeUSD).toBe(335);
@@ -527,7 +528,8 @@ describe("dashboard premium display", () => {
 
     expect(display.longOptionOrderDisplay?.currentPriceUSD).toBeUndefined();
     expect(display.longOptionOrderDisplay?.maximumLossUSD).toBeCloseTo(2_412.25, 8);
-    expect(display.longOptionOrderDisplay?.exitBreakevenPriceUSD).toBeCloseTo(24.145, 8);
+    expect(display.longOptionOrderDisplay?.closeCommissionUSD).toBe(2.24);
+    expect(display.longOptionOrderDisplay?.exitBreakevenPriceUSD).toBeCloseTo(24.1449, 8);
     expect(display.longOptionOrderDisplay?.breakevenUSD).toBeCloseTo(364.1225, 8);
   });
 });

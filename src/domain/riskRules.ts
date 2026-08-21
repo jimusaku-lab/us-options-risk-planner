@@ -7,7 +7,7 @@ import {
   getShortCallLegs,
   getShortPutLegs,
 } from "./calculations";
-import { getExitDeadlineInfo, getExitOrderLossAmount, getExitOrderPlan, getExitOrderPlanForLeg, getExitOrderStopValue, isAvoidAssignmentPut } from "./exitOrderPlan";
+import { getExitDeadlineInfo, getExitOrderLossAmount, getExitOrderPlanForLeg, getExitOrderStopValue, isAvoidAssignmentPut } from "./exitOrderPlan";
 import { hasUnconfirmedOptionEntryExecutions } from "./optionEntryExecutions";
 import { hasConfirmedBuybackCloseExecution, hasConfirmedExpiredCloseExecution, hasUnconfirmedCloseExecutionDraft } from "./optionCloseExecutions";
 
@@ -45,6 +45,30 @@ function closeDecisionAction(simulation: TradeSimulation, leg: OptionLeg): Pick<
   };
 }
 
+function exitRuleAction(simulation: TradeSimulation, leg: OptionLeg): Pick<RiskWarning, "actionAnchorId" | "actionLabel" | "actionLegId" | "actionLegType" | "actionSimulationId"> {
+  return {
+    actionLabel: "出口ルールを設定",
+    actionSimulationId: simulation.id,
+    actionLegId: leg.id,
+    actionLegType: leg.type,
+    actionAnchorId: `exit-rule-${leg.id}`,
+  };
+}
+
+function getAvoidPutExitRuleMissingFields(simulation: TradeSimulation, leg: OptionLeg): string[] {
+  const plan = getExitOrderPlanForLeg(simulation, leg);
+  const missing: string[] = [];
+  if (!plan.profitTakeEnabled) missing.push("利確ルール");
+  if (!plan.stopLossEnabled) {
+    missing.push("損切りルール");
+  } else {
+    const stopValue = plan.stopLossType === "loss_amount" ? getExitOrderLossAmount(plan, simulation) : getExitOrderStopValue(plan);
+    if (stopValue <= 0) missing.push("損切りラインの値");
+  }
+  if (!plan.latestCloseDaysBeforeExpiryUserSet) missing.push("満期前判断期限");
+  return missing;
+}
+
 export function generateRiskWarnings(
   simulation: TradeSimulation,
   options: { stockTransferRecorded?: boolean; coveredCallCoverage?: CoveredCallCoverageResolution } = {},
@@ -54,7 +78,6 @@ export function generateRiskWarnings(
     ? options.coveredCallCoverage.missingShares
     : calculateUncoveredCallShares(simulation);
   const avoidPut = hasAvoidPut(simulation);
-  const exitOrderPlan = getExitOrderPlan(simulation);
 
   if (hasUnconfirmedOptionEntryExecutions(simulation)) {
     warnings.push({
@@ -245,48 +268,16 @@ export function generateRiskWarnings(
     const legAvoidPut =
       leg.putIntent === "avoid_assignment" || leg.putIntent === "do_not_want_to_buy" || leg.putIntent === "cannot_buy";
     const legExitOrderPlan = getExitOrderPlanForLeg(simulation, leg);
-    if (legAvoidPut && !legExitOrderPlan.stopLossEnabled) {
+    const exitRuleMissingFields = legAvoidPut ? getAvoidPutExitRuleMissingFields(simulation, leg) : [];
+    const isExitRuleSetupStatus = simulation.status === "planned" || simulation.status === "entry_confirmation";
+    if (exitRuleMissingFields.length > 0 && (isExitRuleSetupStatus || simulation.status === "open")) {
       warnings.push({
-        id: legIndex === 0 ? "avoid-put-no-stop" : `avoid-put-no-stop-${leg.id}`,
-        severity: "danger",
-        title: "P売りの損切りルールが未設定です",
-        message: "株を取得したくないP売りでは、そのP売り脚に損切りルールが必須です。",
-        blocking: true,
-        ...closeDecisionAction(simulation, leg),
-      });
-    }
-    const legStopValue =
-      legExitOrderPlan.stopLossType === "loss_amount"
-        ? getExitOrderLossAmount(legExitOrderPlan, simulation)
-        : getExitOrderStopValue(legExitOrderPlan);
-    if (legAvoidPut && legExitOrderPlan.stopLossEnabled && legStopValue <= 0) {
-      warnings.push({
-        id: legIndex === 0 ? "avoid-put-empty-stop-value" : `avoid-put-empty-stop-value-${leg.id}`,
-        severity: "danger",
-        title: "P売りの損切りルール値が未入力です",
-        message: "損切りルールをONにしたP売り脚には、買戻し価格、株価ライン、損失額のいずれかを入れてください。",
-        blocking: true,
-        ...closeDecisionAction(simulation, leg),
-      });
-    }
-    if (legAvoidPut && !legExitOrderPlan.profitTakeEnabled) {
-      warnings.push({
-        id: legIndex === 0 ? "avoid-put-no-profit-take" : `avoid-put-no-profit-take-${leg.id}`,
-        severity: "danger",
-        title: "P売りの利確ルールが未設定です",
-        message: "株を取得したくないP売りでは、そのP売り脚の利確ルールを注文前に決めてください。",
-        blocking: true,
-        ...closeDecisionAction(simulation, leg),
-      });
-    }
-    if (legAvoidPut && legExitOrderPlan.latestCloseDaysBeforeExpiry === undefined) {
-      warnings.push({
-        id: legIndex === 0 ? "avoid-put-no-close-deadline" : `avoid-put-no-close-deadline-${leg.id}`,
-        severity: "danger",
-        title: "P売りの満期前決済期限が未設定です",
-        message: "満期直前まで放置しないため、そのP売り脚を何日前までに閉じるかを設定してください。",
-        blocking: true,
-        ...closeDecisionAction(simulation, leg),
+        id: legIndex === 0 ? "avoid-put-exit-rule-missing" : `avoid-put-exit-rule-missing-${leg.id}`,
+        severity: isExitRuleSetupStatus ? "danger" : "warning",
+        title: "P売りの反対売買ルールが未設定です",
+        message: `不足: ${exitRuleMissingFields.join(" / ")}`,
+        blocking: isExitRuleSetupStatus,
+        ...exitRuleAction(simulation, leg),
       });
     }
     const exitDeadline = getExitDeadlineInfo(simulation, legExitOrderPlan);
@@ -356,15 +347,6 @@ export function generateRiskWarnings(
         message: "プレミアム額だけでなく、現在株価からの距離、損切り、分母を確認してください。",
       });
     }
-  }
-
-  if ((simulation.marginUsagePercent ?? 0) >= 60) {
-    warnings.push({
-      id: "high-margin-usage",
-      severity: "danger",
-      title: "証拠金使用率が高いです",
-      message: "建玉を増やしすぎると、損切り覚悟で決済せざるを得ない可能性があります。",
-    });
   }
 
   const putAssignmentCapitalJPY = calculatePutAssignmentCapitalTotalJPY(simulation);

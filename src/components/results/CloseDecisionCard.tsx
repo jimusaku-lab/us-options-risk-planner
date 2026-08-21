@@ -12,6 +12,11 @@ import { fetchSaxoOptionPremiumCandidate, isSaxoLocalApiAvailable } from "@/feat
 import { findOrderCandidatesForLeg, type SaxoApiOrderSnapshot, type SaxoOptionPremiumCandidate } from "@/features/saxo/saxoAccountSync";
 import { EntryRationaleJournalPanel } from "@/components/journal/EntryRationaleJournalPanel";
 import { NumberInput } from "@/components/ui/NumberInput";
+import { resolveCloseCommissionUSD } from "@/domain/closeCommissionStandard";
+import { resolveSaxoOptionLegIdentifiers } from "@/domain/bulkOptionPrice";
+import { calculateCurrentPositionEstimate } from "@/domain/currentPositionEstimate";
+import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
+import type { FxQuote } from "@/lib/marketData";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 export function CloseDecisionCard({
@@ -22,6 +27,7 @@ export function CloseDecisionCard({
   onExecutionDraft,
   defaultOpen = false,
   accountInputs,
+  currentEstimateFxQuote,
 }: {
   simulation: TradeSimulation;
   saxoOrderCandidates?: SaxoApiOrderSnapshot[];
@@ -30,11 +36,13 @@ export function CloseDecisionCard({
   onExecutionDraft?: () => void;
   defaultOpen?: boolean;
   accountInputs?: AccountInputs;
+  currentEstimateFxQuote?: FxQuote | null;
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const shortLegs = simulation.optionLegs.filter((leg) => leg.side === "sell");
   const longLegs = simulation.optionLegs.filter((leg) => leg.side === "buy");
   const closeDecisionLegs = [...shortLegs, ...longLegs];
+  const confirmedOpeningCommissionUSD = (leg: OptionLeg) => { const execution=(simulation.optionEntryExecutions??[]).find((item)=>item.legId===leg.id&&item.confirmed&&item.settlementCurrency==="USD"); return execution?.commissionUSD!==undefined&&Number.isFinite(execution.commissionUSD)?execution.commissionUSD:undefined; };
   const entryRationaleJournal = simulation.entryRationaleJournal ?? createJournalForSimulation(simulation);
   const updateLeg = (id: string, patch: Partial<OptionLeg>) => {
     onChange({
@@ -60,6 +68,7 @@ export function CloseDecisionCard({
       valueSnapshots: snapshot ? upsertOptionValueSnapshot(leg.valueSnapshots, snapshot) : leg.valueSnapshots,
     });
   };
+  const updateCloseFee = (leg: OptionLeg, commissionUSD: number, commissionSource: "manual" | "user_confirmed_standard") => updateLeg(leg.id, { closePlan: { enabled: true, ...(leg.closePlan ?? {}), commissionUSD, commissionSource, commissionConfirmedAt: new Date().toISOString() } });
   const addExecutionDraft = (leg: OptionLeg) => {
     const closePriceUSD = leg.closeCostUSD ?? leg.closePlan?.closePriceUSD;
     if (closePriceUSD === undefined || closePriceUSD <= 0) return;
@@ -103,6 +112,7 @@ export function CloseDecisionCard({
               ? "買いオプションは原則として満期前に反対売買で決済します。ITMでも権利行使ではなく、まず売却決済・利確/損切りライン・残存日数を確認します。"
               : "Saxoの決済チケットに表示される現在の買戻し価格を入力し、出口ルールに到達しているか確認します。"}
           </p>
+          <CurrentEstimateCompletion simulation={simulation} legs={closeDecisionLegs} currentEstimateFxQuote={currentEstimateFxQuote} onPriceChange={(leg, value) => updateLongOptionClosePrice(leg, value, "manual")} onFeeChange={updateCloseFee} />
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             {shortLegs.map((leg) => (
               <LegCloseCard
@@ -110,7 +120,7 @@ export function CloseDecisionCard({
                 leg={leg}
                 simulation={simulation}
                 fxRateJPY={simulation.fxRateJPY}
-                openCommissionUSD={(simulation.brokerCommissionUSD ?? 0) / Math.max(1, shortLegs.length)}
+                openCommissionUSD={confirmedOpeningCommissionUSD(leg)}
                 saxoOrderCandidates={saxoOrderCandidates}
                 onCloseCostChange={(closeCostUSD) => updateLeg(leg.id, { closeCostUSD })}
                 onExecutionDraft={() => addExecutionDraft(leg)}
@@ -122,7 +132,7 @@ export function CloseDecisionCard({
                 leg={leg}
                 simulation={simulation}
                 fxRateJPY={simulation.fxRateJPY}
-                openCommissionUSD={(simulation.brokerCommissionUSD ?? 0) / Math.max(1, closeDecisionLegs.length)}
+                openCommissionUSD={confirmedOpeningCommissionUSD(leg)}
                 saxoOrderCandidates={saxoOrderCandidates}
                 onClosePriceChange={(closeCostUSD, source) => updateLongOptionClosePrice(leg, closeCostUSD, source)}
                 onClosePlanChange={(closePlanPatch) => updateLeg(leg.id, { closePlan: { enabled: true, ...(leg.closePlan ?? {}), ...closePlanPatch } })}
@@ -157,18 +167,23 @@ export function buildSaxoOptionPremiumCandidateInput(
   simulation: TradeSimulation,
   leg: OptionLeg,
 ): Parameters<typeof fetchSaxoOptionPremiumCandidate>[0] {
-  const instrumentCode = simulation.fixtureMeta?.saxoInstrumentCode ?? leg.brokerSymbol;
+  const identifiers = resolveSaxoOptionLegIdentifiers(simulation, leg);
   return {
     symbol: simulation.ticker,
     expiry: leg.expiryDate,
     strike: leg.strikeUSD,
     optionType: leg.type,
-    accountKey: simulation.fixtureMeta?.saxoAccountKey,
-    uic: simulation.fixtureMeta?.saxoUic,
-    assetType: simulation.fixtureMeta?.saxoUic || instrumentCode ? "StockOption" : undefined,
-    positionId: simulation.fixtureMeta?.saxoPositionId,
-    instrumentCode,
+    accountKey: identifiers.accountKey,
+    uic: identifiers.uic,
+    assetType: identifiers.uic || identifiers.instrumentCode ? "StockOption" : undefined,
+    positionId: identifiers.positionId,
+    instrumentCode: identifiers.instrumentCode,
   };
+}
+
+function CurrentEstimateCompletion({ simulation, legs, onPriceChange, onFeeChange, currentEstimateFxQuote }: { simulation: TradeSimulation; legs: OptionLeg[]; onPriceChange: (leg: OptionLeg, value: number) => void; onFeeChange: (leg: OptionLeg, value: number, source: "manual" | "user_confirmed_standard") => void; currentEstimateFxQuote?: FxQuote | null; }) {
+  const currentEstimate = calculateCurrentPositionEstimate(simulation, new Date(), currentEstimateFxQuote);
+  return <section id="current-estimate-completion" className="mt-4 rounded-md border border-teal-200 bg-teal-50/50 p-3"><h3 className="text-sm font-bold text-slate-950">現在決済見込みを完成</h3><p className="mt-1 text-xs leading-5 text-slate-600">現在価格と決済想定手数料を確認して保存すると、この場で見込み表示を再計算します。決済実績・建玉状態・Saxo側には変更を加えません。</p>{currentEstimate.kind === "available" && currentEstimate.currency === "JPY" ? <p className="mt-1 text-xs text-slate-500">{formatCurrentEstimateFxEvidence(currentEstimate.fx)}</p> : null}<div className="mt-3 grid gap-3 lg:grid-cols-2">{legs.map((leg) => { const fee=resolveCloseCommissionUSD(simulation,leg); const source=fee.kind==="resolved"?(fee.source==="saxo_ticket_confirmed_standard"?`Saxo決済チケット確認済み標準 / ${leg.quantity}契約 / ${fee.confirmedAt}確認`:fee.source):"未確認"; return <div key={leg.id} className="rounded border border-teal-100 bg-white p-3"><div className="text-sm font-bold text-slate-900">{leg.type === "call" ? "C" : "P"} {leg.strikeUSD} {leg.side === "buy" ? "売却" : "買戻し"}</div><div id={`current-estimate-price-${leg.id}`} className="mt-2"><NumberInput label="現在価格" value={leg.closeCostUSD ?? leg.closePlan?.closePriceUSD ?? Number.NaN} suffix="USD/株" placeholder="明示的な決済候補価格" min={0} onChange={(value) => onPriceChange(leg, value)} /></div><div id={`current-estimate-fee-${leg.id}`} className="mt-2"><div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900">{fee.kind==="resolved"?`${formatUSD(fee.amountUSD)} USD`:"未確認"}</div></div><p className="mt-1 text-[11px] text-slate-500">手数料出所: {source}。Saxo決済チケットの取引手数料（数量合計）。スプレッドコストは含めません。</p><details className="mt-2"><summary className="cursor-pointer text-xs font-semibold text-teal-800">個別に変更</summary><div className="mt-2"><NumberInput label="個別の決済想定手数料" value={leg.closePlan?.commissionUSD??Number.NaN} suffix="USD" placeholder="明示0も入力可能" min={0} onChange={(value)=>onFeeChange(leg,value,"manual")} /></div></details></div>; })}</div></section>;
 }
 
 function LegCloseCard({
@@ -183,7 +198,7 @@ function LegCloseCard({
   leg: OptionLeg;
   simulation: TradeSimulation;
   fxRateJPY: number;
-  openCommissionUSD: number;
+  openCommissionUSD?: number;
   saxoOrderCandidates: SaxoApiOrderSnapshot[];
   onCloseCostChange: (closeCostUSD: number) => void;
   onExecutionDraft: () => void;
@@ -191,6 +206,8 @@ function LegCloseCard({
   const [apiCandidate, setApiCandidate] = useState<SaxoOptionPremiumCandidate | null>(null);
   const [apiCandidateMessage, setApiCandidateMessage] = useState("");
   const [isLoadingApiCandidate, setIsLoadingApiCandidate] = useState(false);
+  const openingFeeKnown = openCommissionUSD !== undefined;
+  const openingFeeUSD = openCommissionUSD ?? 0;
   const receivedJPY = calculatePremiumJPY({
     premiumUSD: leg.premiumUSD,
     quantity: leg.quantity,
@@ -203,11 +220,12 @@ function LegCloseCard({
   const closeCostJPY = calculateCloseCostJPY(leg, fxRateJPY);
   const closePriceUSD = leg.closeCostUSD ?? leg.closePlan?.closePriceUSD;
   const closeCostUSD = closePriceUSD === undefined || closePriceUSD <= 0 ? null : closePriceUSD * 100 * leg.quantity;
-  const closeCommissionUSD = leg.closePlan?.commissionUSD ?? openCommissionUSD;
-  const totalCommissionUSD = openCommissionUSD + (closeCostUSD === null ? 0 : closeCommissionUSD);
-  const totalCommissionJPY = (openCommissionUSD + (closeCostJPY === null ? 0 : closeCommissionUSD)) * fxRateJPY;
-  const estimatedProfitJPY = closeCostJPY === null ? null : receivedJPY - closeCostJPY - totalCommissionJPY;
-  const estimatedProfitUSD = closeCostUSD === null ? null : receivedUSD - closeCostUSD - totalCommissionUSD;
+  const resolvedCloseCommission=resolveCloseCommissionUSD(simulation,leg);
+  const closeCommissionUSD=resolvedCloseCommission.kind==="resolved"?resolvedCloseCommission.amountUSD:undefined;
+  const totalCommissionUSD = !openingFeeKnown || closeCostUSD === null || closeCommissionUSD === undefined ? null : openingFeeUSD + closeCommissionUSD;
+  const totalCommissionJPY = !openingFeeKnown || closeCostJPY === null || closeCommissionUSD === undefined ? null : (openingFeeUSD + closeCommissionUSD) * fxRateJPY;
+  const estimatedProfitJPY = closeCostJPY === null || totalCommissionJPY === null ? null : receivedJPY - closeCostJPY - totalCommissionJPY;
+  const estimatedProfitUSD = closeCostUSD === null || totalCommissionUSD === null ? null : receivedUSD - closeCostUSD - totalCommissionUSD;
   const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
   const primaryDenominator = getPrimaryDenominator(calculateDenominators(simulation, 0));
   const elapsedDays = calculateElapsedDaysSinceEntry(simulation.entryDate);
@@ -233,7 +251,7 @@ function LegCloseCard({
   const exitDeadline = getExitDeadlineInfo(simulation, exitOrderPlan);
   const stopLossAmount = isN ? exitOrderPlan.stopLossAmountUSD ?? 0 : exitOrderPlan.stopLossAmountJPY ?? 0;
   const orderCandidates = findOrderCandidatesForLeg(simulation, leg, saxoOrderCandidates).filter((order) => order.isExitCandidate);
-  const candidatePriceUSD = getPremiumCandidatePrice(apiCandidate);
+  const candidatePriceUSD = getPremiumCandidatePrice(apiCandidate, leg.side);
   const keepPercent =
     (isN ? estimatedProfitUSD : estimatedProfitJPY) === null || (isN ? receivedUSD : receivedJPY) === 0
       ? null
@@ -314,6 +332,7 @@ function LegCloseCard({
   return (
     <div id={`close-decision-${leg.type}-${leg.id}`} className="rounded-md border border-slate-200 p-3">
       <div className="font-bold text-slate-950">{label}</div>
+      <OptionPriceComparison entryPriceUSD={leg.premiumUSD} currentPriceUSD={closePriceUSD} positionSide="short" />
       <div className="mt-3">
         <NumberInput
           label="現在の買戻し価格"
@@ -341,46 +360,25 @@ function LegCloseCard({
           この価格で決済実績に反映
         </button>
       ) : null}
+      <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+        <summary className="cursor-pointer font-bold text-slate-700">計算内訳</summary>
+        <dl className="mt-3 grid gap-2">
+          <Row label="建玉時の受取総額" value={isN ? `${formatUSD(receivedUSD)} / 参考 ${formatJPY(receivedJPY)}` : formatJPY(receivedJPY)} />
+          <Row label="現在の買戻し総額" value={closeCostJPY === null || closeCostUSD === null ? "未取得" : isN ? `${formatUSD(closeCostUSD)} / 参考 ${formatJPY(closeCostJPY)}` : formatJPY(closeCostJPY)} />
+          <Row label="手数料控除" value={totalCommissionUSD === null || totalCommissionJPY === null ? "未計算（決済想定手数料 未確認）" : isN ? `${formatUSD(totalCommissionUSD)} / 参考 ${formatJPY(totalCommissionJPY)}` : formatJPY(totalCommissionJPY)} />
+          <Row label="建玉時の手数料" value={!openingFeeKnown ? "未確認" : isN ? `${formatUSD(openingFeeUSD)} / 参考 ${formatJPY(openingFeeUSD * fxRateJPY)}` : formatJPY(openingFeeUSD * fxRateJPY)} />
+          <Row label="買戻し時の想定手数料" value={closeCommissionUSD === undefined ? "未確認" : isN ? `${formatUSD(closeCommissionUSD)} / 参考 ${formatJPY(closeCommissionUSD * fxRateJPY)}` : formatJPY(closeCommissionUSD * fxRateJPY)} />
+          {callKeepStock ? null : <Row label="プレミアム確保率" value={keepPercent === null ? "未計算" : `${keepPercent.toFixed(1)}%`} tone={keepPercent === null ? undefined : keepPercent >= 50 ? "green" : undefined} />}
+        </dl>
+      </details>
       <dl className="mt-3 grid gap-2 text-sm">
-        <Row
-          label="建てた時のプレミアム"
-          value={isN ? `${formatUSD(receivedUSD)} / 参考 ${formatJPY(receivedJPY)}` : formatJPY(receivedJPY)}
-        />
-        <Row
-          label="現在の買戻し価格"
-          value={
-            closeCostJPY === null || closeCostUSD === null
-              ? "未入力"
-              : isN
-                ? `${formatUSD(closeCostUSD)} / 参考 ${formatJPY(closeCostJPY)}`
-                : formatJPY(closeCostJPY)
-          }
-        />
-        <Row
-          label="手数料控除"
-          value={
-            isN
-              ? `${formatUSD(totalCommissionUSD)} / 参考 ${formatJPY(totalCommissionJPY)}`
-              : formatJPY(totalCommissionJPY)
-          }
-        />
-        <Row
-          label="建てた時の手数料"
-          value={isN ? `${formatUSD(openCommissionUSD)} / 参考 ${formatJPY(openCommissionUSD * fxRateJPY)}` : formatJPY(openCommissionUSD * fxRateJPY)}
-        />
-        <Row
-          label="買戻し時の想定手数料"
-          value={isN ? `${formatUSD(closeCommissionUSD)} / 参考 ${formatJPY(closeCommissionUSD * fxRateJPY)}` : formatJPY(closeCommissionUSD * fxRateJPY)}
-        />
         <Row
           label={callKeepStock ? "株を残すための買戻しコスト（手数料後）" : "今閉じた場合の概算損益（手数料後）"}
           value={
             callKeepStock
               ? closeCostUSD === null || closeCostJPY === null
                 ? "未計算"
-                : isN
-                  ? `${formatUSD(closeCostUSD + closeCommissionUSD)} / 参考 ${formatJPY(closeCostJPY + closeCommissionUSD * fxRateJPY)}`
-                  : formatJPY(closeCostJPY + closeCommissionUSD * fxRateJPY)
+                : closeCommissionUSD === undefined ? "未計算（決済想定手数料 未確認）" : isN ? `${formatUSD(closeCostUSD + closeCommissionUSD)} / 参考 ${formatJPY(closeCostJPY + closeCommissionUSD * fxRateJPY)}` : formatJPY(closeCostJPY + closeCommissionUSD * fxRateJPY)
               : (isN ? estimatedProfitUSD : estimatedProfitJPY) === null
               ? "未計算"
               : isN
@@ -402,13 +400,6 @@ function LegCloseCard({
                   }）`
             }
             tone={closeAnnualReturnPct === null ? undefined : closeAnnualReturnPct >= 0 ? "green" : "red"}
-          />
-        )}
-        {callKeepStock ? null : (
-          <Row
-            label="プレミアム確保率"
-            value={keepPercent === null ? "未計算" : `${keepPercent.toFixed(1)}%`}
-            tone={keepPercent === null ? undefined : keepPercent >= 50 ? "green" : undefined}
           />
         )}
         {nakedCall ? (
@@ -529,6 +520,48 @@ function LegCloseCard({
 }
 
 type Tone = "green" | "red" | "amber" | undefined;
+
+export type OptionPriceComparisonResult = {
+  entryPriceUSD: number | null;
+  currentPriceUSD: number | null;
+  differenceUSD: number | null;
+  changePct: number | null;
+  isFavorable: boolean | null;
+};
+
+export function buildOptionPriceComparison(entryPriceUSD: number, currentPriceUSD: number | undefined, positionSide: "long" | "short"): OptionPriceComparisonResult {
+  const hasEntry = Number.isFinite(entryPriceUSD) && entryPriceUSD > 0;
+  const hasCurrent = currentPriceUSD !== undefined && Number.isFinite(currentPriceUSD) && currentPriceUSD > 0;
+  if (!hasEntry || !hasCurrent) return { entryPriceUSD: hasEntry ? entryPriceUSD : null, currentPriceUSD: null, differenceUSD: null, changePct: null, isFavorable: null };
+  const differenceUSD = currentPriceUSD - entryPriceUSD;
+  return {
+    entryPriceUSD,
+    currentPriceUSD,
+    differenceUSD,
+    changePct: (differenceUSD / entryPriceUSD) * 100,
+    isFavorable: positionSide === "long" ? differenceUSD >= 0 : differenceUSD <= 0,
+  };
+}
+
+function OptionPriceComparison({ entryPriceUSD, currentPriceUSD, positionSide }: { entryPriceUSD: number; currentPriceUSD?: number; positionSide: "long" | "short" }) {
+  const comparison = buildOptionPriceComparison(entryPriceUSD, currentPriceUSD, positionSide);
+  const differenceTone = comparison.isFavorable === null ? "text-slate-500" : comparison.isFavorable ? "text-emerald-700" : "text-red-700";
+  return (
+    <section aria-label="オプション価格比較" className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+      <div className="mb-2 text-xs font-bold text-slate-600">{positionSide === "long" ? "売却価格の比較" : "買戻し価格の比較"}</div>
+      <div className="grid grid-cols-3 divide-x divide-slate-200 text-center">
+        <div className="px-2"><div className="text-xs text-slate-500">建玉時</div><div className="mt-1 font-bold text-slate-950">{comparison.entryPriceUSD === null ? "未取得" : `${formatUSD(comparison.entryPriceUSD)} / 株`}</div></div>
+        <div className="px-2"><div className="text-xs text-slate-500">現在</div><div className="mt-1 font-bold text-slate-950">{comparison.currentPriceUSD === null ? "未取得" : `${formatUSD(comparison.currentPriceUSD)} / 株`}</div></div>
+        <div className="px-2"><div className="text-xs text-slate-500">価格差</div><div className={`mt-1 font-bold ${differenceTone}`}>{comparison.differenceUSD === null || comparison.changePct === null ? "未計算" : `${formatSignedOptionPriceUSD(comparison.differenceUSD)} / 株（${comparison.changePct > 0 ? "+" : ""}${formatPct(comparison.changePct)}）`}</div></div>
+      </div>
+    </section>
+  );
+}
+
+function formatSignedOptionPriceUSD(value: number): string {
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+  return `${sign}${formatUSD(Math.abs(value))}`;
+}
 
 function ApiPremiumCandidatePanel({
   candidate,
@@ -717,10 +750,10 @@ function SaxoExitOrderStatus({
   );
 }
 
-export function getPremiumCandidatePrice(candidate: SaxoOptionPremiumCandidate | null): number | null {
+export function getPremiumCandidatePrice(candidate: SaxoOptionPremiumCandidate | null, side?: OptionLeg["side"]): number | null {
   if (!candidate) return null;
   if (isSaxoPriceFeedNoAccess(candidate)) return null;
-  const price = candidate.mid ?? candidate.last ?? candidate.ask ?? candidate.bid;
+  const price = side === "buy" ? candidate.bid : side === "sell" ? candidate.ask : undefined;
   return price !== undefined && Number.isFinite(price) && price > 0 ? price : null;
 }
 
@@ -760,13 +793,15 @@ function LongOptionCloseCard({
   leg: OptionLeg;
   simulation: TradeSimulation;
   fxRateJPY: number;
-  openCommissionUSD: number;
+  openCommissionUSD?: number;
   saxoOrderCandidates: SaxoApiOrderSnapshot[];
   onClosePriceChange: (closePriceUSD: number, source: OptionValueSnapshotSource) => void;
   onClosePlanChange: (closePlanPatch: Partial<NonNullable<OptionLeg["closePlan"]>>) => void;
   onExecutionDraft: () => void;
   accountInputs?: AccountInputs;
 }) {
+  const openingFeeKnown = openCommissionUSD !== undefined;
+  const openingFeeUSD = openCommissionUSD ?? 0;
   const [apiCandidate, setApiCandidate] = useState<SaxoOptionPremiumCandidate | null>(null);
   const [apiCandidateMessage, setApiCandidateMessage] = useState("");
   const [isLoadingApiCandidate, setIsLoadingApiCandidate] = useState(false);
@@ -774,33 +809,34 @@ function LongOptionCloseCard({
   const paidPremiumUSD = calculatePremiumUSD({ premiumUSD: leg.premiumUSD, quantity: leg.quantity });
   const paidPremiumJPY = calculatePremiumJPY({ premiumUSD: leg.premiumUSD, quantity: leg.quantity, fxRateJPY });
   const currentOptionValueUSD = closePriceUSD !== undefined && closePriceUSD > 0 ? closePriceUSD * 100 * leg.quantity : null;
-  const closeCommissionUSD = leg.closePlan?.commissionUSD ?? openCommissionUSD;
+  const resolvedCloseCommission=resolveCloseCommissionUSD(simulation,leg);
+  const closeCommissionUSD=resolvedCloseCommission.kind==="resolved"?resolvedCloseCommission.amountUSD:undefined;
   const effectiveFxRateJPY =
     simulation.referenceFxRateJPY !== undefined && simulation.referenceFxRateJPY > 0
       ? simulation.referenceFxRateJPY
       : fxRateJPY > 0
         ? fxRateJPY
         : undefined;
-  const exitProceedsPreview = calculateLongOptionExitProceedsPreview({
+  const exitProceedsPreview = closeCommissionUSD === undefined ? undefined : calculateLongOptionExitProceedsPreview({
     closePriceUSD,
     quantity: leg.quantity,
     closeCommissionUSD,
     fxRateJPY: effectiveFxRateJPY,
   });
   const accountCashLabel = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "N口座USD現金残高" : "P口座現金残高";
-  const estimatedProfitUSD = currentOptionValueUSD === null ? null : currentOptionValueUSD - paidPremiumUSD - openCommissionUSD - closeCommissionUSD;
+  const estimatedProfitUSD = !openingFeeKnown || currentOptionValueUSD === null || closeCommissionUSD === undefined ? null : currentOptionValueUSD - paidPremiumUSD - openingFeeUSD - closeCommissionUSD;
   const estimatedProfitJPY = estimatedProfitUSD === null ? null : estimatedProfitUSD * (effectiveFxRateJPY ?? 0);
   const profitPct = estimatedProfitUSD === null || paidPremiumUSD <= 0 ? null : (estimatedProfitUSD / paidPremiumUSD) * 100;
   const elapsedDays = calculateElapsedDaysSinceEntry(simulation.entryDate);
-  const entryCostUSD = paidPremiumUSD + openCommissionUSD;
-  const exitBreakevenPriceUSD = calculateLongOptionExitBreakevenPriceUSD({
+  const entryCostUSD = paidPremiumUSD + openingFeeUSD;
+  const exitBreakevenPriceUSD = closeCommissionUSD === undefined ? undefined : calculateLongOptionExitBreakevenPriceUSD({
     paidPremiumUSD,
-    openCommissionUSD,
+    openCommissionUSD: openingFeeUSD,
     closeCommissionUSD,
     quantity: leg.quantity,
   });
   const exitBreakevenBufferUSD =
-    closePriceUSD !== undefined && closePriceUSD > 0 ? closePriceUSD - exitBreakevenPriceUSD : null;
+    closePriceUSD !== undefined && closePriceUSD > 0 && exitBreakevenPriceUSD !== undefined ? closePriceUSD - exitBreakevenPriceUSD : null;
   const currentCloseAnnualizedReturnPct = calculateLongOptionCloseAnnualizedReturnPercent({
     profit: estimatedProfitUSD,
     entryCost: entryCostUSD,
@@ -841,7 +877,7 @@ function LongOptionCloseCard({
   const valueProgress = calculateOptionValueProgress(valueTimeline);
   const orderCandidates = findOrderCandidatesForLeg(simulation, leg, saxoOrderCandidates).filter((order) => order.isExitCandidate);
   const exitOrderLineCandidate = getLongOptionExitOrderLineCandidate(orderCandidates);
-  const candidatePriceUSD = getPremiumCandidatePrice(apiCandidate);
+  const candidatePriceUSD = getPremiumCandidatePrice(apiCandidate, leg.side);
   const label = `${leg.type === "call" ? "C" : "P"} ${leg.strikeUSD} ${leg.expiryDate}`;
 
   async function loadApiCandidate() {
@@ -874,6 +910,7 @@ function LongOptionCloseCard({
           {leg.type === "call" ? "コール買い" : "プット買い"}
         </span>
       </div>
+      <OptionPriceComparison entryPriceUSD={leg.premiumUSD} currentPriceUSD={closePriceUSD} positionSide="long" />
       <p className="mt-2 text-sm leading-6 text-slate-700">
         買いオプションは、満期前ならITMでも売却決済を優先して確認します。権利行使は例外処理です。
       </p>
@@ -931,7 +968,14 @@ function LongOptionCloseCard({
           反対売買の決済実績を作成
         </button>
       ) : null}
-      <LongOptionTimeValueDecayView
+      <dl className="mt-3 grid gap-2 text-sm">
+        <Row label="今閉じた場合の概算損益（手数料後）" value={estimatedProfitUSD === null ? "未計算" : `${formatSignedUSD(estimatedProfitUSD)} / 参考 ${formatJPY(estimatedProfitJPY ?? 0, { signed: true })}`} tone={estimatedProfitUSD === null ? undefined : estimatedProfitUSD >= 0 ? "green" : "red"} />
+        <Row label="概算損益率" value={profitPct === null ? "未計算" : `${profitPct > 0 ? "+" : ""}${formatPct(profitPct)}`} tone={profitPct === null ? undefined : profitPct >= 0 ? "green" : "red"} />
+        <Row label="今閉じた場合の年率" value={currentCloseAnnualizedReturnPct === null ? "未計算" : `${currentCloseAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(currentCloseAnnualizedReturnPct)}（保有${elapsedDays}日）`} tone={currentCloseAnnualizedReturnPct === null ? undefined : currentCloseAnnualizedReturnPct >= 0 ? "green" : "red"} />
+      </dl>
+      <details className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
+        <summary className="cursor-pointer font-bold text-slate-800">判断の詳細・計算内訳</summary>
+        <LongOptionTimeValueDecayView
         currentSnapshot={currentValueSnapshot}
         timeline={valueTimeline}
         progress={valueProgress}
@@ -944,12 +988,12 @@ function LongOptionCloseCard({
         exitProceedsValue={formatLongOptionExitProceedsValue(simulation, exitProceedsPreview)}
         accountCashLabel={accountCashLabel}
         accountCashValue={formatLongOptionAccountCashPreview(simulation, accountInputs, exitProceedsPreview)}
-      />
-      <dl className="mt-3 grid gap-2 text-sm">
+        />
+        <dl className="mt-3 grid gap-2 text-sm">
         <Row label="支払プレミアム" value={`${formatUSD(paidPremiumUSD)} / 参考 ${formatJPY(paidPremiumJPY)}`} />
         <Row
           label="反対売買損益分岐価格"
-          value={`${formatUSD(exitBreakevenPriceUSD)} / 株`}
+          value={exitBreakevenPriceUSD === undefined ? "未計算（決済想定手数料 未確認）" : `${formatUSD(exitBreakevenPriceUSD)} / 株`}
           tone="green"
         />
         <Row
@@ -985,25 +1029,6 @@ function LongOptionCloseCard({
           value={formatLongOptionAccountCashPreview(simulation, accountInputs, exitProceedsPreview)}
         />
         <Row
-          label="評価損益"
-          value={estimatedProfitUSD === null ? "未計算" : `${formatSignedUSD(estimatedProfitUSD)} / 参考 ${formatJPY(estimatedProfitJPY ?? 0, { signed: true })}`}
-          tone={estimatedProfitUSD === null ? undefined : estimatedProfitUSD >= 0 ? "green" : "red"}
-        />
-        <Row
-          label="評価損益率"
-          value={profitPct === null ? "未計算" : `${profitPct > 0 ? "+" : ""}${formatPct(profitPct)}`}
-          tone={profitPct === null ? undefined : profitPct >= 0 ? "green" : "red"}
-        />
-        <Row
-          label="現在決済ベース年率"
-          value={
-            currentCloseAnnualizedReturnPct === null
-              ? "未計算"
-              : `${currentCloseAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(currentCloseAnnualizedReturnPct)}（保有${elapsedDays}日 / 建玉時支払額 ${formatUSD(entryCostUSD)} / 手数料込み）`
-          }
-          tone={currentCloseAnnualizedReturnPct === null ? undefined : currentCloseAnnualizedReturnPct >= 0 ? "green" : "red"}
-        />
-        <Row
           label="利確/損切りライン"
           value={`${formatUSD(profitTargetPriceUSD)} / ${formatUSD(stopLossPriceUSD)}${
             exitOrderLineCandidate.profitTargetPriceUSD || exitOrderLineCandidate.stopLossPriceUSD
@@ -1014,7 +1039,8 @@ function LongOptionCloseCard({
         <Row label="残存日数" value={`${dte}日`} tone={dte <= 7 ? "amber" : undefined} />
         <Row label="本質的価値" value={intrinsicValueUSD === null ? "未計算" : `${formatUSD(intrinsicValueUSD)} / 株`} />
         <Row label="時間的価値" value={timeValueUSD === null ? "未計算" : `${formatUSD(timeValueUSD)} / 株`} tone={timeValueUSD !== null && timeValueUSD <= 0.05 ? "amber" : undefined} />
-      </dl>
+        </dl>
+      </details>
       <details className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
         <summary className="cursor-pointer font-bold text-slate-800">例外的な権利行使として確認</summary>
         <p className="mt-2 leading-6 text-slate-600">
@@ -1190,7 +1216,7 @@ function LongOptionTimeValueDecayView({
   currentSnapshot: OptionValueSnapshot | null;
   timeline: OptionValueSnapshot[];
   progress: OptionValueProgress | null;
-  exitBreakevenPriceUSD: number;
+  exitBreakevenPriceUSD?: number;
   exitBreakevenBufferUSD: number | null;
   profitTargetPriceUSD: number;
   stopLossPriceUSD: number;
@@ -1254,7 +1280,7 @@ function LongOptionTimeValueDecayView({
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-4">
-        <MiniMetric label="反対売買損益分岐価格" value={`${formatUSD(exitBreakevenPriceUSD)} / 株`} />
+        <MiniMetric label="反対売買損益分岐価格" value={exitBreakevenPriceUSD === undefined ? "未計算" : `${formatUSD(exitBreakevenPriceUSD)} / 株`} />
         <MiniMetric
           label="損益分岐までの余裕"
           value={exitBreakevenBufferUSD === null ? "未計算" : `${formatSignedUSD(exitBreakevenBufferUSD)} / 株`}

@@ -2,7 +2,10 @@ import type { Currency, OptionEntryExecution, OptionLeg, TradeSimulation } from 
 import { formatLocalDate } from "@/lib/date";
 
 const CONTRACT_SIZE = 100;
-export const DEFAULT_N_OPTION_STANDARD_COMMISSION_USD = 2.25;
+/** Confirmed N Stock Option entry-ticket total; intentionally separate from close-fee resolver. */
+export const DEFAULT_N_OPTION_STANDARD_COMMISSION_USD = 2.24;
+export const N_OPTION_ENTRY_STANDARD_COMMISSION_CONFIRMED_AT = "2026-08-14";
+const LEGACY_N_OPTION_STANDARD_COMMISSION_USD = 2.25;
 
 export function getNOptionStandardCommissionUSD(
   contracts: number,
@@ -23,7 +26,7 @@ export function applySaxoActualEntryCommission(
   ) {
     return execution;
   }
-  if (execution.commissionSource !== "standard_default" && execution.commissionUSD !== undefined) return execution;
+  if (execution.commissionUSD !== undefined && execution.commissionSource !== "standard_default" && execution.commissionSource !== "saxo_ticket_confirmed_standard") return execution;
   return {
     ...execution,
     commissionUSD: Math.abs(transactionCostUSD),
@@ -39,8 +42,8 @@ export function updateStandardEntryCommissionForContracts(
   return {
     ...execution,
     contracts,
-    ...(execution.commissionSource === "standard_default"
-      ? { commissionUSD: getNOptionStandardCommissionUSD(contracts, standardCommissionUSD) }
+    ...((execution.commissionSource === "standard_default" || execution.commissionSource === "saxo_ticket_confirmed_standard")
+      ? { commissionUSD: getNOptionStandardCommissionUSD(contracts, standardCommissionUSD), commissionSource: "saxo_ticket_confirmed_standard" as const }
       : {}),
   };
 }
@@ -61,7 +64,7 @@ export function ensureNOptionEntryStandardCommission(
   return {
     ...execution,
     commissionUSD: getNOptionStandardCommissionUSD(execution.contracts, standardCommissionUSD),
-    commissionSource: "standard_default",
+    commissionSource: "saxo_ticket_confirmed_standard",
   };
 }
 
@@ -96,14 +99,30 @@ export function createOptionEntryExecutionDraft(params: {
     settlementCurrency: isN ? "USD" : "JPY",
     brokerExchangeRateJPY: isN ? undefined : fxRate,
     commissionUSD: isN ? getNOptionStandardCommissionUSD(params.leg.quantity, params.standardCommissionUSD) : undefined,
-    commissionSource: isN ? "standard_default" : undefined,
+    commissionSource: isN ? "saxo_ticket_confirmed_standard" : undefined,
     commissionJPY: undefined,
-    referenceFxRateJPY: fxRate,
+    referenceFxRateJPY: isN ? undefined : fxRate,
     inputMode: isN ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
     source: "manual",
     confirmed: false,
     memo: "",
   };
+}
+
+export function migrateNOptionEntryStandardCommissions(simulation: TradeSimulation): TradeSimulation {
+  if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT") return simulation;
+  let changed = false;
+  const optionEntryExecutions = (simulation.optionEntryExecutions ?? []).map((execution) => {
+    if (!execution.confirmed) return execution;
+    const next = getNOptionStandardCommissionUSD(execution.contracts);
+    const legacy = getNOptionStandardCommissionUSD(execution.contracts, LEGACY_N_OPTION_STANDARD_COMMISSION_USD);
+    if (execution.commissionSource === "standard_default" || (execution.commissionSource === undefined && execution.commissionUSD === legacy)) {
+      changed = true;
+      return { ...execution, commissionUSD: next, commissionSource: "saxo_ticket_confirmed_standard" as const };
+    }
+    return execution;
+  });
+  return changed ? { ...simulation, optionEntryExecutions } : simulation;
 }
 
 export function getOptionEntryExecutions(simulation: TradeSimulation): OptionEntryExecution[] {

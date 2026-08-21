@@ -1,4 +1,5 @@
 import type { TradeSimulation } from "@/types/domain";
+import { resolveCloseCommissionUSD } from "./closeCommissionStandard";
 import {
   calculateAnnualReturnPercentByCurrency,
   calculateDte,
@@ -53,14 +54,15 @@ export type LongOptionOrderDisplay = {
   paidPremiumJPY: number;
   feeUSD: number;
   feeJPY: number;
-  closeCommissionUSD: number;
+  /** Undefined means the future close fee has not been explicitly confirmed. */
+  closeCommissionUSD?: number;
   closePriceUSD?: number;
   currentOptionValueUSD?: number;
   estimatedProfitUSD?: number;
   estimatedProfitJPY?: number;
   profitPct?: number;
   currentCloseAnnualizedReturnPct?: number;
-  exitBreakevenPriceUSD: number;
+  exitBreakevenPriceUSD?: number;
   exitBreakevenBufferUSD?: number;
   profitTargetPriceUSD: number;
   stopLossPriceUSD: number;
@@ -203,20 +205,21 @@ function calculateLongOptionOrderDisplay(params: {
         ? leg.closePlan.closePriceUSD
         : undefined;
   const currentOptionValueUSD = closePriceUSD !== undefined ? closePriceUSD * 100 * leg.quantity : undefined;
-  const closeCommissionUSD = leg.closePlan?.commissionUSD ?? params.feeUSD;
-  const exitProceedsPreview = calculateLongOptionExitProceedsPreview({
+  const closeCommission=resolveCloseCommissionUSD(params.simulation,leg);
+  const closeCommissionUSD=closeCommission.kind==="resolved"?closeCommission.amountUSD:undefined;
+  const exitProceedsPreview = closeCommissionUSD === undefined ? undefined : calculateLongOptionExitProceedsPreview({
     closePriceUSD,
     quantity: leg.quantity,
     closeCommissionUSD,
     fxRateJPY: effectiveFxRateJPY,
   });
   const estimatedProfitUSD =
-    currentOptionValueUSD !== undefined ? currentOptionValueUSD - paidPremiumUSD - params.feeUSD - closeCommissionUSD : undefined;
+    currentOptionValueUSD !== undefined && closeCommissionUSD !== undefined ? currentOptionValueUSD - paidPremiumUSD - params.feeUSD - closeCommissionUSD : undefined;
   const estimatedProfitJPY = estimatedProfitUSD !== undefined ? estimatedProfitUSD * effectiveFxRateJPY : undefined;
   const profitPct = estimatedProfitUSD !== undefined && paidPremiumUSD > 0 ? (estimatedProfitUSD / paidPremiumUSD) * 100 : undefined;
   const contractShares = Math.max(1, leg.quantity * 100);
-  const exitBreakevenPriceUSD = (totalCostUSD + closeCommissionUSD) / contractShares;
-  const exitBreakevenBufferUSD = closePriceUSD !== undefined ? closePriceUSD - exitBreakevenPriceUSD : undefined;
+  const exitBreakevenPriceUSD = closeCommissionUSD === undefined ? undefined : (totalCostUSD + closeCommissionUSD) / contractShares;
+  const exitBreakevenBufferUSD = closePriceUSD !== undefined && exitBreakevenPriceUSD !== undefined ? closePriceUSD - exitBreakevenPriceUSD : undefined;
   const elapsedDays = calculateElapsedDaysSinceEntry(params.simulation.entryDate);
   const currentCloseAnnualizedReturnPct =
     estimatedProfitUSD !== undefined && totalCostUSD > 0
