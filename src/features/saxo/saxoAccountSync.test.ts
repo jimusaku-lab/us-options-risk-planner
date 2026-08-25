@@ -330,6 +330,17 @@ describe("Saxo read-only account sync", () => {
     expect(createSaxoPositionDraftSummary(position).ticker).toBe("ABC");
   });
 
+  it("classifies every option draft with its Saxo side and option type", () => {
+    const base = {
+      id: "anonymous-direction", accountKey: "masked", accountAssignment: "N" as const, kind: "option" as const,
+      quantity: 1, strike: 100, expiry: "2026-12-18", missingFields: [], fetchedAt: "2026-08-25T00:00:00.000Z",
+    } satisfies Partial<SaxoApiPositionSnapshot>;
+    expect(createSaxoPositionDraftSummary({ ...base, side: "long", optionType: "put" } as SaxoApiPositionSnapshot).strategyType).toBe("long_put");
+    expect(createSaxoPositionDraftSummary({ ...base, side: "long", optionType: "call" } as SaxoApiPositionSnapshot).strategyType).toBe("long_call");
+    expect(createSaxoPositionDraftSummary({ ...base, side: "short", optionType: "put" } as SaxoApiPositionSnapshot).strategyType).toBe("short_put");
+    expect(createSaxoPositionDraftSummary({ ...base, side: "short", optionType: "call" } as SaxoApiPositionSnapshot).strategyType).toBe("covered_call");
+  });
+
   it("blocks automatic draft resolution when direct and underlying symbols conflict", () => {
     const position = {
       id: "anonymous-conflict", accountKey: "masked", accountAssignment: "P" as const, kind: "option" as const,

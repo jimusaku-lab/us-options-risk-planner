@@ -92,6 +92,17 @@ type LinkedSimulationResolution =
   | { status: "broken"; reason: string; simulationId?: string }
   | { status: "unlinked" };
 
+/** Keeps user-resolvable stale drafts and broken links visible without re-listing formal matches. */
+export function isActionRequiredRegularPositionRow(
+  row: SaxoPositionReconciliationRow,
+  linked: LinkedSimulationResolution,
+  symbolConflict: boolean,
+): boolean {
+  if (!row.position || linked.status === "linked") return false;
+  if (linked.status === "draft" || linked.status === "broken") return true;
+  return row.status === "app_missing" || row.status === "unknown" || row.status === "quantity_diff" || row.status === "price_diff" || symbolConflict;
+}
+
 type HistoryReflectionState =
   | { status: "none" }
   | { status: "candidate"; simulationId: string; recordId: string; target: "entry" | "close" | "assignment" | "stock_settlement"; assignmentCompleted?: boolean; assignmentTransferred?: boolean }
@@ -359,6 +370,14 @@ export function SaxoReadOnlyPanel({
     setLinkedPositionIds((current) => Array.from(new Set([...current, ...repairIds])));
     setDraftedPositionIds((current) => current.filter((id) => !repairIds.includes(id)));
   }, [linkedPositionTargets, positionRows, simulations]);
+
+  useEffect(() => {
+    if (!draftPosition) return;
+    // The transient preview must never shadow an already formal, stable match.
+    if (findStableSavedSimulationForSaxoPosition(draftPosition, simulations)) {
+      setDraftPosition(null);
+    }
+  }, [draftPosition, simulations]);
 
   function resolveLinkedSimulation(row: SaxoPositionReconciliationRow): LinkedSimulationResolution {
     const positionId = row.position?.id;
@@ -2558,9 +2577,9 @@ function PositionsPreview({
   const linkedRegularRows = standaloneRegularRows.filter((row) => row.position && resolveLinkedSimulation(row).status === "linked");
   const actionRequiredRegularRows = standaloneRegularRows.filter((row) => {
     if (!row.position) return false;
-    const linked = resolveLinkedSimulation(row).status;
+    const linked = resolveLinkedSimulation(row);
     const symbolConflict = resolveSaxoPositionSymbolResolution(row.position, simulations).sourceConflict;
-    return linked === "unlinked" && (row.status === "app_missing" || row.status === "unknown" || row.status === "quantity_diff" || row.status === "price_diff" || symbolConflict);
+    return isActionRequiredRegularPositionRow(row, linked, symbolConflict);
   });
   const existingSyntheticPairIds = new Set(
     syntheticForwardPairs

@@ -1332,7 +1332,7 @@ export function createSaxoPositionDraftSummary(position: SaxoApiPositionSnapshot
   name: string;
   accountCode?: SaxoAccountCode;
   accountEnvironment?: "PROD_P_JPY_SETTLEMENT" | "PROD_N_USD_SETTLEMENT";
-  strategyType: "short_put" | "covered_call" | "custom";
+  strategyType: "long_put" | "long_call" | "short_put" | "covered_call" | "custom";
   ticker: string;
   side: string;
   optionType?: string;
@@ -1349,7 +1349,21 @@ export function createSaxoPositionDraftSummary(position: SaxoApiPositionSnapshot
     name: `${ticker || "未取得"} / Saxo取込下書き`,
     accountCode,
     accountEnvironment: accountCode === "N" ? "PROD_N_USD_SETTLEMENT" : accountCode === "P" ? "PROD_P_JPY_SETTLEMENT" : undefined,
-    strategyType: position.kind === "option" && position.optionType === "put" ? "short_put" : position.kind === "option" && position.optionType === "call" ? "covered_call" : "custom",
+    strategyType: position.kind === "option"
+      ? position.side === "long"
+        ? position.optionType === "put"
+          ? "long_put"
+          : position.optionType === "call"
+            ? "long_call"
+            : "custom"
+        : position.side === "short"
+          ? position.optionType === "put"
+            ? "short_put"
+            : position.optionType === "call"
+              ? "covered_call"
+              : "custom"
+          : "custom"
+      : "custom",
     ticker,
     side: position.side,
     optionType: position.optionType,

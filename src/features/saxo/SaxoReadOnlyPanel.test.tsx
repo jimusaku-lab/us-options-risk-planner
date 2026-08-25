@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { createEffectiveHistoryEndpoints, createHistoryReflectionStates, createReflectionSummary, getDisplayPositionMissingFields, ReflectionPendingSummary, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
+import { createEffectiveHistoryEndpoints, createHistoryReflectionStates, createReflectionSummary, getDisplayPositionMissingFields, isActionRequiredRegularPositionRow, ReflectionPendingSummary, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
 import type { ReflectionSummary } from "./SaxoReadOnlyPanel";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import type { TradeSimulation } from "@/types/domain";
@@ -50,6 +50,13 @@ it("keeps a recovery CTA active when only the stale drafted marker remains", () 
   expect(button).toBeEnabled();
   fireEvent.click(button);
   expect(onCreateDraft).toHaveBeenCalledWith(pair);
+});
+
+it("keeps stale draft and broken links actionable while excluding formal linked holdings", () => {
+  const row = { position: callPosition, status: "matched" } as never;
+  expect(isActionRequiredRegularPositionRow(row, { status: "draft", reason: "stale marker" }, false)).toBe(true);
+  expect(isActionRequiredRegularPositionRow(row, { status: "broken", reason: "missing target" }, false)).toBe(true);
+  expect(isActionRequiredRegularPositionRow(row, { status: "linked", simulation: {} as TradeSimulation, simulationId: "saved" }, false)).toBe(false);
 });
 
 it("renders an unresolved pair without individual reflection controls", () => {
