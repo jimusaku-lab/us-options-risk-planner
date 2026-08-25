@@ -539,6 +539,16 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
       });
       return;
     }
+    if (execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending") {
+      updateOptionCloseExecution(id, {
+        executionEvidenceStatus: "user_confirmed_pending_accounting",
+        accountingStatus: "pending",
+        confirmed: false,
+        confirmationStatus: "pending",
+        invalidReason: undefined,
+      });
+      return;
+    }
     const nextOptionCloseExecutions = optionCloseExecutions.map((item) =>
       item.id === id ? { ...item, confirmed: true, confirmationStatus: "confirmed" as const, invalidReason: undefined } : item,
     );
@@ -766,11 +776,16 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
       setQuoteStatus("建玉開始の約定確認を正式保存しました。残る親チケット確認を続けてください。");
       return;
     }
+    const confirmedTradeDate = nextExecutions
+      .filter((execution) => execution.confirmed && execution.tradeDate)
+      .map((execution) => execution.tradeDate)
+      .sort()[0];
     onChange({
       ...simulation,
       status: "open",
       name: isSaxoApiDraft ? simulation.name.replace(/\s*\/\s*API取込下書き/g, "") : simulation.name,
       optionEntryExecutions: nextExecutions,
+      ...(confirmedTradeDate ? { entryDate: confirmedTradeDate, dte: calculateDte(confirmedTradeDate, simulation.expiryDate) } : {}),
       ...(isSaxoApiDraft ? { fixtureMeta: buildConfirmedSaxoDraftFixtureMeta() } : {}),
     });
     setWorkflowNotice({
@@ -2547,11 +2562,14 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       )}
                       <NumberInput
                         label={isExpiredExecution ? "満期終了時手数料 USD" : "USD手数料"}
-                        value={execution.commissionUSD ?? 0}
+                        value={execution.commissionUSD ?? Number.NaN}
                         suffix="USD"
                         min={0}
-                        onChange={(commissionUSD) => updateOptionCloseExecution(execution.id, { commissionUSD })}
+                        onChange={(commissionUSD) => updateOptionCloseExecution(execution.id, { commissionUSD, commissionSource: "manual", commissionConfirmedAt: undefined })}
                       />
+                      <div className="-mt-2 text-xs font-semibold text-slate-600">
+                        費用出所: {formatCloseCommissionSource(execution)}
+                      </div>
                       <NumberInput
                         label="USD実現損益"
                         value={execution.realizedPnlUSD ?? Number.NaN}
@@ -3016,6 +3034,14 @@ function formatEntryCommissionSource(execution: OptionEntryExecution): string {
   if (execution.commissionSource === "saxo_ticket_confirmed_standard") return "Saxoチケット確認済み開始標準（2026-08-14）";
   if (execution.commissionSource === "standard_default") return "標準取引費用";
   return "未設定";
+}
+
+function formatCloseCommissionSource(execution: OptionCloseExecution): string {
+  if (execution.commissionSource === "saxo_actual") return "Saxo実費";
+  if (execution.commissionSource === "manual") return "手入力";
+  if (execution.commissionSource === "user_confirmed_standard") return "ユーザー確認済み標準";
+  if (execution.commissionSource === "saxo_ticket_confirmed_standard") return "Saxoチケット確認済み決済標準（2026-08-14）";
+  return "未取得";
 }
 
 function formatEntryHistoryCompletion(execution: OptionEntryExecution): string {

@@ -10,6 +10,7 @@ import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import {
   createOptionCloseExecutionDraft,
   deriveSaxoHistoryRealizedPnlAutofill,
+  resolveSaxoHistoryCloseDraftCommission,
   repairLegacySaxoHistoryRealizedPnl,
   sanitizeSaxoHistoryCloseExecutions,
 } from "@/domain/optionCloseExecutions";
@@ -48,6 +49,7 @@ import {
   mapOpeningExecutionHistoryStatusToEntryCompletionStatus,
   mergeOpeningExecutionIntoEntryExecution,
   resolveOpeningExecution,
+  resolveEntryHistoryEvidence,
   findSaxoSyntheticForwardSimulationForPair,
   findSaxoAssignmentStockAcquisitionItem,
   resolveSaxoSyntheticForwardFillEvidence,
@@ -60,6 +62,7 @@ import {
   isSaxoHistoryMatchingStockAcquisition,
   resolveSaxoHistoryUnderlyingSymbol,
   resolveSaxoHistoryOptionLegMatch,
+  resolveOrderActivityCloseMatch,
   resolveSaxoPositionSymbol,
   resolveSaxoPositionSymbolResolution,
   type OpeningHistoryFetchState,
@@ -106,7 +109,7 @@ function parseTickerFromSaxoSymbol(value: string | undefined): string {
 
 function formatTokyoDate(utc: string): string {
   const date = new Date(utc);
-  if (Number.isNaN(date.getTime())) return formatLocalDate(new Date());
+  if (Number.isNaN(date.getTime())) return "";
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
 
@@ -266,7 +269,9 @@ export default function App() {
   const [saxoPositionCandidates, setSaxoPositionCandidates] = useState<SaxoApiPositionSnapshot[]>([]);
   const [saxoHistoryCandidates, setSaxoHistoryCandidates] = useState<SaxoHistoryDiscoveryItem[]>([]);
   const [saxoHasPendingReflection, setSaxoHasPendingReflection] = useState(true);
-  const [isSaxoDetailOpen, setIsSaxoDetailOpen] = useState(false);
+  const [isSaxoDetailOpen, setIsSaxoDetailOpen] = useState(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("saxoConnected") === "1",
+  );
   const [hasSaxoDetailUserState, setHasSaxoDetailUserState] = useState(false);
   const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
   const [sameDayUsdJpyQuote, setSameDayUsdJpyQuote] = useState<FxQuote | null>(null);
@@ -359,7 +364,9 @@ export default function App() {
       if (executions.length === 0) return;
       let changed = false;
       const nextExecutions = executions.map((execution) => {
-        if (execution.confirmed || execution.saxoSourceType !== "current_position") return execution;
+        const isNAccount = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+        const isConfirmedButIncomplete = execution.confirmed && getOpeningEntryMissingItems(execution, isNAccount).length > 0;
+        if (execution.saxoSourceType !== "current_position" || (execution.confirmed && !isConfirmedButIncomplete)) return execution;
         const position = findOpeningPositionForEntryExecution(simulation, execution, saxoPositionCandidates);
         if (!position) return execution;
         const normalizedPosition = position.accountAssignment === simulation.accountCode
@@ -587,20 +594,20 @@ export default function App() {
     const expiryDate = position.expiry ?? today;
     const historyMatches = findEntryHistoryMatches(position, historyItems);
     const opening = resolveOpeningExecution(position, historyMatches, historyFetchState);
-    const entryDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : today;
-    const dte = Math.max(0, Math.ceil((Date.parse(expiryDate) - Date.parse(entryDate)) / 86400000));
+    const entryDate = opening.executionTimeUtc?.value ? formatTokyoDate(opening.executionTimeUtc.value) : "";
+    const dte = entryDate ? Math.max(0, Math.ceil((Date.parse(expiryDate) - Date.parse(entryDate)) / 86400000)) : 0;
     const accountCode = position.accountAssignment;
     const isNAccount = accountCode === "N";
     const legId = `saxo-${position.id}-leg`;
     const quantity = position.quantity !== undefined ? Math.max(1, Math.abs(position.quantity)) : 1;
-    const bestHistory = historyMatches.length === 1 ? historyMatches[0].item : undefined;
+    const bestHistory = resolveEntryHistoryEvidence(historyMatches).item;
     const historyTicker = bestHistory
       ? resolveSaxoHistoryUnderlyingSymbol(bestHistory) ?? normalizeTicker(bestHistory.symbol ?? bestHistory.instrumentCode ?? "")
       : "";
     const ticker = resolveSaxoPositionSymbol(position, simulations) ?? historyTicker;
     const fillPriceUSD = bestHistory?.price ?? position.premiumOpenPrice ?? position.currentOptionPrice ?? 0;
     const contracts = bestHistory?.quantity !== undefined ? Math.max(1, Math.abs(bestHistory.quantity)) : quantity;
-    const entryTradeDate = bestHistory?.tradeDate ?? "";
+    const entryTradeDate = bestHistory?.tradeDate ?? entryDate;
     const draftExecution: OptionEntryExecution = {
       id: `saxo-entry-${position.id}-${Date.now()}`,
       legId,
@@ -901,7 +908,7 @@ export default function App() {
 
     const historyMatches = findEntryHistoryMatches(normalizedPosition, historyItems);
     const opening = resolveOpeningExecution(normalizedPosition, historyMatches, historyFetchState);
-    const bestHistory = historyMatches.length === 1 ? historyMatches[0].item : undefined;
+    const bestHistory = resolveEntryHistoryEvidence(historyMatches).item;
     const existingEntry = (target.optionEntryExecutions ?? []).find((execution) => execution.legId === targetLeg.id);
     const actualExpiry = normalizedPosition.expiry ?? targetLeg.expiryDate ?? target.expiryDate;
     const actualStrike = normalizedPosition.strike ?? targetLeg.strikeUSD;
@@ -1212,6 +1219,7 @@ export default function App() {
     if (historyTarget === "unknown") return undefined;
     if (historyTarget === "stock_settlement") return undefined;
     const latestState = useOptionsStore.getState();
+    if (item.kind === "order_activity" && !item.hasExplicitCloseEvidence && historyTarget === "close") return resolveOrderActivityCloseMatch(item, latestState.simulations);
     return resolveSaxoHistoryOptionLegMatch(
       latestState.simulations,
       item,
@@ -1370,6 +1378,7 @@ export default function App() {
       return applySaxoAssignmentDraftToSelectedSimulation(item, stockItem);
     }
     if (historyTarget === "close") {
+      const isOrderActivityOnly = item.kind === "order_activity" && item.accountingState === "pending";
       const existingExecution = (target.optionCloseExecutions ?? []).find(
         (execution) =>
           historyKeys.includes(execution.sourceCandidateId ?? "") ||
@@ -1384,27 +1393,29 @@ export default function App() {
           closePriceUSD: item.price,
           closeKind: "buyback",
         });
+        const resolvedCommission = resolveSaxoHistoryCloseDraftCommission({ accountEnvironment: target.accountEnvironment, accountingPending: isOrderActivityOnly, transactionCost: item.transactionCost, draft });
         const baseExecution: OptionCloseExecution = {
           ...draft,
           closeDate: item.tradeDate ?? draft.closeDate,
           contracts: item.quantity !== undefined ? Math.max(1, Math.abs(item.quantity)) : draft.contracts,
           closePriceUSD: item.price ?? draft.closePriceUSD,
           settlementCurrency: target.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "USD" : "JPY",
-          brokerBookedAmountJPY: !isN && item.accountCurrency === "JPY" ? item.bookedAmountAccountCurrency : undefined,
-          brokerRealizedPnlJPY: !isN && item.accountCode === "P" && item.accountCurrency === "JPY" ? item.profitLossAccountCurrency : undefined,
-          brokerTransactionCostJPY: !isN ? item.transactionCost : undefined,
-          brokerPremiumJPY: !isN ? item.premiumAmount : undefined,
-          brokerFeeJPY: !isN ? item.feeAmount : undefined,
-          brokerExchangeFeeJPY: !isN ? item.exchangeFee : undefined,
-          brokerExchangeRateJPY: !isN ? item.exchangeRate : undefined,
-          brokerTaxIncludedFeeJPY: !isN ? item.taxIncludedFee : undefined,
-          commissionUSD: isN ? Math.abs(item.transactionCost ?? draft.commissionUSD ?? DEFAULT_BROKER_COMMISSION_USD) : draft.commissionUSD,
-          fxRateJPY: item.exchangeRate ?? draft.fxRateJPY,
-          source: "saxo_history" as const,
+          brokerBookedAmountJPY: !isOrderActivityOnly && !isN && item.accountCurrency === "JPY" ? item.bookedAmountAccountCurrency : undefined,
+          brokerRealizedPnlJPY: !isOrderActivityOnly && !isN && item.accountCode === "P" && item.accountCurrency === "JPY" ? item.profitLossAccountCurrency : undefined,
+          brokerTransactionCostJPY: !isOrderActivityOnly && !isN ? item.transactionCost : undefined,
+          brokerPremiumJPY: !isOrderActivityOnly && !isN ? item.premiumAmount : undefined,
+          brokerFeeJPY: !isOrderActivityOnly && !isN ? item.feeAmount : undefined,
+          brokerExchangeFeeJPY: !isOrderActivityOnly && !isN ? item.exchangeFee : undefined,
+          brokerExchangeRateJPY: !isOrderActivityOnly && !isN ? item.exchangeRate : undefined,
+          brokerTaxIncludedFeeJPY: !isOrderActivityOnly && !isN ? item.taxIncludedFee : undefined,
+          ...resolvedCommission,
+          fxRateJPY: isOrderActivityOnly ? undefined : (item.exchangeRate ?? draft.fxRateJPY),
+          source: isOrderActivityOnly ? "saxo_order_activity" as const : "saxo_history" as const,
           sourceCandidateId: primaryHistoryKey,
           sourceTradeId: item.id,
           targetPositionId: target.id,
           confirmationStatus: "pending" as const,
+          ...(isOrderActivityOnly ? { executionEvidenceStatus: "detected" as const, accountingStatus: "pending" as const, activityIdentity: item.sourceIdMasked, activityTime: item.activityTime } : {}),
           memo: [
             `入力元: Saxo履歴候補。${item.sourceIdMasked ? `履歴ID: ${item.sourceIdMasked}。` : ""}正式保存前にSaxo履歴と照合してください。`,
             resolvedTarget.accountConfirmationWarning,
@@ -1429,6 +1440,47 @@ export default function App() {
         const successMessage = `履歴候補から作成された決済実績があります。7. 決済実績で内容を確認してください。${resolvedTarget.accountConfirmationWarning ? ` ${resolvedTarget.accountConfirmationWarning}` : ""}`;
         setQuoteStatus(successMessage);
         return { simulationId: target.id, closeExecutionId: nextExecution.id, warningMessage: resolvedTarget.accountConfirmationWarning };
+      }
+      if (!isOrderActivityOnly && existingExecution.executionEvidenceStatus && existingExecution.accountingStatus !== "arrived") {
+        const isN = target.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+        const resolvedCommission = resolveSaxoHistoryCloseDraftCommission({ accountEnvironment: target.accountEnvironment, accountingPending: false, transactionCost: item.transactionCost, draft: existingExecution });
+        const completedExecutionBase: OptionCloseExecution = {
+          ...existingExecution,
+          source: "saxo_history",
+          sourceCandidateId: primaryHistoryKey,
+          sourceTradeId: item.id,
+          closeDate: item.tradeDate ?? existingExecution.closeDate,
+          closePriceUSD: item.price ?? existingExecution.closePriceUSD,
+          ...resolvedCommission,
+          brokerBookedAmountJPY: !isN && item.accountCurrency === "JPY" ? item.bookedAmountAccountCurrency : existingExecution.brokerBookedAmountJPY,
+          brokerRealizedPnlJPY: !isN && item.accountCode === "P" && item.accountCurrency === "JPY" ? item.profitLossAccountCurrency : existingExecution.brokerRealizedPnlJPY,
+          brokerTransactionCostJPY: !isN ? item.transactionCost : existingExecution.brokerTransactionCostJPY,
+          brokerPremiumJPY: !isN ? item.premiumAmount : existingExecution.brokerPremiumJPY,
+          brokerFeeJPY: !isN ? item.feeAmount : existingExecution.brokerFeeJPY,
+          brokerExchangeFeeJPY: !isN ? item.exchangeFee : existingExecution.brokerExchangeFeeJPY,
+          brokerExchangeRateJPY: !isN ? item.exchangeRate : existingExecution.brokerExchangeRateJPY,
+          brokerTaxIncludedFeeJPY: !isN ? item.taxIncludedFee : existingExecution.brokerTaxIncludedFeeJPY,
+          fxRateJPY: item.exchangeRate ?? existingExecution.fxRateJPY,
+          executionEvidenceStatus: "accounting_arrived",
+          accountingStatus: "arrived",
+          confirmed: false,
+          confirmationStatus: "pending",
+        };
+        // Report accounting may replace the provisional close standard. Re-run
+        // only Saxo-derived P/L; a user-entered override remains authoritative.
+        const completedAutofill = isN && existingExecution.realizedPnlSource !== "user_override"
+          ? deriveSaxoHistoryRealizedPnlAutofill(target, completedExecutionBase)
+          : undefined;
+        const completedExecution: OptionCloseExecution = {
+          ...completedExecutionBase,
+          realizedPnlUSD: completedAutofill?.available ? completedAutofill.realizedPnlUSD : existingExecution.realizedPnlUSD,
+          realizedPnlSource: completedAutofill?.available ? "saxo_derived" : existingExecution.realizedPnlSource,
+          realizedPnlDerivation: completedAutofill?.available ? completedAutofill.derivation : existingExecution.realizedPnlDerivation,
+          realizedPnlAutofillMissingFields: completedAutofill && !completedAutofill.available
+            ? completedAutofill.missingFields
+            : existingExecution.realizedPnlAutofillMissingFields,
+        };
+        upsertSimulation({ ...target, optionCloseExecutions: (target.optionCloseExecutions ?? []).map((execution) => execution.id === completedExecution.id ? completedExecution : execution) });
       }
       const successMessage = `履歴候補から作成された決済実績があります。7. 決済実績で内容を確認してください。${resolvedTarget.accountConfirmationWarning ? ` ${resolvedTarget.accountConfirmationWarning}` : ""}`;
       setQuoteStatus(successMessage);
@@ -2193,7 +2245,13 @@ export default function App() {
                 setIsSaxoDetailOpen(open);
               }}
             >
-              <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
+              <SaxoReadOnlyPanel
+                {...saxoReadOnlyPanelProps}
+                oauthReconnectReturn={
+                  typeof window !== "undefined" && new URLSearchParams(window.location.search).get("saxoConnected") === "1"
+                }
+                onRequestClose={() => setIsSaxoDetailOpen(false)}
+              />
             </CollapsibleSection>
             <CollapsibleSection
               title={collapseAccountOverview ? "口座全体の余力・証拠金詳細" : undefined}
