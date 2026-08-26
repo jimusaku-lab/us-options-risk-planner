@@ -90,4 +90,18 @@ describe("current position estimate", () => {
     expect(getSyntheticPutAssignmentPolicy(value)).toBe("unknown");
     expect(applySyntheticPutAssignmentPolicy(value, "avoid").optionLegs[1]).toMatchObject({ assignmentPolicy: "avoid", putIntent: "avoid_assignment" });
   });
+  it("evaluates only the surviving put, excluding the closed call's realized result", () => {
+    const value = synthetic();
+    value.optionCloseExecutions = [{ id: "closed-call", legId: "call", closeKind: "buyback", confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "USD", source: "manual" }];
+    expect(calculateCurrentPositionEstimate(value, new Date("2026-08-11"))).toMatchObject({ kind: "available", evaluationScope: "remaining_leg", evaluatedLegLabel: "P売り", profitUSD: 98 });
+  });
+  it("evaluates only the surviving call when the put is confirmed closed", () => {
+    const value = synthetic();
+    value.optionCloseExecutions = [{ id: "closed-put", legId: "put", closeKind: "buyback", confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "USD", source: "manual" }];
+    expect(calculateCurrentPositionEstimate(value, new Date("2026-08-11"))).toMatchObject({ kind: "available", evaluationScope: "remaining_leg", evaluatedLegLabel: "C買い", profitUSD: 198 });
+  });
+  it("reports the remaining leg's missing price instead of synthetic non-applicability", () => {
+    const value = synthetic(); value.optionCloseExecutions = [{ id: "closed-call", legId: "call", closeKind: "buyback", confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "USD", source: "manual" }]; value.optionLegs[1].closeCostUSD = undefined;
+    expect(calculateCurrentPositionEstimate(value)).toMatchObject({ kind: "missing", reason: "買戻し価格 未取得", missingRequirements: [{ legId: "put", field: "exit_price" }] });
+  });
 });

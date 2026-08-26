@@ -111,6 +111,17 @@ describe("at-a-glance option price comparison", () => {
     expect(screen.getByText("計算内訳")).toBeInTheDocument();
     expect(screen.getByText("今閉じた場合の概算損益（手数料後）")).toBeInTheDocument();
   });
+
+  it("keeps a confirmed-closed composite leg read-only and leaves only the remaining leg editable", () => {
+    const call = { id: "closed-call", type: "call" as const, side: "buy" as const, strikeUSD: 100, premiumUSD: 2, closeCostUSD: 3, quantity: 1, expiryDate: "2026-12-18" };
+    const put = { id: "open-put", type: "put" as const, side: "sell" as const, strikeUSD: 100, premiumUSD: 2, quantity: 1, expiryDate: "2026-12-18", putIntent: "avoid_assignment" as const };
+    const simulation = { ...createSimulationWithLeg(call), strategyType: "synthetic_forward" as const, optionLegs: [call, put], optionCloseExecutions: [{ id: "call-close", legId: "closed-call", closeKind: "buyback" as const, confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "USD" as const, source: "manual" as const }] };
+    render(createElement(CloseDecisionCard, { simulation, onChange: vi.fn(), defaultOpen: true }));
+    const closed = document.getElementById("close-decision-call-closed-call")!;
+    expect(closed).toHaveTextContent("決済済み");
+    expect(closed.querySelector("input")).toBeNull();
+    expect(document.getElementById("close-decision-put-open-put")?.querySelector("input")).not.toBeNull();
+  });
 });
 
 function createLongCallSimulation(overrides: Partial<TradeSimulation> = {}): TradeSimulation {

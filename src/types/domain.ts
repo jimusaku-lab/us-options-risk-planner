@@ -376,6 +376,9 @@ export type OptionCloseExecution = {
   contracts: number;
   closePriceUSD?: number;
   commissionUSD?: number;
+  /** Provenance for a close-execution fee. Absence remains distinct from an explicit zero. */
+  commissionSource?: "saxo_ticket_confirmed_standard" | "saxo_actual" | "manual" | "user_confirmed_standard";
+  commissionConfirmedAt?: string;
   commissionJPY?: number;
   fxRateJPY?: number;
   settlementCurrency: Currency;
@@ -402,11 +405,16 @@ export type OptionCloseExecution = {
     calculatedRealizedPnlUSD: number;
   };
   inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";
-  source: "manual" | "broker_statement" | "saxo_api_estimate" | "saxo_history";
+  source: "manual" | "broker_statement" | "saxo_api_estimate" | "saxo_history" | "saxo_order_activity";
   sourceCandidateId?: string;
   sourceTradeId?: string;
   targetPositionId?: string;
   confirmationStatus?: "pending" | "confirmed" | "ignored" | "invalid";
+  /** Read-only activity evidence is not an accounting-confirmed close. */
+  executionEvidenceStatus?: "detected" | "user_confirmed_pending_accounting" | "accounting_arrived";
+  accountingStatus?: "pending" | "arrived" | "conflict";
+  activityIdentity?: string;
+  activityTime?: string;
   invalidReason?: string;
   memo?: string;
 };

@@ -179,7 +179,7 @@ describe("workflow tasks", () => {
       ],
     });
 
-    expect(getPrimaryWorkflowTask(sim).label).toBe("一部決済済み");
+    expect(getPrimaryWorkflowTask(sim).label).toBe("残存脚を反対売買判断");
   });
 
   it("asks for stock acquisition when an assigned short put has no stock acquisition", () => {

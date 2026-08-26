@@ -7,7 +7,7 @@ import { calculateLongOptionExitProceedsPreview, type LongOptionExitProceedsPrev
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { createJournalForSimulation } from "@/domain/entryRationaleJournal";
 import { calculateProfitTakeBuybackPriceUSD, getExitDeadlineInfo, getExitOrderPlanForLeg } from "@/domain/exitOrderPlan";
-import { createOptionCloseExecutionDraft } from "@/domain/optionCloseExecutions";
+import { createOptionCloseExecutionDraft, getOptionLegCloseProgress } from "@/domain/optionCloseExecutions";
 import { fetchSaxoOptionPremiumCandidate, isSaxoLocalApiAvailable } from "@/features/saxo/saxoApiClient";
 import { findOrderCandidatesForLeg, type SaxoApiOrderSnapshot, type SaxoOptionPremiumCandidate } from "@/features/saxo/saxoAccountSync";
 import { EntryRationaleJournalPanel } from "@/components/journal/EntryRationaleJournalPanel";
@@ -39,8 +39,12 @@ export function CloseDecisionCard({
   currentEstimateFxQuote?: FxQuote | null;
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
-  const shortLegs = simulation.optionLegs.filter((leg) => leg.side === "sell");
-  const longLegs = simulation.optionLegs.filter((leg) => leg.side === "buy");
+  const closeProgress = getOptionLegCloseProgress(simulation);
+  const progressByLegId = new Map(closeProgress.legs.map((progress) => [progress.legId, progress]));
+  const remainingLegs = simulation.optionLegs.flatMap((leg) => { const progress = progressByLegId.get(leg.id); return progress && (progress.state === "open" || progress.state === "partial") && progress.remainingContracts ? [{ ...leg, quantity: progress.remainingContracts }] : []; });
+  const closedLegs = simulation.optionLegs.filter((leg) => progressByLegId.get(leg.id)?.state === "closed");
+  const shortLegs = remainingLegs.filter((leg) => leg.side === "sell");
+  const longLegs = remainingLegs.filter((leg) => leg.side === "buy");
   const closeDecisionLegs = [...shortLegs, ...longLegs];
   const confirmedOpeningCommissionUSD = (leg: OptionLeg) => { const execution=(simulation.optionEntryExecutions??[]).find((item)=>item.legId===leg.id&&item.confirmed&&item.settlementCurrency==="USD"); return execution?.commissionUSD!==undefined&&Number.isFinite(execution.commissionUSD)?execution.commissionUSD:undefined; };
   const entryRationaleJournal = simulation.entryRationaleJournal ?? createJournalForSimulation(simulation);
@@ -114,6 +118,7 @@ export function CloseDecisionCard({
           </p>
           <CurrentEstimateCompletion simulation={simulation} legs={closeDecisionLegs} currentEstimateFxQuote={currentEstimateFxQuote} onPriceChange={(leg, value) => updateLongOptionClosePrice(leg, value, "manual")} onFeeChange={updateCloseFee} />
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            {closedLegs.map((leg) => <ClosedLegSummary key={leg.id} leg={leg} contracts={progressByLegId.get(leg.id)?.confirmedClosedContracts} />)}
             {shortLegs.map((leg) => (
               <LegCloseCard
                 key={leg.id}
@@ -161,6 +166,11 @@ export function CloseDecisionCard({
       )}
     </section>
   );
+}
+
+function ClosedLegSummary({ leg, contracts }: { leg: OptionLeg; contracts?: number }) {
+  const label = `${leg.type === "call" ? "C" : "P"}${leg.side === "buy" ? "買い" : "売り"} ${leg.strikeUSD} ${leg.expiryDate}`;
+  return <div id={`close-decision-${leg.type}-${leg.id}`} className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"><div className="font-bold text-slate-900">{label}</div><p className="mt-1 text-slate-600">決済済み{contracts ? `: ${contracts}枚` : ""}。現在価格の取得・決済下書き・出口ルール操作は行いません。</p></div>;
 }
 
 export function buildSaxoOptionPremiumCandidateInput(

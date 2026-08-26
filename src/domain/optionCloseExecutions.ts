@@ -3,6 +3,11 @@ import { formatLocalDate } from "@/lib/date";
 import { calculateAnnualReturnPercentByCurrency } from "./calculations";
 import { calculateDenominators, getPrimaryDenominator } from "./denominators";
 import { getEntryExecutionCostForLegJPY, getEntryExecutionCostForLegUSD } from "./optionEntryExecutions";
+import {
+  calculateConfirmedSaxoCloseCommissionUSD,
+  SAXO_CLOSE_COMMISSION_CONFIRMED_AT,
+  SAXO_CLOSE_COMMISSION_SOURCE,
+} from "./closeCommissionStandard";
 import type { SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 
 const CONTRACT_SIZE = 100;
@@ -64,26 +69,81 @@ export type OptionCloseCompletion = {
   reason?: string;
 };
 
+/** Shared per-leg source of truth. Draft executions do not remove a leg. */
+export type OptionLegCloseProgress = {
+  legId: string;
+  type: OptionLeg["type"];
+  side: OptionLeg["side"];
+  openedContracts?: number;
+  confirmedClosedContracts?: number;
+  remainingContracts?: number;
+  state: "open" | "partial" | "closed" | "invalid";
+  reason?: string;
+};
+export type OptionCloseProgress = { legs: OptionLegCloseProgress[]; invalidReason?: string };
+
+/** Operational-only progress includes activity confirmations awaiting accounting. */
+export function getOptionLegOperationalCloseProgress(simulation: TradeSimulation): OptionCloseProgress {
+  const closedByLeg = new Map<string, number>();
+  let invalidReason: string | undefined;
+  for (const execution of getOptionCloseExecutions(simulation)) {
+    const operational = execution.confirmed || execution.executionEvidenceStatus === "user_confirmed_pending_accounting" || execution.executionEvidenceStatus === "accounting_arrived";
+    if (!operational || execution.confirmationStatus === "invalid") continue;
+    const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
+    if (!leg || !Number.isFinite(execution.contracts) || execution.contracts <= 0) { invalidReason ??= "決済約定証拠の対象脚または数量が不正です。"; continue; }
+    closedByLeg.set(leg.id, (closedByLeg.get(leg.id) ?? 0) + execution.contracts);
+  }
+  const legs = simulation.optionLegs.map<OptionLegCloseProgress>((leg) => {
+    const closed = closedByLeg.get(leg.id) ?? 0;
+    if (!Number.isFinite(leg.quantity) || leg.quantity <= 0) return { legId: leg.id, type: leg.type, side: leg.side, state: "invalid", reason: "対象脚または建玉数量が不正です。" };
+    if (closed > leg.quantity) return { legId: leg.id, type: leg.type, side: leg.side, openedContracts: leg.quantity, confirmedClosedContracts: closed, state: "invalid", reason: "決済約定証拠が建玉数量を超えています。" };
+    const remainingContracts = leg.quantity - closed;
+    return { legId: leg.id, type: leg.type, side: leg.side, openedContracts: leg.quantity, confirmedClosedContracts: closed, remainingContracts, state: remainingContracts === 0 ? "closed" : closed > 0 ? "partial" : "open" };
+  });
+  return { legs, invalidReason: invalidReason ?? legs.find((item) => item.state === "invalid")?.reason };
+}
+export function getOperationalRemainingOptionLegs(simulation: TradeSimulation): Array<{ leg: OptionLeg; progress: OptionLegCloseProgress }> {
+  const progress = getOptionLegOperationalCloseProgress(simulation);
+  if (progress.invalidReason) return [];
+  return simulation.optionLegs.flatMap((leg) => { const item = progress.legs.find((entry) => entry.legId === leg.id); return item && (item.remainingContracts ?? 0) > 0 ? [{ leg, progress: item }] : []; });
+}
+
+export function getOptionLegCloseProgress(simulation: TradeSimulation): OptionCloseProgress {
+  const closedByLeg = new Map<string, number>();
+  let invalidReason: string | undefined;
+  for (const execution of getOptionCloseExecutions(simulation).filter((item) => item.confirmed)) {
+    if (execution.confirmationStatus === "invalid") { invalidReason ??= "無効な確認済み決済実績があります。"; continue; }
+    const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
+    if (!leg || !Number.isFinite(execution.contracts) || execution.contracts <= 0) { invalidReason ??= "確認済み決済実績の対象脚または数量が不正です。"; continue; }
+    closedByLeg.set(leg.id, (closedByLeg.get(leg.id) ?? 0) + execution.contracts);
+  }
+  const legs = simulation.optionLegs.map<OptionLegCloseProgress>((leg) => {
+    if (!Number.isFinite(leg.quantity) || leg.quantity <= 0) return { legId: leg.id, type: leg.type, side: leg.side, state: "invalid", reason: "対象脚または建玉数量が不正です。" };
+    const confirmedClosedContracts = closedByLeg.get(leg.id) ?? 0;
+    if (confirmedClosedContracts > leg.quantity) return { legId: leg.id, type: leg.type, side: leg.side, openedContracts: leg.quantity, confirmedClosedContracts, state: "invalid", reason: "確認済み決済実績が建玉数量を超えています。" };
+    const remainingContracts = leg.quantity - confirmedClosedContracts;
+    return { legId: leg.id, type: leg.type, side: leg.side, openedContracts: leg.quantity, confirmedClosedContracts, remainingContracts, state: remainingContracts === 0 ? "closed" : confirmedClosedContracts > 0 ? "partial" : "open" };
+  });
+  return { legs, invalidReason: invalidReason ?? legs.find((item) => item.state === "invalid")?.reason };
+}
+
+export function getRemainingOptionLegs(simulation: TradeSimulation): Array<{ leg: OptionLeg; progress: OptionLegCloseProgress }> {
+  const closeProgress = getOptionLegCloseProgress(simulation);
+  if (closeProgress.invalidReason) return [];
+  return simulation.optionLegs.flatMap((leg) => {
+    const progress = closeProgress.legs.find((item) => item.legId === leg.id);
+    return progress && (progress.state === "open" || progress.state === "partial") && (progress.remainingContracts ?? 0) > 0 ? [{ leg, progress }] : [];
+  });
+}
+
 /** Determines terminal status only from valid confirmed quantities per option leg. */
 export function getOptionCloseCompletion(simulation: TradeSimulation): OptionCloseCompletion {
-  const legs = simulation.optionLegs;
-  if (legs.length === 0 || legs.some((leg) => !Number.isFinite(leg.quantity) || leg.quantity <= 0)) {
-    return { state: "invalid", remainingContracts: 0, reason: "対象脚または建玉数量が不正です。" };
-  }
-  const closedByLeg = new Map<string, number>();
+  const progress = getOptionLegCloseProgress(simulation);
+  if (progress.legs.length === 0 || progress.invalidReason) return { state: "invalid", remainingContracts: 0, reason: progress.invalidReason ?? "対象脚または建玉数量が不正です。" };
   const confirmed = getOptionCloseExecutions(simulation).filter((execution) => execution.confirmed);
-  for (const execution of confirmed) {
-    if (execution.confirmationStatus === "invalid") return { state: "invalid", remainingContracts: 0, reason: "無効な確認済み決済実績があります。" };
-    const leg = legs.find((item) => item.id === execution.legId);
-    if (!leg || !Number.isFinite(execution.contracts) || execution.contracts <= 0) {
-      return { state: "invalid", remainingContracts: 0, reason: "確認済み決済実績の対象脚または数量が不正です。" };
-    }
-    const next = (closedByLeg.get(leg.id) ?? 0) + execution.contracts;
-    if (next > leg.quantity) return { state: "invalid", remainingContracts: 0, reason: "確認済み決済実績が建玉数量を超えています。" };
-    closedByLeg.set(leg.id, next);
-  }
-  const remainingContracts = legs.reduce((total, leg) => total + Math.max(0, leg.quantity - (closedByLeg.get(leg.id) ?? 0)), 0);
-  if (remainingContracts === legs.reduce((total, leg) => total + leg.quantity, 0)) return { state: "none", remainingContracts };
+  const remainingContracts = progress.legs.reduce((total, leg) => total + (leg.remainingContracts ?? 0), 0);
+  const openedContracts = progress.legs.reduce((total, leg) => total + (leg.openedContracts ?? 0), 0);
+  if (remainingContracts === openedContracts) return { state: "none", remainingContracts };
   if (remainingContracts > 0) return { state: "partial", remainingContracts };
   const terminalStatus = confirmed.length > 0 && confirmed.every((execution) => execution.closeKind === "expired") ? "expired" : "closed";
   return { state: "complete", terminalStatus, remainingContracts: 0 };
@@ -220,6 +280,12 @@ export function createOptionCloseExecutionDraft(params: {
 }): OptionCloseExecution {
   const closeKind = params.closeKind ?? "buyback";
   const closeDate = params.closeDate ?? formatLocalDate();
+  // This is a close-only standard. Never reuse an entry fee or make a USD
+  // standard into a P/JPY broker-statement cost.
+  const confirmedNCloseCommissionUSD = closeKind === "buyback" &&
+    params.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+    ? calculateConfirmedSaxoCloseCommissionUSD(params.leg.quantity)
+    : undefined;
   return {
     id: `close-${params.leg.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     legId: params.leg.id,
@@ -228,7 +294,9 @@ export function createOptionCloseExecutionDraft(params: {
     closeDate,
     contracts: params.leg.quantity,
     closePriceUSD: params.closePriceUSD,
-    commissionUSD: closeKind === "expired" ? 0 : 2.25,
+    commissionUSD: closeKind === "expired" ? 0 : confirmedNCloseCommissionUSD,
+    commissionSource: confirmedNCloseCommissionUSD !== undefined ? SAXO_CLOSE_COMMISSION_SOURCE : undefined,
+    commissionConfirmedAt: confirmedNCloseCommissionUSD !== undefined ? SAXO_CLOSE_COMMISSION_CONFIRMED_AT : undefined,
     commissionJPY: undefined,
     fxRateJPY: params.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
       ? params.simulation.referenceFxRateJPY ?? params.simulation.fxRateJPY
@@ -238,6 +306,24 @@ export function createOptionCloseExecutionDraft(params: {
     brokerExchangeRateJPY: params.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? undefined : params.simulation.fxRateJPY,
     source: "manual",
     memo: closeKind === "expired" ? "満期終了。買戻しなし。" : "",
+  };
+}
+
+/** Resolves close-draft fees without inventing an accounting amount. */
+export function resolveSaxoHistoryCloseDraftCommission(params: {
+  accountEnvironment: TradeSimulation["accountEnvironment"];
+  accountingPending: boolean;
+  transactionCost?: number;
+  draft: Pick<OptionCloseExecution, "commissionUSD" | "commissionSource" | "commissionConfirmedAt">;
+}): Pick<OptionCloseExecution, "commissionUSD" | "commissionSource" | "commissionConfirmedAt"> {
+  if (params.accountingPending) return { commissionUSD: undefined, commissionSource: undefined, commissionConfirmedAt: undefined };
+  if (params.accountEnvironment === "PROD_N_USD_SETTLEMENT" && params.transactionCost !== undefined && Number.isFinite(params.transactionCost)) {
+    return { commissionUSD: Math.abs(params.transactionCost), commissionSource: "saxo_actual", commissionConfirmedAt: undefined };
+  }
+  return {
+    commissionUSD: params.draft.commissionUSD,
+    commissionSource: params.draft.commissionSource,
+    commissionConfirmedAt: params.draft.commissionConfirmedAt,
   };
 }
 
@@ -262,7 +348,9 @@ function calculateDirectionalRealizedPnlUSD({
   const premiumDifference = leg.side === "sell"
     ? entryPremiumUSD - closeCostUSD
     : closeCostUSD - entryPremiumUSD;
-  return premiumDifference - openCommissionUSD - closeCommissionUSD;
+  // Broker ticket amounts are USD cents; retain a stable cent value instead of
+  // leaking binary floating-point tails into the review card or performance.
+  return Math.round((premiumDifference - openCommissionUSD - closeCommissionUSD + Number.EPSILON) * 100) / 100;
 }
 
 /**

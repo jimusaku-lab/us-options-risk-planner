@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import type { TradeSimulation } from "@/types/domain";
 import {
+  createOptionCloseExecutionDraft,
   deriveSaxoHistoryRealizedPnlAutofill,
   getOptionCloseCompletion,
+  getOptionLegCloseProgress,
+  getOptionLegOperationalCloseProgress,
+  resolveSaxoHistoryCloseDraftCommission,
   sanitizeSaxoHistoryCloseExecutions,
   validateSaxoHistoryCloseExecution,
 } from "./optionCloseExecutions";
@@ -34,6 +38,49 @@ function openPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulatio
 }
 
 describe("Saxo history close execution validation", () => {
+  it("uses only the confirmed N/USD close standard for a new buyback draft", () => {
+    const nSimulation = openPutSimulation({
+      accountCode: "N",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      optionLegs: [{ ...putLeg, id: "n-one", quantity: 1 }],
+    });
+    const one = createOptionCloseExecutionDraft({ simulation: nSimulation, leg: nSimulation.optionLegs[0], closePriceUSD: 1.56 });
+    expect(one).toMatchObject({ commissionUSD: 2.24, commissionSource: "saxo_ticket_confirmed_standard" });
+
+    const twoSimulation = { ...nSimulation, optionLegs: [{ ...nSimulation.optionLegs[0], id: "n-two", quantity: 2 }] };
+    expect(createOptionCloseExecutionDraft({ simulation: twoSimulation, leg: twoSimulation.optionLegs[0] })).toMatchObject({ commissionUSD: 4.49, commissionSource: "saxo_ticket_confirmed_standard" });
+
+    const pSimulation = openPutSimulation();
+    expect(createOptionCloseExecutionDraft({ simulation: pSimulation, leg: pSimulation.optionLegs[0] }).commissionUSD).toBeUndefined();
+  });
+
+  it("uses actual accounting cost over the standard and leaves order-activity accounting pending without a fee", () => {
+    const nSimulation = openPutSimulation({ accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT" });
+    const standard = createOptionCloseExecutionDraft({ simulation: nSimulation, leg: nSimulation.optionLegs[0] });
+    const actual = resolveSaxoHistoryCloseDraftCommission({ accountEnvironment: nSimulation.accountEnvironment, accountingPending: false, transactionCost: -3.1, draft: standard });
+    expect(actual).toMatchObject({ commissionUSD: 3.1, commissionSource: "saxo_actual" });
+    const activityPending = resolveSaxoHistoryCloseDraftCommission({ accountEnvironment: nSimulation.accountEnvironment, accountingPending: true, transactionCost: -3.1, draft: standard });
+    expect(activityPending.commissionUSD).toBeUndefined();
+    expect(activityPending.commissionSource).toBeUndefined();
+  });
+
+  it("recalculates Saxo-derived close P/L with the 2.24 close fee without overwriting user values", () => {
+    const simulation = openPutSimulation({
+      accountCode: "N",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      optionLegs: [{ ...putLeg, id: "n-p270", side: "sell", premiumUSD: 3.3, quantity: 1 }],
+      optionEntryExecutions: [{
+        id: "entry-n-p270", legId: "n-p270", tradeDate: "2026-08-20", contracts: 1, fillPriceUSD: 3.3,
+        settlementCurrency: "USD", commissionUSD: 2.24, commissionSource: "saxo_ticket_confirmed_standard", source: "saxo_api_estimate", confirmed: true,
+      }],
+    });
+    const execution = createOptionCloseExecutionDraft({ simulation, leg: simulation.optionLegs[0], closePriceUSD: 1.56 });
+    const derived = deriveSaxoHistoryRealizedPnlAutofill(simulation, execution);
+    expect(derived).toMatchObject({ available: true, realizedPnlUSD: 169.52 });
+    const override = { ...execution, realizedPnlUSD: 91.23, realizedPnlSource: "user_override" as const };
+    expect(override.realizedPnlUSD).toBe(91.23);
+  });
+
   it("closes only after every leg is fully confirmed and is idempotent on reload", () => {
     const partial = openPutSimulation({ optionLegs: [{ ...putLeg, id: "two", quantity: 2 }], optionCloseExecutions: [{ id: "first", legId: "two", closeKind: "buyback", confirmed: true, closeDate: "2026-06-02", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
     expect(getOptionCloseCompletion(partial)).toMatchObject({ state: "partial", remainingContracts: 1 });
@@ -50,6 +97,10 @@ describe("Saxo history close execution validation", () => {
     expect(getOptionCloseCompletion({ ...twoLegs, optionCloseExecutions: [{ ...twoLegs.optionCloseExecutions![0], contracts: 2 }] })).toMatchObject({ state: "invalid" });
     const completeExpired = openPutSimulation({ optionCloseExecutions: [{ id: "expire", legId: "put-p200", closeKind: "expired", confirmed: true, closeDate: "2026-06-05", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
     expect(getOptionCloseCompletion(completeExpired)).toMatchObject({ state: "complete", terminalStatus: "expired" });
+  });
+  it("exposes confirmed quantities per leg and leaves unconfirmed drafts out of progress", () => {
+    const simulation = openPutSimulation({ optionLegs: [{ ...putLeg, id: "call", type: "call", side: "buy", quantity: 1 }, { ...putLeg, id: "put", type: "put", side: "sell", quantity: 2 }], optionCloseExecutions: [{ id: "call-close", legId: "call", closeKind: "buyback", confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "JPY", source: "manual" }, { id: "put-draft", legId: "put", closeKind: "buyback", confirmed: false, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
+    expect(getOptionLegCloseProgress(simulation).legs).toEqual(expect.arrayContaining([expect.objectContaining({ legId: "call", state: "closed", remainingContracts: 0 }), expect.objectContaining({ legId: "put", state: "open", remainingContracts: 2 })]));
   });
   it("autofills deterministic N account short put close P/L from the shared calculation", () => {
     const simulation = openPutSimulation({
@@ -210,6 +261,20 @@ describe("Saxo history close execution validation", () => {
 
     expect(sanitized.optionCloseExecutions?.[0]?.confirmationStatus).toBe("invalid");
     expect(sanitized.optionCloseExecutions?.[0]?.invalidReason).toContain("別の建玉");
+  });
+
+  it("keeps activity-confirmed quantity operational only until accounting is formally confirmed", () => {
+    const simulation = openPutSimulation({
+      optionLegs: [{ ...putLeg, id: "activity-put", quantity: 1 }],
+      optionCloseExecutions: [{
+        id: "activity-close", legId: "activity-put", confirmed: false, closeDate: "2026-06-02", contracts: 1,
+        settlementCurrency: "JPY", source: "saxo_order_activity", confirmationStatus: "pending",
+        executionEvidenceStatus: "user_confirmed_pending_accounting", accountingStatus: "pending",
+      }],
+    });
+    expect(getOptionLegCloseProgress(simulation).legs[0]).toMatchObject({ state: "open", remainingContracts: 1 });
+    expect(getOptionLegOperationalCloseProgress(simulation).legs[0]).toMatchObject({ state: "closed", remainingContracts: 0 });
+    expect(getOptionCloseCompletion(simulation)).toMatchObject({ state: "none" });
   });
 
   it("does not validate Saxo close drafts without their source history id", () => {

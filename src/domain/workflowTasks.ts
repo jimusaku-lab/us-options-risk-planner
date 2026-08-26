@@ -2,6 +2,7 @@ import type { TradeSimulation, WorkflowTask } from "@/types/domain";
 import { getLongOptionLegs, getShortCallLegs, getShortOptionLegs, getShortPutLegs } from "./calculations";
 import {
   getOptionCloseCompletion,
+  getOptionLegCloseProgress,
   hasUnconfirmedCloseExecutionDraft,
 } from "./optionCloseExecutions";
 import { hasUnconfirmedOptionEntryExecutions } from "./optionEntryExecutions";
@@ -50,19 +51,6 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
           focusField: "brokerBookedAmountJPY",
         }),
       );
-    } else if (closeCompletion.state === "partial") {
-      tasks.push(
-        task(simulation, {
-          id: `${simulation.id}-partial-close`,
-          type: "enter_close_execution",
-          severity: "warning",
-          label: "一部決済済み",
-          detail: `残り${closeCompletion.remainingContracts}枚の決済実績を確認してください。`,
-          actionLabel: "決済実績へ進む",
-          targetAnchor: "option-close-executions",
-          focusField: "broker-realized-pnl-jpy",
-        }),
-      );
     } else if (hasUnconfirmedCloseExecutionDraft(simulation)) {
       tasks.push(
         task(simulation, {
@@ -76,6 +64,27 @@ export function getWorkflowTasks(simulation: TradeSimulation): WorkflowTask[] {
           focusField: "broker-realized-pnl-jpy",
         }),
       );
+    } else if (closeCompletion.state === "invalid") {
+      tasks.push(
+        task(simulation, {
+          id: `${simulation.id}-invalid-close-quantity`,
+          type: "enter_close_execution",
+          severity: "danger",
+          label: "決済数量を確認",
+          detail: closeCompletion.reason ?? "確認済み決済実績の対象脚と数量を確認してください。",
+          actionLabel: "決済実績へ進む",
+          targetAnchor: "option-close-executions",
+          focusField: "broker-realized-pnl-jpy",
+        }),
+      );
+    } else if (closeCompletion.state === "partial") {
+      for (const legProgress of getOptionLegCloseProgress(simulation).legs) {
+        if ((legProgress.state !== "open" && legProgress.state !== "partial") || !legProgress.remainingContracts) continue;
+        const leg = simulation.optionLegs.find((item) => item.id === legProgress.legId);
+        if (!leg) continue;
+        const label = leg.type === "put" && leg.side === "sell" ? "P売りを反対売買判断" : leg.type === "call" && leg.side === "buy" ? "C買いを反対売買で決済" : "残存脚を反対売買判断";
+        tasks.push(task(simulation, { id: `${simulation.id}-review-close-${leg.id}`, type: "review_close_decision", severity: "warning", label, detail: `残り${legProgress.remainingContracts}枚です。決済済みの脚は再評価・再決済しません。`, actionLabel: "反対売買判断へ", targetAnchor: "close-decision", focusField: `close-decision-${leg.type}-${leg.id}` }));
+      }
     } else {
       const isLongOnly = longLegs.length > 0 && shortLegs.length === 0;
       tasks.push(

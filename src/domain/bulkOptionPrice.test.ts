@@ -17,7 +17,7 @@ describe("generic bulk option price contract", () => {
   it("excludes both synthetic legs when either side is missing", () => {
     const call = createCurrentOptionPricePreviewRow(target("call", "buy"), quote({ bid: 2 }));
     const put = createCurrentOptionPricePreviewRow(target("put", "sell"), quote({}));
-    const simulations = [{ id: "synthetic", strategyType: "synthetic_forward", optionLegs: [{ id: "call" }, { id: "put" }] }] as never;
+    const simulations: TradeSimulation[] = [{ ...standalone(), id: "synthetic", strategyType: "synthetic_forward", optionLegs: [{ ...standalone().optionLegs[0], id: "call" }, { ...standalone().optionLegs[0], id: "put", type: "put", side: "sell" }] }];
     expect(getBulkApplicableTargetIds([call, put], simulations)).toEqual(new Set());
   });
   it("uses legacy standalone fixture identifiers but not composite parent instrument identifiers", () => {
@@ -47,5 +47,9 @@ describe("generic bulk option price contract", () => {
       expect(row.status).toBe("unavailable");
       expect(getBulkApplicableTargetIds([row], [{ id: "synthetic", strategyType: "synthetic_forward", optionLegs: [{ id: "blocked" }] }] as never, true)).toEqual(new Set());
     }
+  });
+  it("excludes a fully closed composite leg and targets only its confirmed remainder", () => {
+    const partial = { ...standalone(), id: "partial", strategyType: "synthetic_forward" as const, optionLegs: [{ ...standalone().optionLegs[0], id: "call" }, { ...standalone().optionLegs[0], id: "put", type: "put" as const, side: "sell" as const }], optionCloseExecutions: [{ id: "closed-call", legId: "call", closeKind: "buyback" as const, confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "USD" as const, source: "manual" as const }] };
+    expect(getCurrentOptionPriceTargets([partial])).toMatchObject([{ legId: "put", quantity: 1 }]);
   });
 });

@@ -12,6 +12,7 @@ import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
 import { getPrimaryWorkflowTask, getWorkflowTasks } from "@/domain/workflowTasks";
+import { getOptionCloseCompletion, getOptionLegCloseProgress } from "@/domain/optionCloseExecutions";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import type { FxQuote } from "@/lib/marketData";
 import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
@@ -197,6 +198,7 @@ export function Dashboard({
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
               const currentEstimate = !isHistoryRow ? calculateCurrentPositionEstimate(simulationWithAccount, new Date(), currentEstimateFxQuote) : { kind: "not_applicable" } as const;
+              const currentEstimateIsRemainingLeg = currentEstimate.kind === "available" && currentEstimate.evaluationScope === "remaining_leg";
               const longOptionDisplay = !isHistoryRow ? premiumDisplay.longOptionOrderDisplay : undefined;
               const historyCloseResults = historyPerformance?.optionCloseExecutionResults ?? [];
               const historyRealizedUsd = historyCloseResults.reduce((sum, result) => sum + result.realizedPnlUSD, 0);
@@ -221,6 +223,13 @@ export function Dashboard({
               });
               const workflowTasks = getWorkflowTasks(simulationWithAccount);
               const primaryTask = getPrimaryWorkflowTask(simulationWithAccount);
+              const closeCompletion = getOptionCloseCompletion(simulationWithAccount);
+              const partialCloseSummary = closeCompletion.state === "partial"
+                ? getOptionLegCloseProgress(simulationWithAccount).legs.map((leg) => {
+                    const name = leg.type === "call" ? "C買い" : "P売り";
+                    return leg.state === "closed" ? `${name}${leg.confirmedClosedContracts}枚決済済み` : `${name}${leg.remainingContracts}枚残り`;
+                  }).join(" / ")
+                : null;
               const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
               const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
               const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
@@ -403,11 +412,11 @@ export function Dashboard({
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {usesCurrentEstimate ? (
-                      <span className="block text-[11px] font-bold text-slate-500">現在決済年率</span>
+                      <span className="block text-[11px] font-bold text-slate-500">{currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel ? `${currentEstimate.evaluatedLegLabel}残存の現在決済年率` : "現在決済年率"}</span>
                     ) : !isHistoryRow && premiumDisplay.annualReturnPct !== undefined ? (
                       <span className="block text-[11px] font-bold text-slate-500">プレミアム年率</span>
                     ) : null}
-                    {usesCurrentEstimate && currentEstimate.kind === "available" ? <><span className={`block ${currentEstimate.annualizedReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{currentEstimate.annualizedReturnPct >= 0 ? "+" : ""}{formatPct(currentEstimate.annualizedReturnPct)}</span>{currentEstimate.currency === "JPY" ? <><span className={`block text-[11px] ${currentEstimate.profitJPY >= 0 ? "text-emerald-700" : "text-red-700"}`}>概算損益 {formatJPY(currentEstimate.profitJPY, { signed: true })} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span><span className="block text-[10px] text-slate-500">{formatCurrentEstimateFxEvidence(currentEstimate.fx)}</span></> : <span className={`block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>{simulation.strategyType === "synthetic_forward" ? "合算概算損益" : "概算損益"} {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span>}</> : usesCurrentEstimate && currentEstimate.kind === "missing" ? <><span className="block text-slate-500">未計算</span><span className="block text-[11px] text-slate-500">{currentEstimate.reason}</span>{currentEstimate.reason === "為替レート 未確認" ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={onRefreshFx}>為替を取得</button> : ["exit_price", "close_fee"].includes(currentEstimate.missingRequirements[0]?.field ?? "") ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={() => onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field)}>不足情報を確認</button> : null}</> : <>{annualReturnLabel}{showsShortPutCurrentPnl && currentEstimate.kind === "available" && currentEstimate.currency !== "JPY" ? <span className={`mt-1 block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>現在買戻し概算損益 {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span> : showsShortPutCurrentPnl && currentEstimate.kind === "missing" ? <><span className="mt-1 block text-[11px] text-slate-500">現在買戻し概算損益 未計算 / {currentEstimate.reason}</span>{["exit_price", "close_fee"].includes(currentEstimate.missingRequirements[0]?.field ?? "") ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => { event.stopPropagation(); onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field); }}>不足情報を確認</button> : null}</> : null}{isSyntheticAnnualRateNotApplicable ? <span className="mt-1 block text-left text-[11px] font-medium leading-4 text-slate-500">建玉時ネット額はプレミアム年率として評価しません</span> : null}</>}
+                    {usesCurrentEstimate && currentEstimate.kind === "available" ? <><span className={`block ${currentEstimate.annualizedReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{currentEstimate.annualizedReturnPct >= 0 ? "+" : ""}{formatPct(currentEstimate.annualizedReturnPct)}</span>{currentEstimate.currency === "JPY" ? <><span className={`block text-[11px] ${currentEstimate.profitJPY >= 0 ? "text-emerald-700" : "text-red-700"}`}>概算損益 {formatJPY(currentEstimate.profitJPY, { signed: true })} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span><span className="block text-[10px] text-slate-500">{formatCurrentEstimateFxEvidence(currentEstimate.fx)}</span></> : <><span className={`block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>{currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel ? `${currentEstimate.evaluatedLegLabel}残存の概算損益` : simulation.strategyType === "synthetic_forward" ? "合算概算損益" : "概算損益"} {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span>{currentEstimateIsRemainingLeg ? <span className="block text-[10px] text-slate-500">他方の脚は決済済み・残存脚のみ評価中</span> : null}</>}</> : usesCurrentEstimate && currentEstimate.kind === "missing" ? <><span className="block text-slate-500">未計算</span><span className="block text-[11px] text-slate-500">{currentEstimate.reason}</span>{currentEstimate.reason === "為替レート 未確認" ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={onRefreshFx}>為替を取得</button> : ["exit_price", "close_fee"].includes(currentEstimate.missingRequirements[0]?.field ?? "") ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={() => onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field)}>不足情報を確認</button> : null}</> : <>{annualReturnLabel}{showsShortPutCurrentPnl && currentEstimate.kind === "available" && currentEstimate.currency !== "JPY" ? <span className={`mt-1 block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>現在買戻し概算損益 {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span> : showsShortPutCurrentPnl && currentEstimate.kind === "missing" ? <><span className="mt-1 block text-[11px] text-slate-500">現在買戻し概算損益 未計算 / {currentEstimate.reason}</span>{["exit_price", "close_fee"].includes(currentEstimate.missingRequirements[0]?.field ?? "") ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => { event.stopPropagation(); onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field); }}>不足情報を確認</button> : null}</> : null}{isSyntheticAnnualRateNotApplicable ? <span className="mt-1 block text-left text-[11px] font-medium leading-4 text-slate-500">建玉時ネット額はプレミアム年率として評価しません</span> : null}</>}
                     {isHistoryRow ? <span className="mt-1 block text-[11px] font-semibold text-slate-500">税前 / 税後</span> : null}
                     {!isHistoryRow && premiumDisplay.coveredCallAssignmentEstimate ? (
                       <span className="mt-2 block rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-sky-950">
@@ -468,6 +477,7 @@ export function Dashboard({
                     ) : null}
                   </td>
                   <td className="py-3 pr-3">
+                    {partialCloseSummary ? <p className="mb-1 text-[11px] font-semibold leading-4 text-slate-600">一部決済済み: {partialCloseSummary}</p> : null}
                     {primaryTask.type === "complete" ? (
                       <span
                         className="inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800"
@@ -475,28 +485,7 @@ export function Dashboard({
                       >
                         完了（追加操作なし）
                       </span>
-                    ) : (
-                      <button
-                        type="button"
-                        className={`rounded-md border px-2 py-1 text-xs font-bold ${
-                          primaryTask.severity === "danger"
-                            ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
-                            : primaryTask.severity === "warning"
-                              ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
-                              : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
-                        }`}
-                        title={primaryTask.detail}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onWorkflowTaskAction?.(simulation.id, primaryTask);
-                        }}
-                      >
-                        {workflowTasks.length > 1 ? `未完了${workflowTasks.length}件` : primaryTask.label}
-                      </button>
-                    )}
-                    {workflowTasks.length > 1 ? (
-                      <div className="mt-1 text-[11px] leading-4 text-slate-500">{primaryTask.label}</div>
-                    ) : null}
+                    ) : <div className="grid gap-1">{workflowTasks.map((workflowTask) => <button key={workflowTask.id} type="button" className={`rounded-md border px-2 py-1 text-left text-xs font-bold ${workflowTask.severity === "danger" ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100" : workflowTask.severity === "warning" ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100" : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"}`} title={workflowTask.detail} onClick={(event) => { event.stopPropagation(); onWorkflowTaskAction?.(simulation.id, workflowTask); }}>{workflowTask.label}</button>)}</div>}
                   </td>
                   <td className="py-3 pr-3 text-right">
                     <button
