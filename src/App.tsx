@@ -1633,6 +1633,17 @@ export default function App() {
       : "履歴候補から作成された決済実績があります。7. 決済実績で内容を確認してください。",
     );
   };
+  const openConfirmedCloseExecution = (simulationId: string, executionId: string) => {
+    const target = useOptionsStore.getState().simulations.find((simulation) => simulation.id === simulationId);
+    if (!target || !(target.optionCloseExecutions ?? []).some((execution) => execution.id === executionId && execution.confirmed)) {
+      setQuoteStatus("決済実績を開けません。履歴を再取得して確認してください。");
+      return;
+    }
+    setActiveView("positions");
+    selectSimulation(simulationId);
+    setIsEditorOpen(true);
+    setEditorFocusRequest({ anchorId: `option-close-execution-${executionId}`, requestId: Date.now() + Math.random() });
+  };
   const returnToSaxoHistoryCandidates = () => {
     setIsEditorOpen(false);
     setQuoteStatus("Saxo APIパネルの履歴候補へ戻り、反映候補を作り直してください。");
@@ -1882,6 +1893,7 @@ export default function App() {
                 onHistoryOpenChange={setDashboardHistoryOpen}
                 onWarningAction={goToWarningAction}
                 onWorkflowTaskAction={goToWorkflowTask}
+                onHistoryLegAction={openConfirmedCloseExecution}
                 onJournalAction={openEntryRationaleJournal}
                 onCurrentEstimateAction={goToCurrentEstimateInput}
                 currentEstimateFxQuote={sameDayUsdJpyQuote}
@@ -2135,6 +2147,7 @@ export default function App() {
               onHistoryOpenChange={setDashboardHistoryOpen}
               onWarningAction={goToWarningAction}
               onWorkflowTaskAction={goToWorkflowTask}
+              onHistoryLegAction={openConfirmedCloseExecution}
               onJournalAction={openEntryRationaleJournal}
               onCurrentEstimateAction={goToCurrentEstimateInput}
               currentEstimateFxQuote={sameDayUsdJpyQuote}

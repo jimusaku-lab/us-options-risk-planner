@@ -82,6 +82,21 @@ export type OptionLegCloseProgress = {
 };
 export type OptionCloseProgress = { legs: OptionLegCloseProgress[]; invalidReason?: string };
 
+/** Display-only confirmed leg history for an active synthetic parent. */
+export type ClosedSyntheticLegHistoryItem = {
+  kind: "closed_leg";
+  id: string;
+  simulationId: string;
+  simulation: TradeSimulation;
+  legId: string;
+  leg: OptionLeg;
+  executionIds: string[];
+  closeResults: OptionCloseExecutionResult[];
+  closedContracts: number;
+  remainingContracts: number;
+  closeDate: string;
+};
+
 /** Operational-only progress includes activity confirmations awaiting accounting. */
 export function getOptionLegOperationalCloseProgress(simulation: TradeSimulation): OptionCloseProgress {
   const closedByLeg = new Map<string, number>();
@@ -509,6 +524,30 @@ export function calculateOptionCloseExecutionResults(simulation: TradeSimulation
   return getOptionCloseExecutions(simulation)
     .map((execution) => calculateOptionCloseExecutionResult(simulation, execution))
     .filter((result): result is OptionCloseExecutionResult => Boolean(result));
+}
+
+/** Never persists a cloned strategy; derives only valid confirmed partial legs. */
+export function getClosedSyntheticLegHistoryItems(simulations: TradeSimulation[]): ClosedSyntheticLegHistoryItem[] {
+  return simulations.flatMap((simulation) => {
+    if (simulation.strategyType !== "synthetic_forward" || !["open", "entry_confirmation"].includes(simulation.status)) return [];
+    const completion = getOptionCloseCompletion(simulation);
+    const progress = getOptionLegCloseProgress(simulation);
+    if (completion.state !== "partial" || progress.invalidReason) return [];
+    const confirmed = getOptionCloseExecutions(simulation).filter((execution) => execution.confirmed && execution.confirmationStatus !== "invalid");
+    return simulation.optionLegs.flatMap((leg) => {
+      const legProgress = progress.legs.find((item) => item.legId === leg.id);
+      if (!legProgress || (legProgress.confirmedClosedContracts ?? 0) <= 0 || legProgress.state === "invalid") return [];
+      const executions = confirmed.filter((execution) => execution.legId === leg.id);
+      const executionIds = executions.map((execution) => execution.id);
+      if (!executions.length || new Set(executionIds).size !== executionIds.length) return [];
+      const closeResults = executions.map((execution) => calculateOptionCloseExecutionResult(simulation, execution)).filter((result): result is OptionCloseExecutionResult => Boolean(result));
+      if (closeResults.length !== executions.length || closeResults.some((result) => !result.execution.closeDate || !Number.isFinite(result.realizedPnlUSD) || !Number.isFinite(result.realizedPnlJPY))) return [];
+      const closeDate = closeResults.map((result) => result.execution.closeDate).sort().at(-1);
+      if (!closeDate) return [];
+      const stableIds = [...executionIds].sort();
+      return [{ kind: "closed_leg" as const, id: `${simulation.id}:closed-leg:${leg.id}:${stableIds.join(",")}`, simulationId: simulation.id, simulation, legId: leg.id, leg, executionIds: stableIds, closeResults, closedContracts: legProgress.confirmedClosedContracts ?? 0, remainingContracts: legProgress.remainingContracts ?? 0, closeDate }];
+    });
+  });
 }
 
 export function calculateTotalOptionCloseRealizedPnlJPY(simulation: TradeSimulation): number {

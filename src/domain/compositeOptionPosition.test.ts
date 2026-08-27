@@ -77,8 +77,8 @@ describe("composite option positions", () => {
     position.optionEntryExecutions[0].confirmed = true; expect(shouldRecoverSaxoSyntheticForwardEntryConfirmation(position, true)).toBe(false);
     position.status = "entry_confirmation"; expect(isSyntheticForwardEntryConfirmation(position)).toBe(true); expect(shouldRecoverSaxoSyntheticForwardEntryConfirmation(position, true)).toBe(false);
   });
-  it("keeps a parent in partial close and holds performance until both legs are confirmed", () => {
-    const position = composite("synthetic_forward"); position.optionEntryExecutions = [entry("combo-call"), entry("combo-put")]; position.optionCloseExecutions = [close("combo-call")]; expect(getCompositeOptionLifecycle(position)?.state).toBe("partial_close"); expect(shouldIncludeCompositeCloseResultsInPerformance(position)).toBe(false); position.optionCloseExecutions.push(close("combo-put")); expect(getCompositeOptionLifecycle(position)?.state).toBe("closed"); expect(shouldIncludeCompositeCloseResultsInPerformance(position)).toBe(true);
+  it("keeps a parent in partial close while including each confirmed leg execution once", () => {
+    const position = composite("synthetic_forward"); position.optionEntryExecutions = [entry("combo-call"), entry("combo-put")]; position.optionCloseExecutions = [close("combo-call")]; expect(getCompositeOptionLifecycle(position)?.state).toBe("partial_close"); expect(shouldIncludeCompositeCloseResultsInPerformance(position)).toBe(true); position.optionCloseExecutions.push(close("combo-put")); expect(getCompositeOptionLifecycle(position)?.state).toBe("closed"); expect(shouldIncludeCompositeCloseResultsInPerformance(position)).toBe(true);
   });
   it("keeps put assignment funding separate from the net premium", () => {
     const funding = getCompositeAssignmentFunding(composite("synthetic_forward"), { currency: "USD", cashBalance: 20_953.74 }); expect(funding).toMatchObject({ requiredUSD: 20_500, status: "sufficient" }); expect(funding?.surplusUSD).toBeCloseTo(453.74);

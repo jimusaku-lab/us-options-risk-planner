@@ -221,7 +221,7 @@ export function isSyntheticForwardEntrySaved(simulation: TradeSimulation): boole
 }
 
 export function shouldIncludeCompositeCloseResultsInPerformance(simulation: TradeSimulation): boolean {
-  return !isCompositeOptionStrategy(simulation) || getCompositeOptionLifecycle(simulation)?.closeComplete === true;
+  return !isCompositeOptionStrategy(simulation) || (simulation.optionCloseExecutions ?? []).some((execution) => execution.confirmed);
 }
 
 export function getCompositeNetEntryPremiumUSD(simulation: TradeSimulation): number | undefined {

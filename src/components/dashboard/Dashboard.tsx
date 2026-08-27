@@ -12,7 +12,7 @@ import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
 import { getPrimaryWorkflowTask, getWorkflowTasks } from "@/domain/workflowTasks";
-import { getOptionCloseCompletion, getOptionLegCloseProgress } from "@/domain/optionCloseExecutions";
+import { getClosedSyntheticLegHistoryItems, getOptionCloseCompletion, getOptionLegCloseProgress } from "@/domain/optionCloseExecutions";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import type { FxQuote } from "@/lib/marketData";
 import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
@@ -57,6 +57,7 @@ export function Dashboard({
   onHistoryOpenChange,
   onWarningAction,
   onWorkflowTaskAction,
+  onHistoryLegAction,
   onJournalAction,
   onCurrentEstimateAction,
   journalFocusSimulationId,
@@ -81,6 +82,7 @@ export function Dashboard({
   onHistoryOpenChange: (open: boolean) => void;
   onWarningAction?: (simulationId: string, warning: RiskWarning) => void;
   onWorkflowTaskAction?: (simulationId: string, task: WorkflowTask) => void;
+  onHistoryLegAction?: (simulationId: string, executionId: string) => void;
   onJournalAction?: (simulationId: string) => void;
   onCurrentEstimateAction?: (simulationId: string, legId?: string, field?: string) => void;
   journalFocusSimulationId?: string | null;
@@ -95,6 +97,7 @@ export function Dashboard({
   const showHistory = historyOpen;
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "entry_confirmation" || simulation.status === "open");
   const historySimulations = simulations.filter((simulation) => endedStatuses.has(simulation.status));
+  const closedLegHistoryItems = showHistory && !journalFocusSimulationId ? getClosedSyntheticLegHistoryItems(simulations) : [];
   const focusedSimulation = journalFocusSimulationId
     ? simulations.find((simulation) => simulation.id === journalFocusSimulationId)
     : undefined;
@@ -145,7 +148,7 @@ export function Dashboard({
             onClick={() => onHistoryOpenChange(!showHistory)}
           >
             {showHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            履歴 {historySimulations.length}件を{showHistory ? "畳む" : "表示"}
+            履歴 終了建玉{historySimulations.length}件・継続中戦略の決済済み脚{closedLegHistoryItems.length}件を{showHistory ? "畳む" : "表示"}
           </button>
         )}</div>
       </div>
@@ -516,6 +519,20 @@ export function Dashboard({
           </tbody>
         </table>
       </div> : null}
+      {showHistory && closedLegHistoryItems.length > 0 ? <section className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3" aria-label="継続中戦略の決済済み脚">
+        <h3 className="text-sm font-bold text-slate-900">継続中戦略の決済済み脚 {closedLegHistoryItems.length}件</h3>
+        <div className="mt-2 space-y-2">{closedLegHistoryItems.map((item) => {
+          const parentRemainingContracts = getOptionLegCloseProgress(item.simulation).legs.filter((leg) => leg.legId !== item.legId).reduce((sum, leg) => sum + (leg.remainingContracts ?? 0), 0);
+          const label = item.leg.type === "call" ? "C買い" : "P売り";
+          return <button key={item.id} type="button" className="w-full rounded border border-slate-200 bg-white p-3 text-left hover:border-teal-300 hover:bg-teal-50" onClick={() => onHistoryLegAction?.(item.simulationId, item.executionIds[0])}>
+            <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-bold text-slate-900">{getSimulationTickerDisplayLabel(item.simulation)} / Synthetic Forward内 {label}</span><span className="text-xs text-slate-600">{item.closedContracts}枚決済済み / {item.remainingContracts}枚残存</span></div>
+            <p className="mt-1 text-xs text-slate-600">親戦略は継続中（{item.leg.type === "call" ? "P売り" : "C買い"}{parentRemainingContracts}枚残存） / 決済日 {item.closeDate}</p>
+            {item.closeResults.map((result) => <div key={result.execution.id} className="mt-1 grid gap-1 text-xs text-slate-700 sm:grid-cols-2 lg:grid-cols-4"><span>建値 {formatUSD(result.entryPremiumUSD / (100 * Math.max(1, result.execution.contracts)))}</span><span>決済 {result.execution.closeKind === "expired" ? "満期" : formatUSD(result.execution.closePriceUSD ?? 0)}</span><span>開始/決済手数料 {formatUSD(result.openCommissionUSD)} / {formatUSD(result.closeCommissionUSD)}</span><span className="font-semibold text-emerald-700">USD実現損益 {formatSignedUSD(result.realizedPnlUSD)} / 年率 {formatPct(result.annualReturnPct)}</span></div>)}
+            {item.simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" ? <p className="mt-1 text-xs text-slate-600">実現損益 {formatJPY(item.closeResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0))}</p> : null}
+            <p className="mt-2 text-xs font-semibold text-teal-700">クリックして親建玉の「7. 決済実績」を確認</p>
+          </button>;
+        })}</div>
+      </section> : null}
     </section>
   );
 }

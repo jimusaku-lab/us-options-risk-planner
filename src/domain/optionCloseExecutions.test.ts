@@ -5,6 +5,7 @@ import {
   createOptionCloseExecutionDraft,
   deriveSaxoHistoryRealizedPnlAutofill,
   getOptionCloseCompletion,
+  getClosedSyntheticLegHistoryItems,
   getOptionLegCloseProgress,
   getOptionLegOperationalCloseProgress,
   resolveSaxoHistoryCloseDraftCommission,
@@ -38,6 +39,12 @@ function openPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulatio
 }
 
 describe("Saxo history close execution validation", () => {
+  it("derives one confirmed closed-leg history row while the synthetic parent remains open", () => {
+    const simulation = openPutSimulation({ id: "synthetic-partial", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", optionLegs: [{ ...putLeg, id: "call-leg", type: "call", side: "buy", premiumUSD: 5, quantity: 1 }, { ...putLeg, id: "put-leg", type: "put", side: "sell", premiumUSD: 4, quantity: 1 }], optionEntryExecutions: [{ id: "entry-call", legId: "call-leg", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 5, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }, { id: "entry-put", legId: "put-leg", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 4, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }], optionCloseExecutions: [{ id: "close-call", legId: "call-leg", closeKind: "buyback", closePriceUSD: 6, closeDate: "2026-06-10", contracts: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }] });
+    expect(getClosedSyntheticLegHistoryItems([simulation])).toEqual([expect.objectContaining({ legId: "call-leg", executionIds: ["close-call"], closedContracts: 1 })]);
+    expect(getClosedSyntheticLegHistoryItems([{ ...simulation, status: "closed" }])).toEqual([]);
+    expect(getClosedSyntheticLegHistoryItems([{ ...simulation, optionCloseExecutions: [{ ...simulation.optionCloseExecutions![0], contracts: 2 }] }])).toEqual([]);
+  });
   it("uses only the confirmed N/USD close standard for a new buyback draft", () => {
     const nSimulation = openPutSimulation({
       accountCode: "N",

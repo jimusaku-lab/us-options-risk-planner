@@ -18,10 +18,10 @@ function annualizeFromCapitalDays(profitJPY: number, capitalDaysJPY: number): nu
 
 export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBucketSummary {
   return simulations
-    .filter((simulation) => endedStatuses.has(simulation.status))
     .reduce<TaxBucketSummary>(
       (summary, simulation) => {
-        const closeExecutionResults = shouldIncludeCompositeCloseResultsInPerformance(simulation)
+        const isTerminal = endedStatuses.has(simulation.status);
+        const closeExecutionResults = (isTerminal || simulation.strategyType === "synthetic_forward") && shouldIncludeCompositeCloseResultsInPerformance(simulation)
           ? calculateOptionCloseExecutionResults(simulation).filter((result) => result.execution.confirmed)
           : [];
         const hasCloseExecutions = closeExecutionResults.length > 0;
@@ -37,9 +37,9 @@ export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBu
         const premiumJPY = calculateNetInitialPremiumJPY(simulation);
         const primary = getPrimaryDenominator(calculateDenominators(simulation, premiumJPY));
         const taxResult =
-          requiresExecutionRecord && hasCloseExecutions
+          hasCloseExecutions
             ? null
-            : missingExecutionRecord
+            : !isTerminal || missingExecutionRecord
               ? null
               : calculateTaxResult({
                   simulation,
@@ -50,7 +50,7 @@ export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBu
         const closeRealizedPnlJPY = closeExecutionResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
         const closeCapitalDaysJPY = closeExecutionResults.reduce((sum, result) => sum + result.denominatorJPY * result.holdingDays / 365, 0);
         const optionCapitalDaysJPY =
-          requiresExecutionRecord && hasCloseExecutions
+          hasCloseExecutions
             ? closeCapitalDaysJPY
             : taxResult
               ? primary.amountJPY * Math.max(0, simulation.dte) / 365
@@ -58,7 +58,7 @@ export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBu
         const stockTax = calculateStockSettlementTaxResult(simulation);
         const stockCapitalDaysJPY = stockTax.costBasisJPY * Math.max(0, stockTax.holdingDays) / 365;
 
-        const optionProfitJPY = summary.optionProfitJPY + (requiresExecutionRecord && hasCloseExecutions ? closeRealizedPnlJPY : taxResult?.feeAdjustedProfitJPY ?? 0);
+        const optionProfitJPY = summary.optionProfitJPY + (hasCloseExecutions ? closeRealizedPnlJPY : taxResult?.feeAdjustedProfitJPY ?? 0);
         const nextOptionCapitalDaysJPY = summary.optionCapitalDaysJPY + optionCapitalDaysJPY;
         const stockRealizedGainJPY = summary.stockRealizedGainJPY + stockTax.realizedGainJPY;
         const nextStockCapitalDaysJPY = summary.stockCapitalDaysJPY + stockCapitalDaysJPY;
@@ -71,7 +71,7 @@ export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBu
           stockRealizedGainJPY,
           stockCapitalDaysJPY: nextStockCapitalDaysJPY,
           stockAnnualReturnPct: annualizeFromCapitalDays(stockRealizedGainJPY, nextStockCapitalDaysJPY),
-          optionCount: summary.optionCount + (missingExecutionRecord ? 0 : 1),
+          optionCount: summary.optionCount + (hasCloseExecutions || taxResult ? 1 : 0),
           stockSettlementCount: summary.stockSettlementCount + (stockTax.enabled ? 1 : 0),
         };
       },

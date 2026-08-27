@@ -535,6 +535,7 @@ export function calculateYearlyPerformanceSummary(
     });
   };
 
+  const countedCloseExecutionIds = new Set<string>();
   simulations.forEach((simulation) => {
     (simulation.optionCloseExecutions ?? []).forEach((execution) => {
       const executionYear = parseYear(execution.closeDate);
@@ -549,11 +550,12 @@ export function calculateYearlyPerformanceSummary(
       if (assignmentYear) availableYearSet.add(assignmentYear);
     }
 
-    if (!endedStatuses.has(simulation.status)) return;
-
-    (shouldIncludeCompositeCloseResultsInPerformance(simulation) ? calculateOptionCloseExecutionResults(simulation) : [])
+    ((endedStatuses.has(simulation.status) || simulation.strategyType === "synthetic_forward") && shouldIncludeCompositeCloseResultsInPerformance(simulation) ? calculateOptionCloseExecutionResults(simulation) : [])
       .filter((result) => result.execution.confirmed)
       .forEach((result) => {
+        const executionIdentity = `${simulation.id}:${result.execution.id}`;
+        if (countedCloseExecutionIds.has(executionIdentity)) return;
+        countedCloseExecutionIds.add(executionIdentity);
         if (isNAccount(simulation.accountEnvironment)) {
           const referenceFx = getPositiveFx(
             result.execution.brokerExchangeRateJPY,
@@ -585,6 +587,8 @@ export function calculateYearlyPerformanceSummary(
           });
         }
       });
+
+    if (!endedStatuses.has(simulation.status)) return;
 
     if (hasConfirmedAssignedShortPutPremium(simulation)) {
       const assignedPut = getShortPutLegs(simulation)[0];
