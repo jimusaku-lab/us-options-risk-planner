@@ -33,9 +33,8 @@ function formatSignedUSD(value: number): string {
   return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
 }
 
-function ClosedLegHistoryList({ items, onOpen }: { items: ClosedSyntheticLegHistoryItem[]; onOpen?: (simulationId: string, executionId: string) => void }) {
-  if (!items.length) return null;
-  return <section className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3" aria-label="継続中戦略の決済済み脚"><h3 className="text-sm font-bold text-slate-900">継続中戦略の決済済み脚 {items.length}件</h3><div className="mt-2 space-y-2">{items.map((item) => {
+function ClosedLegHistoryRows({ items, onOpen }: { items: ClosedSyntheticLegHistoryItem[]; onOpen?: (simulationId: string, executionId: string) => void }) {
+  return <>{items.map((item) => {
     const isN = item.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
     const parentRemaining = getOptionLegCloseProgress(item.simulation).legs.filter((leg) => leg.legId !== item.legId).reduce((sum, leg) => sum + (leg.remainingContracts ?? 0), 0);
     const primaryResults = item.closeResults.filter((result) => isN ? Number.isFinite(result.execution.realizedPnlUSD) : Number.isFinite(result.execution.brokerRealizedPnlJPY));
@@ -43,8 +42,13 @@ function ClosedLegHistoryList({ items, onOpen }: { items: ClosedSyntheticLegHist
     const totalPrimary = primaryResults.reduce((sum, result) => sum + (isN ? result.realizedPnlUSD : result.realizedPnlJPY), 0);
     const referenceComplete = isN && item.closeResults.length === item.executions.length && item.executions.every((execution) => Number.isFinite(execution.brokerExchangeRateJPY ?? execution.fxRateJPY) && (execution.brokerExchangeRateJPY ?? execution.fxRateJPY)! > 0);
     const label = item.leg.type === "call" ? "C買い" : "P売り";
-    return <button key={item.id} type="button" className="w-full rounded border border-slate-200 bg-white p-3 text-left hover:border-teal-300 hover:bg-teal-50" onClick={() => onOpen?.(item.simulationId, item.executionIds[0])}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-bold text-slate-900">{getSimulationTickerDisplayLabel(item.simulation)} / Synthetic Forward内 {label}</span><span className="text-xs text-slate-600">{label}{item.closedContracts}枚 決済済み</span></div><p className="mt-1 text-xs text-slate-600">親戦略は継続中（{item.leg.type === "call" ? "P売り" : "C買い"}{parentRemaining}枚残存） / 決済日 {item.closeDate}</p>{item.executions.map((execution) => { const result = item.closeResults.find((entry) => entry.execution.id === execution.id); return <div key={execution.id} className="mt-1 grid gap-1 text-xs text-slate-700 sm:grid-cols-2 lg:grid-cols-4"><span>建値 {result ? formatUSD(result.entryPremiumUSD / (100 * Math.max(1, execution.contracts))) : "未確認"}</span><span>決済 {execution.closeKind === "expired" ? "満期" : execution.closePriceUSD !== undefined ? formatUSD(execution.closePriceUSD) : "未確認"}</span><span>開始/決済手数料 {result ? `${formatUSD(result.openCommissionUSD)} / ${formatUSD(result.closeCommissionUSD)}` : "未確認"}</span><span className="font-semibold text-emerald-700">{primaryComplete ? `${isN ? "USD" : "JPY"}実現損益 ${isN ? formatSignedUSD(totalPrimary) : formatJPY(totalPrimary)} / 年率 ${result ? formatPct(result.annualReturnPct) : "未確認"}` : `${isN ? "USD" : "JPY"}実現損益 未確認 / 年率 未確認`}</span></div>; })}{isN ? <p className="mt-1 text-xs text-slate-600">{referenceComplete ? `参考JPY ${formatJPY(item.closeResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0))}` : "参考JPY未確認"}</p> : null}<p className="mt-2 text-xs font-semibold text-teal-700">クリックして親建玉の「7. 決済実績」を確認</p></button>;
-  })}</div></section>;
+    const firstResult = item.closeResults[0]; const action = () => onOpen?.(item.simulationId, item.executionIds[0]);
+    return <tr key={item.id} data-history-kind="closed_leg" className="cursor-pointer border-b border-slate-100 bg-slate-50 text-slate-600 hover:bg-slate-100" onClick={action}>
+      <td className="py-3 pr-3 font-bold text-slate-950">{getSimulationTickerDisplayLabel(item.simulation)}</td><td className="py-3 pr-3"><span className="rounded bg-slate-200 px-2 py-1 text-xs font-bold text-slate-700">決済済み・親戦略継続中</span></td><td className="py-3 pr-3">{item.simulation.accountCode} / {item.simulation.accountCurrency}</td><td className="py-3 pr-3 font-semibold">Synthetic Forward内 {label}</td><td className="numeric-input py-3 pr-3 text-right">{item.leg.type === "call" ? "C" : "P"} {formatUSD(item.leg.strikeUSD)}</td><td className="py-3 pr-3">{item.leg.expiryDate}</td>
+      <td className="numeric-input py-3 pr-3 text-right">{primaryComplete ? <><span className="block">{isN ? formatSignedUSD(totalPrimary) : formatJPY(totalPrimary)}</span><span className="block text-[11px] text-slate-500">建玉時/決済時 {firstResult ? `${formatUSD(firstResult.entryPremiumUSD / (100 * Math.max(1, item.executions[0].contracts)))} / ${item.executions[0].closeKind === "expired" ? "満期" : item.executions[0].closePriceUSD === undefined ? "未確認" : formatUSD(item.executions[0].closePriceUSD)}` : "未確認"}</span></> : <span>実現損益 未確認</span>}{isN ? <span className="block text-[11px] text-slate-500">{referenceComplete ? `参考 ${formatJPY(item.closeResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0))}` : "参考JPY未確認"}</span> : null}</td>
+      <td className="numeric-input py-3 pr-3 text-right">{firstResult ? (isN ? formatUSD(firstResult.denominatorUSD ?? 0) : formatJPY(firstResult.denominatorJPY)) : "未確認"}</td><td className="numeric-input py-3 pr-3 text-right">{primaryComplete && firstResult ? formatPct(firstResult.annualReturnPct) : "未確認"}</td><td className="py-3 pr-3 text-right text-xs font-bold text-emerald-700">{primaryComplete ? "警告なし" : `${isN ? "USD" : "JPY"}実現損益 未確認`}</td><td className="py-3 pr-3 text-xs">親戦略は継続中（{item.leg.type === "call" ? "P売り" : "C買い"}{parentRemaining}枚残存）<span className="block text-slate-500">決済日 {item.closeDate}</span></td><td className="py-3 pr-3 text-right"><button type="button" className="rounded-md border border-teal-300 bg-white px-2 py-1 text-xs font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => { event.stopPropagation(); action(); }}>決済実績を確認</button></td>
+    </tr>;
+  })}</>;
 }
 
 export function getSimulationTickerDisplayLabel(simulation: TradeSimulation): string {
@@ -177,7 +181,6 @@ export function Dashboard({
           現在の注文前・約定確認待ち・建玉中の建玉はありません。過去の結果は「履歴を表示」から確認できます。
         </div>
       ) : null}
-      {showHistory ? <ClosedLegHistoryList items={closedLegHistoryItems} onOpen={onHistoryLegAction} /> : null}
       {visibleSimulations.length > 0 ? <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[980px] text-sm">
           <thead>
@@ -293,11 +296,10 @@ export function Dashboard({
               return (
                 <Fragment key={simulation.id}>
                 {isFirstHistory ? (
-                  <tr className="bg-slate-100">
-                    <td colSpan={12} className="py-2 pr-3 text-xs font-bold text-slate-600">
-                      履歴: 決済済み・権利行使済み・満期終了
-                    </td>
-                  </tr>
+                  <>
+                    <tr className="bg-slate-100"><td colSpan={12} className="py-2 pr-3 text-xs font-bold text-slate-600">履歴: 決済済み・権利行使済み・満期終了</td></tr>
+                    <ClosedLegHistoryRows items={closedLegHistoryItems} onOpen={onHistoryLegAction} />
+                  </>
                 ) : null}
                 <tr
                   key={simulation.id}
@@ -531,23 +533,13 @@ export function Dashboard({
                 </Fragment>
               );
             })}
+            {showHistory && historySimulations.length === 0 && closedLegHistoryItems.length > 0 ? <>
+              <tr className="bg-slate-100"><td colSpan={12} className="py-2 pr-3 text-xs font-bold text-slate-600">履歴: 決済済み・権利行使済み・満期終了</td></tr>
+              <ClosedLegHistoryRows items={closedLegHistoryItems} onOpen={onHistoryLegAction} />
+            </> : null}
           </tbody>
         </table>
       </div> : null}
-      {false && showHistory && closedLegHistoryItems.length > 0 ? <section className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3" aria-label="継続中戦略の決済済み脚">
-        <h3 className="text-sm font-bold text-slate-900">継続中戦略の決済済み脚 {closedLegHistoryItems.length}件</h3>
-        <div className="mt-2 space-y-2">{closedLegHistoryItems.map((item) => {
-          const parentRemainingContracts = getOptionLegCloseProgress(item.simulation).legs.filter((leg) => leg.legId !== item.legId).reduce((sum, leg) => sum + (leg.remainingContracts ?? 0), 0);
-          const label = item.leg.type === "call" ? "C買い" : "P売り";
-          return <button key={item.id} type="button" className="w-full rounded border border-slate-200 bg-white p-3 text-left hover:border-teal-300 hover:bg-teal-50" onClick={() => onHistoryLegAction?.(item.simulationId, item.executionIds[0])}>
-            <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-bold text-slate-900">{getSimulationTickerDisplayLabel(item.simulation)} / Synthetic Forward内 {label}</span><span className="text-xs text-slate-600">{item.closedContracts}枚決済済み / {item.remainingContracts}枚残存</span></div>
-            <p className="mt-1 text-xs text-slate-600">親戦略は継続中（{item.leg.type === "call" ? "P売り" : "C買い"}{parentRemainingContracts}枚残存） / 決済日 {item.closeDate}</p>
-            {item.closeResults.map((result) => <div key={result.execution.id} className="mt-1 grid gap-1 text-xs text-slate-700 sm:grid-cols-2 lg:grid-cols-4"><span>建値 {formatUSD(result.entryPremiumUSD / (100 * Math.max(1, result.execution.contracts)))}</span><span>決済 {result.execution.closeKind === "expired" ? "満期" : formatUSD(result.execution.closePriceUSD ?? 0)}</span><span>開始/決済手数料 {formatUSD(result.openCommissionUSD)} / {formatUSD(result.closeCommissionUSD)}</span><span className="font-semibold text-emerald-700">USD実現損益 {formatSignedUSD(result.realizedPnlUSD)} / 年率 {formatPct(result.annualReturnPct)}</span></div>)}
-            {item.simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" ? <p className="mt-1 text-xs text-slate-600">実現損益 {formatJPY(item.closeResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0))}</p> : null}
-            <p className="mt-2 text-xs font-semibold text-teal-700">クリックして親建玉の「7. 決済実績」を確認</p>
-          </button>;
-        })}</div>
-      </section> : null}
     </section>
   );
 }

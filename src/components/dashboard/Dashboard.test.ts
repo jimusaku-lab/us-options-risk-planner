@@ -75,8 +75,13 @@ describe("synthetic leg history", () => {
   it("shows one confirmed closed leg in history and opens its exact execution", () => {
     const action = vi.fn();
     const simulation = createSimulation({ ticker: "ABC", strategyType: "synthetic_forward", optionLegs: [{ ...createSimulation().optionLegs[0], id: "call", type: "call", side: "buy", premiumUSD: 5 }, { ...createSimulation().optionLegs[0], id: "put", type: "put", side: "sell", premiumUSD: 4 }], optionEntryExecutions: [{ id: "entry-call", legId: "call", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 5, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }, { id: "entry-put", legId: "put", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 4, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }], optionCloseExecutions: [{ id: "close-call", legId: "call", closeKind: "buyback", closePriceUSD: 6, closeDate: "2026-06-10", contracts: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }] });
-    render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn(), onHistoryLegAction: action }));
-    fireEvent.click(screen.getByRole("button", { name: /ABC \/ Synthetic Forward内 C買い/ }));
+    const { container } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn(), onHistoryLegAction: action }));
+    const row = container.querySelector('tr[data-history-kind="closed_leg"]');
+    expect(row?.textContent).toContain("ABC");
+    expect(row?.textContent).toContain("Synthetic Forward内 C買い");
+    expect(row?.querySelectorAll("td")).toHaveLength(12);
+    expect(container.querySelector('section[aria-label="継続中戦略の決済済み脚"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "決済実績を確認" }));
     expect(action).toHaveBeenCalledWith(simulation.id, "close-call");
   });
 });
