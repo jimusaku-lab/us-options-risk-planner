@@ -8,6 +8,10 @@ decision action.
 
 - A row is emitted only for a valid, confirmed, non-over-close execution on an
   active synthetic parent with a partial formal close completion.
+- Row existence is independent from realised-P/L and reference-currency
+  completeness: USD is primary for N accounts and JPY is primary for P
+  accounts. Missing reference values render as unconfirmed; they never remove
+  the confirmed close fact.
 - The stable display identity is parent simulation, leg, and confirmed
   execution identities. Multiple fills are one leg summary with execution
   detail; unknown legs, drafts, duplicates, and invalid quantities are not
@@ -19,3 +23,5 @@ decision action.
   parent becomes terminal.
 - Selecting a derived row opens the exact existing close execution in the
   parent record. It performs no broker write and changes no stored execution.
+- The derived count is calculated while history is collapsed, and the leg row
+  is rendered directly below the history control before ended parent rows.

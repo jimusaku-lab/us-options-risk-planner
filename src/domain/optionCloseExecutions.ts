@@ -91,6 +91,7 @@ export type ClosedSyntheticLegHistoryItem = {
   legId: string;
   leg: OptionLeg;
   executionIds: string[];
+  executions: OptionCloseExecution[];
   closeResults: OptionCloseExecutionResult[];
   closedContracts: number;
   remainingContracts: number;
@@ -541,11 +542,10 @@ export function getClosedSyntheticLegHistoryItems(simulations: TradeSimulation[]
       const executionIds = executions.map((execution) => execution.id);
       if (!executions.length || new Set(executionIds).size !== executionIds.length) return [];
       const closeResults = executions.map((execution) => calculateOptionCloseExecutionResult(simulation, execution)).filter((result): result is OptionCloseExecutionResult => Boolean(result));
-      if (closeResults.length !== executions.length || closeResults.some((result) => !result.execution.closeDate || !Number.isFinite(result.realizedPnlUSD) || !Number.isFinite(result.realizedPnlJPY))) return [];
-      const closeDate = closeResults.map((result) => result.execution.closeDate).sort().at(-1);
+      const closeDate = executions.map((execution) => execution.closeDate).filter(Boolean).sort().at(-1);
       if (!closeDate) return [];
       const stableIds = [...executionIds].sort();
-      return [{ kind: "closed_leg" as const, id: `${simulation.id}:closed-leg:${leg.id}:${stableIds.join(",")}`, simulationId: simulation.id, simulation, legId: leg.id, leg, executionIds: stableIds, closeResults, closedContracts: legProgress.confirmedClosedContracts ?? 0, remainingContracts: legProgress.remainingContracts ?? 0, closeDate }];
+      return [{ kind: "closed_leg" as const, id: `${simulation.id}:closed-leg:${leg.id}:${stableIds.join(",")}`, simulationId: simulation.id, simulation, legId: leg.id, leg, executionIds: stableIds, executions, closeResults, closedContracts: legProgress.confirmedClosedContracts ?? 0, remainingContracts: legProgress.remainingContracts ?? 0, closeDate }];
     });
   });
 }

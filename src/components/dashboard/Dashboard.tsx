@@ -12,7 +12,7 @@ import { calculateHistoryPerformance } from "@/domain/historyPerformance";
 import { generateRiskWarnings } from "@/domain/riskRules";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
 import { getPrimaryWorkflowTask, getWorkflowTasks } from "@/domain/workflowTasks";
-import { getClosedSyntheticLegHistoryItems, getOptionCloseCompletion, getOptionLegCloseProgress } from "@/domain/optionCloseExecutions";
+import { getClosedSyntheticLegHistoryItems, getOptionCloseCompletion, getOptionLegCloseProgress, type ClosedSyntheticLegHistoryItem } from "@/domain/optionCloseExecutions";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import type { FxQuote } from "@/lib/marketData";
 import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
@@ -31,6 +31,20 @@ const endedStatuses = new Set(["closed", "assigned", "expired"]);
 
 function formatSignedUSD(value: number): string {
   return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
+}
+
+function ClosedLegHistoryList({ items, onOpen }: { items: ClosedSyntheticLegHistoryItem[]; onOpen?: (simulationId: string, executionId: string) => void }) {
+  if (!items.length) return null;
+  return <section className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3" aria-label="継続中戦略の決済済み脚"><h3 className="text-sm font-bold text-slate-900">継続中戦略の決済済み脚 {items.length}件</h3><div className="mt-2 space-y-2">{items.map((item) => {
+    const isN = item.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+    const parentRemaining = getOptionLegCloseProgress(item.simulation).legs.filter((leg) => leg.legId !== item.legId).reduce((sum, leg) => sum + (leg.remainingContracts ?? 0), 0);
+    const primaryResults = item.closeResults.filter((result) => isN ? Number.isFinite(result.execution.realizedPnlUSD) : Number.isFinite(result.execution.brokerRealizedPnlJPY));
+    const primaryComplete = primaryResults.length === item.executions.length;
+    const totalPrimary = primaryResults.reduce((sum, result) => sum + (isN ? result.realizedPnlUSD : result.realizedPnlJPY), 0);
+    const referenceComplete = isN && item.closeResults.length === item.executions.length && item.executions.every((execution) => Number.isFinite(execution.brokerExchangeRateJPY ?? execution.fxRateJPY) && (execution.brokerExchangeRateJPY ?? execution.fxRateJPY)! > 0);
+    const label = item.leg.type === "call" ? "C買い" : "P売り";
+    return <button key={item.id} type="button" className="w-full rounded border border-slate-200 bg-white p-3 text-left hover:border-teal-300 hover:bg-teal-50" onClick={() => onOpen?.(item.simulationId, item.executionIds[0])}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-bold text-slate-900">{getSimulationTickerDisplayLabel(item.simulation)} / Synthetic Forward内 {label}</span><span className="text-xs text-slate-600">{label}{item.closedContracts}枚 決済済み</span></div><p className="mt-1 text-xs text-slate-600">親戦略は継続中（{item.leg.type === "call" ? "P売り" : "C買い"}{parentRemaining}枚残存） / 決済日 {item.closeDate}</p>{item.executions.map((execution) => { const result = item.closeResults.find((entry) => entry.execution.id === execution.id); return <div key={execution.id} className="mt-1 grid gap-1 text-xs text-slate-700 sm:grid-cols-2 lg:grid-cols-4"><span>建値 {result ? formatUSD(result.entryPremiumUSD / (100 * Math.max(1, execution.contracts))) : "未確認"}</span><span>決済 {execution.closeKind === "expired" ? "満期" : execution.closePriceUSD !== undefined ? formatUSD(execution.closePriceUSD) : "未確認"}</span><span>開始/決済手数料 {result ? `${formatUSD(result.openCommissionUSD)} / ${formatUSD(result.closeCommissionUSD)}` : "未確認"}</span><span className="font-semibold text-emerald-700">{primaryComplete ? `${isN ? "USD" : "JPY"}実現損益 ${isN ? formatSignedUSD(totalPrimary) : formatJPY(totalPrimary)} / 年率 ${result ? formatPct(result.annualReturnPct) : "未確認"}` : `${isN ? "USD" : "JPY"}実現損益 未確認 / 年率 未確認`}</span></div>; })}{isN ? <p className="mt-1 text-xs text-slate-600">{referenceComplete ? `参考JPY ${formatJPY(item.closeResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0))}` : "参考JPY未確認"}</p> : null}<p className="mt-2 text-xs font-semibold text-teal-700">クリックして親建玉の「7. 決済実績」を確認</p></button>;
+  })}</div></section>;
 }
 
 export function getSimulationTickerDisplayLabel(simulation: TradeSimulation): string {
@@ -97,7 +111,7 @@ export function Dashboard({
   const showHistory = historyOpen;
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "entry_confirmation" || simulation.status === "open");
   const historySimulations = simulations.filter((simulation) => endedStatuses.has(simulation.status));
-  const closedLegHistoryItems = showHistory && !journalFocusSimulationId ? getClosedSyntheticLegHistoryItems(simulations) : [];
+  const closedLegHistoryItems = !journalFocusSimulationId ? getClosedSyntheticLegHistoryItems(simulations) : [];
   const focusedSimulation = journalFocusSimulationId
     ? simulations.find((simulation) => simulation.id === journalFocusSimulationId)
     : undefined;
@@ -163,6 +177,7 @@ export function Dashboard({
           現在の注文前・約定確認待ち・建玉中の建玉はありません。過去の結果は「履歴を表示」から確認できます。
         </div>
       ) : null}
+      {showHistory ? <ClosedLegHistoryList items={closedLegHistoryItems} onOpen={onHistoryLegAction} /> : null}
       {visibleSimulations.length > 0 ? <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[980px] text-sm">
           <thead>
@@ -519,7 +534,7 @@ export function Dashboard({
           </tbody>
         </table>
       </div> : null}
-      {showHistory && closedLegHistoryItems.length > 0 ? <section className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3" aria-label="継続中戦略の決済済み脚">
+      {false && showHistory && closedLegHistoryItems.length > 0 ? <section className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3" aria-label="継続中戦略の決済済み脚">
         <h3 className="text-sm font-bold text-slate-900">継続中戦略の決済済み脚 {closedLegHistoryItems.length}件</h3>
         <div className="mt-2 space-y-2">{closedLegHistoryItems.map((item) => {
           const parentRemainingContracts = getOptionLegCloseProgress(item.simulation).legs.filter((leg) => leg.legId !== item.legId).reduce((sum, leg) => sum + (leg.remainingContracts ?? 0), 0);
