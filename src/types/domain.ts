@@ -178,11 +178,13 @@ export type ClosePlan = {
   commissionSource?: "user_confirmed_standard" | "manual" | "saxo_readonly_candidate";
   /** ISO timestamp recorded only when the user confirms a candidate or manual value. */
   commissionConfirmedAt?: string;
+  /** Read-only quote evidence for a current close candidate; never a close execution. */
   priceSource?: "saxo" | "manual" | "moomoo";
   priceSelectedField?: "bid" | "ask" | "manual";
   priceFetchedAt?: string;
   priceQuoteStatus?: string;
   priceType?: string;
+  /** True only when the user explicitly approves an OldIndicative quote in the current bulk dialog. */
   priceReferenceConfirmed?: boolean;
   priceReferenceConfirmedAt?: string;
 };
@@ -259,6 +261,16 @@ export type ExitBrokerOrderType =
 
 export type ExitStopLossType = "buyback_price" | "stock_price_line" | "loss_amount";
 
+export type ExitBrokerOrderLink = {
+  source: "saxo_orders";
+  status: "unlinked" | "suggested" | "confirmed";
+  takeProfitOrderKey?: string;
+  upperExitOrderKey?: string;
+  takeProfitPriceUSD?: number;
+  upperExitPriceUSD?: number;
+  confirmedAt?: string;
+};
+
 export type ExitOrderPlan = {
   scope: "position" | "leg";
   legId?: string;
@@ -276,6 +288,7 @@ export type ExitOrderPlan = {
   stopLossAmountCurrency?: Currency;
   latestCloseDaysBeforeExpiry?: number;
   latestCloseDaysBeforeExpiryUserSet?: boolean;
+  brokerOrderLink?: ExitBrokerOrderLink;
   memo?: string;
 };
 
@@ -320,7 +333,7 @@ export type StockAcquisition = {
   accountEnvironment: AccountEnvironment;
   commissionUSD?: number;
   commissionJPY?: number;
-  source: "manual" | "broker_statement" | "saxo_api_estimate" | "saxo_history";
+  source: "manual" | "broker_statement" | "saxo_api_estimate" | "saxo_history" | "saxo_order_activity";
   sourceCandidateId?: string;
   sourceTradeId?: string;
   sourceStockCandidateId?: string;
@@ -410,7 +423,10 @@ export type OptionCloseExecution = {
   sourceTradeId?: string;
   targetPositionId?: string;
   confirmationStatus?: "pending" | "confirmed" | "ignored" | "invalid";
-  /** Read-only activity evidence is not an accounting-confirmed close. */
+  /**
+   * Read-only Order Activities evidence is intentionally distinct from the
+   * accounting-confirmed close represented by `confirmed`.
+   */
   executionEvidenceStatus?: "detected" | "user_confirmed_pending_accounting" | "accounting_arrived";
   accountingStatus?: "pending" | "arrived" | "conflict";
   activityIdentity?: string;
@@ -470,6 +486,17 @@ export type OptionEntryExecution = {
   openingFieldSources?: Partial<Record<OptionEntryOpeningFieldKey, OptionEntryOpeningFieldSource>>;
   openingFieldEvidence?: Partial<Record<OptionEntryOpeningFieldKey, OptionEntryOpeningFieldEvidence>>;
   historyCandidateIds?: string[];
+  /** The source report's business date; it is not necessarily the Tokyo date of ExecutionTimeOpen. */
+  sourceTradeDate?: string;
+  /** Direct Saxo opening timestamp, retained separately from calendar dates. */
+  executionTimeUtc?: string;
+  /** Asia/Tokyo date derived only from executionTimeUtc. */
+  canonicalTradeDate?: string;
+  /** Stable identifiers used only to reconcile the same Saxo opening event. */
+  saxoPositionId?: string;
+  saxoOrderId?: string;
+  saxoTicketId?: string;
+  saxoUic?: number;
   confirmed: boolean;
   memo?: string;
 };

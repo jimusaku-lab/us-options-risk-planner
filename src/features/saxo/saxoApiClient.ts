@@ -9,9 +9,7 @@ import type {
   SaxoOptionPremiumCandidate,
 } from "@/features/saxo/saxoAccountSync";
 
-export const isSaxoLocalApiAvailable = true;
-
-const SAXO_LOCAL_API_BASE = import.meta.env.VITE_SAXO_LOCAL_API_BASE ?? "http://localhost:18787";
+const SAXO_LOCAL_API_BASE = import.meta.env.VITE_SAXO_LOCAL_API_BASE ?? "http://127.0.0.1:18787";
 const DEFAULT_FETCH_TIMEOUT_MS = 5_000;
 const PREMIUM_CANDIDATE_FETCH_TIMEOUT_MS = 20_000;
 
@@ -125,6 +123,27 @@ export async function fetchSaxoOptionPremiumCandidate(input: {
     timeoutMessage:
       "Saxo価格取得がタイムアウトしました。Saxo側の応答待ちまたはレート制限の可能性があります。少し時間を置いて再試行してください。",
   });
+}
+
+export type SaxoOptionPremiumPreviewTarget = {
+  targetId: string;
+  symbol: string;
+  expiry: string;
+  strike: number;
+  optionType: "call" | "put";
+  accountKey?: string;
+  uic?: number;
+  assetType?: string;
+  positionId?: string;
+  instrumentCode?: string;
+};
+
+export async function fetchSaxoOptionPremiumCandidatesPreview(targets: SaxoOptionPremiumPreviewTarget[]): Promise<{ fetchedAt: string; readOnly: true; results: { targetId: string; candidate?: SaxoOptionPremiumCandidate; error?: string }[] }> {
+  return fetchJson("/api/saxo/options/premium-candidates/preview", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targets }),
+  }, { timeoutMs: PREMIUM_CANDIDATE_FETCH_TIMEOUT_MS, timeoutMessage: "Saxo一括価格取得がタイムアウトしました。既存の価格は変更していません。" });
 }
 
 export function startSaxoAuth(): void {

@@ -23,6 +23,7 @@ const EXPECTED_REDIRECT_URI = `http://localhost:${PORT}/api/saxo/auth/callback`;
 const KEYCHAIN_SERVICE = "us-options-risk-planner-saxo-readonly";
 const KEYCHAIN_STORAGE_LABEL = "macOS Keychain";
 const IS_TEST_PROCESS = process.env.SAXO_READONLY_SERVER_TEST === "1";
+const API_CONTRACT_VERSION = "2026-08-22.order-activities-close-lifecycle.v1";
 
 const pendingPkceByState = new Map();
 let tokenState = null;
@@ -257,6 +258,14 @@ async function handleRequest(request, response) {
     return;
   }
 
+  if (request.method === "GET" && path === "/api/saxo/order-activities") {
+    const fromDate = requestUrl.searchParams.get("from") ?? defaultHistoryFromDate();
+    const toDate = requestUrl.searchParams.get("to") ?? formatDateOnly(new Date());
+    const activities = await getOrderActivities({ fromDate, toDate });
+    sendJson(response, 200, activities);
+    return;
+  }
+
   if (request.method === "GET" && path === "/api/saxo/closed-positions") {
     const fromDate = requestUrl.searchParams.get("from") ?? defaultHistoryFromDate();
     const toDate = requestUrl.searchParams.get("to") ?? formatDateOnly(new Date());
@@ -286,6 +295,28 @@ async function handleRequest(request, response) {
       instrumentCode: requestUrl.searchParams.get("instrumentCode") ?? "",
     });
     sendJson(response, 200, candidate);
+    return;
+  }
+
+  if (request.method === "POST" && path === "/api/saxo/options/premium-candidates/preview") {
+    const body = await readJsonBody(request);
+    const targets = Array.isArray(body?.targets) ? body.targets.slice(0, 40) : [];
+    const results = [];
+    // The local endpoint itself is a preview only. Each Saxo request remains the
+    // existing read-only GET-based discovery / InfoPrice path in this helper.
+    for (const target of targets) {
+      try {
+        const candidate = await getOptionPremiumCandidate({
+          symbol: String(target?.symbol ?? ""), expiry: String(target?.expiry ?? ""), strike: String(target?.strike ?? ""),
+          optionType: String(target?.optionType ?? ""), accountKey: String(target?.accountKey ?? ""), uic: String(target?.uic ?? ""),
+          assetType: String(target?.assetType ?? "StockOption"), positionId: String(target?.positionId ?? ""), instrumentCode: String(target?.instrumentCode ?? ""),
+        });
+        results.push({ targetId: String(target?.targetId ?? ""), candidate });
+      } catch (error) {
+        results.push({ targetId: String(target?.targetId ?? ""), error: error instanceof Error ? error.message : "価格取得失敗" });
+      }
+    }
+    sendJson(response, 200, { fetchedAt: new Date().toISOString(), results, readOnly: true });
     return;
   }
 
@@ -415,7 +446,11 @@ async function ensureAccessToken() {
 
 async function saxoGet(path, query) {
   const accessToken = await ensureAccessToken();
-  const url = new URL(path.replace(/^\//, ""), getOpenApiBaseUrl());
+  const baseUrl = new URL(getOpenApiBaseUrl());
+  const url = /^https?:\/\//i.test(path)
+    ? new URL(path)
+    : new URL(path.startsWith(baseUrl.pathname) ? path.slice(baseUrl.pathname.length) : path.replace(/^\//, ""), baseUrl);
+  if (url.origin !== baseUrl.origin) throw new HttpError(502, "saxo_origin_mismatch", "Saxo APIの同一originではない次ページURLを拒否しました。");
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
   }
@@ -439,6 +474,32 @@ async function saxoGet(path, query) {
   }
   lastSyncedAt = new Date().toISOString();
   return apiResponse.json();
+}
+
+async function getOrderActivitiesPages(query) {
+  const items = [];
+  const seenNext = new Set();
+  let nextPath = "cs/v1/audit/orderactivities";
+  let nextQuery = query;
+  for (let page = 0; page < 100; page += 1) {
+    const payload = await saxoGet(nextPath, nextQuery);
+    items.push(...(Array.isArray(payload.Data) ? payload.Data : Array.isArray(payload.OrderActivities) ? payload.OrderActivities : []));
+    const next = typeof payload.__next === "string" ? payload.__next : "";
+    if (!next) return items;
+    if (seenNext.has(next)) throw new HttpError(502, "saxo_pagination_loop", "Order Activitiesのページングが同じ次ページを返したため停止しました。");
+    seenNext.add(next);
+    // Saxo's cursor is already an API-relative URL.  Preserve only its path
+    // and query rather than trusting an arbitrary host in a server response.
+    const parsed = new URL(next, getOpenApiBaseUrl());
+    if (parsed.origin !== new URL(getOpenApiBaseUrl()).origin) {
+      throw new HttpError(502, "saxo_pagination_origin", "Order Activitiesの次ページURLがSaxo APIの同一originではありません。");
+    }
+    nextPath = `${parsed.pathname.startsWith(new URL(getOpenApiBaseUrl()).pathname)
+      ? parsed.pathname.slice(new URL(getOpenApiBaseUrl()).pathname.length)
+      : parsed.pathname}${parsed.search}`;
+    nextQuery = undefined;
+  }
+  throw new HttpError(502, "saxo_pagination_limit", "Order Activitiesのページ数上限に達したため停止しました。");
 }
 
 async function getClient() {
@@ -513,13 +574,11 @@ async function getPositions(accountKey) {
   const accountsResponse = await getAccounts();
   const accountsByKey = new Map(accountsResponse.accounts.map((account) => [account.accountKey, account]));
   const fetchedAt = new Date().toISOString();
+  const normalizedPositions = rawPositions.map((raw, index) => normalizePosition(raw, accountsByKey, fetchedAt, index));
   return {
     environment: getEnvironment(),
     fetchedAt,
-    positions: await enrichPositionUnderlyingIdentities(
-      rawPositions.map((raw, index) => normalizePosition(raw, accountsByKey, fetchedAt, index)),
-      clientKey,
-    ),
+    positions: await enrichPositionUnderlyingIdentities(normalizedPositions, clientKey),
     raw: payload,
   };
 }
@@ -607,14 +666,42 @@ async function getTrades({ fromDate, toDate }) {
   };
 }
 
+async function getOrderActivities({ fromDate, toDate }) {
+  const client = await getClient();
+  const clientKey = getClientKey(client);
+  if (!clientKey) {
+    throw new HttpError(422, "client_key_unavailable", "ClientKeyが未取得のため、Order Activitiesを取得できません。");
+  }
+  // Audit is evidence of an execution only.  It is intentionally never used
+  // as a substitute for the accounting values in the reports endpoints.
+  const rawItems = await getOrderActivitiesPages({
+    ClientKey: clientKey,
+    EntryType: "Last",
+    FromDateTime: `${fromDate}T00:00:00Z`,
+    FieldGroups: "DisplayAndFormat",
+    $top: 200,
+  });
+  return {
+    endpoint: "cs/v1/audit/orderactivities",
+    status: "available",
+    fromDate,
+    toDate,
+    fetchedAt: new Date().toISOString(),
+    items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "order_activity", index)),
+    // Raw payloads intentionally do not cross the helper boundary.
+  };
+}
+
 async function getHistoryDiscovery({ fromDate, toDate }) {
   const results = await Promise.allSettled([
+    getOrderActivities({ fromDate, toDate }),
     getClosedPositions({ fromDate, toDate }),
     getTrades({ fromDate, toDate }),
   ]);
   const endpoints = [
-    normalizeDiscoveryResult("cs/v1/reports/closedPositions/{ClientKey}/{FromDate}/{ToDate}", "決済済み建玉候補", results[0]),
-    normalizeDiscoveryResult("cs/v1/reports/trades/{ClientKey}", "約定・取引履歴候補", results[1]),
+    normalizeDiscoveryResult("cs/v1/audit/orderactivities", "決済約定候補", results[0]),
+    normalizeDiscoveryResult("cs/v1/reports/closedPositions/{ClientKey}/{FromDate}/{ToDate}", "決済済み建玉候補", results[1]),
+    normalizeDiscoveryResult("cs/v1/reports/trades/{ClientKey}", "約定・取引履歴候補", results[2]),
   ];
   return {
     environment: getEnvironment(),
@@ -1374,9 +1461,28 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
   const marketValueOpenInBaseCurrency = firstNumberMatch(raw, ["MarketValueOpenInBaseCurrency"]);
   const tradeCostsTotalInBaseCurrency = firstNumberMatch(raw, ["TradeCostsTotalInBaseCurrency"]);
   const openCostComponents = ["AdditionalTransactionCosts", "Commission", "ExchangeFee", "ExternalCharges", "PerformanceFee", "StampDuty"];
-  const openCostValues = Object.fromEntries(openCostComponents.map((name) => [name, firstNumberMatch(raw?.Costs?.OpenCostInBaseCurrency, [name])]));
-  const openingCostComplete = Object.values(openCostValues).every((match) => match !== undefined);
-  const openingTransactionCost = openingCostComplete ? Object.values(openCostValues).reduce((sum, match) => sum + match.value, 0) : undefined;
+  const rawOpenCostInBaseCurrency = raw?.Costs?.OpenCostInBaseCurrency;
+  const openCostValues = Object.fromEntries(openCostComponents.map((name) => {
+    const directValue = rawOpenCostInBaseCurrency?.[name];
+    if (typeof directValue === "number" && Number.isFinite(directValue)) {
+      return [name, { value: directValue, matchedName: `Costs.OpenCostInBaseCurrency.${name}` }];
+    }
+    if (typeof directValue === "string" && directValue.trim() !== "") {
+      const parsedValue = Number(directValue.replace(/,/g, ""));
+      if (Number.isFinite(parsedValue)) {
+        return [name, { value: parsedValue, matchedName: `Costs.OpenCostInBaseCurrency.${name}` }];
+      }
+    }
+    return [name, firstNumberMatch(rawOpenCostInBaseCurrency, [name])];
+  }));
+  // Saxo omits components that do not apply.  Preserve only the explicit
+  // components; the client validates their aggregate against the two direct
+  // opening values before it is eligible for a 3-A execution draft.
+  const openingTransactionCostComponents = Object.fromEntries(
+    Object.entries(openCostValues)
+      .filter(([, match]) => match !== undefined)
+      .map(([name, match]) => [name, match.value]),
+  );
   const missingFields = [];
   for (const [field, value] of Object.entries({
     accountKey,
@@ -1432,7 +1538,20 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     shareQuantity: kind === "stock" ? quantity : undefined,
     averageOpenPrice,
     currentStockPrice,
-    openingExecution: { executionTimeUtc: executionTimeOpen?.value, executionTimeSourceField: executionTimeOpen?.matchedName, openingFxRate: conversionRateOpen?.value, openingFxRateSourceField: conversionRateOpen?.matchedName, marketValueOpenInBaseCurrency: marketValueOpenInBaseCurrency?.value, marketValueOpenSourceField: marketValueOpenInBaseCurrency?.matchedName, tradeCostsTotalInBaseCurrency: tradeCostsTotalInBaseCurrency?.value, tradeCostsTotalSourceField: tradeCostsTotalInBaseCurrency?.matchedName, openingTransactionCostJpy: openingTransactionCost, openingTransactionCostCompleteness: openingCostComplete ? "component_aggregate" : "partial", openingTransactionCostSourceField: openingCostComplete ? "Costs.OpenCostInBaseCurrency" : undefined, capturedAt: fetchedAt },
+    openingExecution: {
+      executionTimeUtc: executionTimeOpen?.value,
+      executionTimeSourceField: executionTimeOpen?.matchedName,
+      openingFxRate: conversionRateOpen?.value,
+      openingFxRateSourceField: conversionRateOpen?.matchedName,
+      marketValueOpenInBaseCurrency: marketValueOpenInBaseCurrency?.value,
+      marketValueOpenSourceField: marketValueOpenInBaseCurrency?.matchedName,
+      tradeCostsTotalInBaseCurrency: tradeCostsTotalInBaseCurrency?.value,
+      tradeCostsTotalSourceField: tradeCostsTotalInBaseCurrency?.matchedName,
+      openingTransactionCostComponents,
+      openingTransactionCostCompleteness: Object.keys(openingTransactionCostComponents).length > 0 ? "component_aggregate" : "partial",
+      openingTransactionCostSourceField: Object.keys(openingTransactionCostComponents).length > 0 ? "Costs.OpenCostInBaseCurrency" : undefined,
+      capturedAt: fetchedAt,
+    },
     missingFields,
     fetchedAt,
     raw,
@@ -1507,7 +1626,10 @@ function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
   const quantity = firstNumber(raw, ["Amount", "Quantity", "OrderAmount"]);
   const price = firstNumber(raw, ["OrderPrice", "Price", "StopLimitPrice", "LimitPrice"]);
   const stopPrice = firstNumber(raw, ["StopPrice", "TriggerPrice"]);
-  const orderType = firstString(raw, ["OrderType", "OrderTypeName", "Type"]);
+  // Portfolio order snapshots name the actionable type OpenOrderType.  Keep it
+  // alongside older aliases so an OCO limit/stop pair is not rendered as two
+  // role-unknown orders merely because the response uses the newer field.
+  const orderType = firstString(raw, ["OpenOrderType", "OrderType", "OrderTypeName", "Type"]);
   const duration = firstString(raw, ["DurationType", "Duration", "TimeInForce"]);
   const status = firstString(raw, ["Status", "OrderStatus"]);
   const symbol = inferSymbol(raw);
@@ -1549,7 +1671,7 @@ function normalizeHistoryItem(raw, kind, index) {
   const accountKey = firstString(raw, ["AccountKey"]);
   const accountId = firstString(raw, ["AccountId"]);
   const accountNumber = firstString(raw, ["AccountNumber"]);
-  const sourceId = firstString(raw, ["ClosedPositionId", "TradeId", "PositionId", "OrderId", "Id"]);
+  const sourceId = firstString(raw, kind === "order_activity" ? ["LogId"] : ["ClosedPositionId", "TradeId", "PositionId", "OrderId", "Id"]);
   const orderId = firstString(raw, ["OrderId", "OrderID", "RelatedOrderId", "MultiLegOrderId"]);
   const profitLoss = firstNumber(raw, ["ClosedProfitLoss", "ProfitLossOnTrade", "RealizedPnl", "ProfitLoss"]);
   const profitLossAccountCurrency = firstNumber(raw, ["PnLAccountCurrency"]);
@@ -1581,6 +1703,7 @@ function normalizeHistoryItem(raw, kind, index) {
   return {
     id: `${kind}-${index}`,
     orderId,
+    positionId: firstString(raw, ["PositionId", "PositionID"]),
     kind,
     sourceIdMasked: sourceId ? maskSecret(sourceId) : undefined,
     accountKey: accountKey ? maskSecret(accountKey) : undefined,
@@ -1593,10 +1716,12 @@ function normalizeHistoryItem(raw, kind, index) {
     expiry: normalizeSaxoDate(firstString(raw, ["ExpiryDate", "Expiry", "ExpirationDate", "MaturityDate"])) ?? inferredContract?.expiry,
     instrumentCode: firstString(raw, ["InstrumentCode", "Symbol", "DisplayAndFormat.Symbol", "InstrumentSymbol"]),
     uic: firstNumber(raw, ["Uic", "UIC"]),
-    quantity: firstNumber(raw, ["AmountClose", "Amount", "Quantity"]),
+    quantity: firstNumber(raw, kind === "order_activity" ? ["FilledAmount", "FillAmount", "Amount", "Quantity"] : ["AmountClose", "Amount", "Quantity"]),
     buySell: inferBuySell(raw, kind),
     openClose: inferOpenClose(raw),
-    price: firstNumber(raw, ["ClosePrice", "Price", "OpenPrice", "TradePrice"]),
+    // Order activities contain both order limit prices and execution prices.
+    // Only the latter is admissible for a close candidate.
+    price: firstNumber(raw, kind === "order_activity" ? ["ExecutionPrice", "AveragePrice", "AverageExecutionPrice"] : ["ClosePrice", "Price", "OpenPrice", "TradePrice"]),
     tradeDate: normalizeSaxoDate(firstString(raw, ["TradeDateClose", "TradeDate", "ExecutionTime", "ActivityTime", "ValueDate", "Date"])),
     currency: firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency"]),
     accountCurrency,
@@ -1617,6 +1742,13 @@ function normalizeHistoryItem(raw, kind, index) {
     spreadCostUSD,
     exchangeRate: exchangeRateMatch?.value,
     taxIncludedFee: firstNumber(raw, ["TaxIncludedFee", "CommissionTax", "FeeTax", "ConsumptionTax"]),
+    activityTime: firstString(raw, ["ActivityTime", "ExecutionTime", "Time"]),
+    activityStatus: firstString(raw, ["Status"]),
+    activitySubStatus: firstString(raw, ["SubStatus"]),
+    fillAmount: firstNumber(raw, ["FillAmount"]),
+    cumulativeFilledAmount: firstNumber(raw, ["FilledAmount"]),
+    requestedAmount: firstNumber(raw, ["Amount", "OrderAmount", "Quantity"]),
+    accountingState: kind === "order_activity" ? "pending" : "arrived",
     rawFieldNames: collectRawFieldNames(raw).slice(0, 120),
     fieldDiagnostics: [
       createFieldDiagnostic("記帳額", bookedAmountAliases, bookedAmountMatch),
@@ -1722,11 +1854,14 @@ function normalizeDiscoveryResult(endpoint, label, result) {
 function classifySaxoFailure(error) {
   const message = error instanceof Error ? error.message : "";
   if (/not_connected|未接続/.test(message)) return "未接続";
+  // A transport failure shared by all discovery endpoints is a gateway
+  // condition, not evidence that the Order Activities permission is absent.
+  if (/fetch failed|network|gateway/i.test(message)) return "Saxo Gateway接続失敗";
   if (/429|RateLimitExceeded|rate.?limit|レート制限/i.test(message)) return "Saxo APIレート制限";
   if (error instanceof HttpError) {
     if (error.status === 429 || error.code === "saxo_rate_limit") return "Saxo APIレート制限";
-    if (error.status === 401) return "権限不足または再接続必要";
-    if (error.status === 403) return "権限不足";
+    if (error.status === 401) return "この取得元は再接続または権限確認が必要";
+    if (error.status === 403) return "この取得元の権限不足";
     if (error.status === 404) return "未対応";
     if (error.status === 422) return "未取得項目あり";
   }
@@ -1971,8 +2106,6 @@ function getConfigStatus(message) {
     environmentConfigured: isEnvironmentConfigured(),
     redirectUri: getRedirectUri(),
     expectedRedirectUri: EXPECTED_REDIRECT_URI,
-    localUiAllowedOrigin: LOCAL_UI_ALLOWED_ORIGIN,
-    localUiReturnUrl: LOCAL_UI_RETURN_URL,
     localConfigFile: ".env.local",
     localConfigFileExists: fs.existsSync(getLocalEnvPath()),
     configurationWarnings: getConfigurationWarnings(),
@@ -1984,6 +2117,12 @@ function getStatus(message) {
   const connectionState = getConnectionState();
   return {
     mode: "saxo_readonly",
+    apiContractVersion: API_CONTRACT_VERSION,
+    capabilities: {
+      optionPremiumCandidate: true,
+      bulkOptionPremiumPreview: true,
+      orderActivitiesCloseLifecycle: true,
+    },
     connected: connectionState === "connected",
     connectionState,
     environment: getEnvironment(),

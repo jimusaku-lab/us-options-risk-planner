@@ -27,7 +27,6 @@ import { finalizeSyntheticForwardParent } from "@/domain/compositeOptionPosition
 import {
   isNShortPutWheelSimulation,
   isOpenNShortPutWheelSimulation,
-  normalizeWheelTicker,
   reconcileWheelDerivedState,
 } from "@/domain/wheelReconciliation";
 
@@ -99,6 +98,8 @@ type OptionsStore = {
   updateAccountState: (accountCode: SaxoAccountCode, accountInputs: Partial<AccountState>) => void;
   applyAccountCashAdjustment: (adjustment: AccountCashAdjustment) => void;
   upsertSimulation: (simulation: TradeSimulation) => void;
+  /** One persistence transaction for read-only current-price previews. */
+  applySimulationBatch: (simulations: TradeSimulation[]) => void;
   replaceWorkspaceData: (data: WorkspaceImportData) => void;
   deleteSimulation: (id: string) => void;
   selectSimulation: (id: string) => void;
@@ -303,7 +304,10 @@ function repairWheelCyclePhase(cycle: WheelCycle, simulations: TradeSimulation[]
     .filter((simulation): simulation is TradeSimulation => Boolean(simulation));
   const openNShortPut =
     linkedSimulations.find(
-      (simulation) => isOpenNShortPut(simulation) && normalizeWheelTicker(simulation.ticker) === normalizeWheelTicker(cycle.ticker),
+      (simulation) =>
+        isOpenNShortPut(simulation) &&
+        normalizeWheelTicker(simulation.ticker) !== "" &&
+        normalizeWheelTicker(simulation.ticker) === normalizeWheelTicker(cycle.ticker),
     ) ??
     simulations.find(
       (simulation) =>
@@ -446,6 +450,10 @@ function isOpenNShortPut(simulation: TradeSimulation): boolean {
   return isOpenNShortPutWheelSimulation(simulation);
 }
 
+function normalizeWheelTicker(value: string | undefined): string {
+  return (value ?? "").trim().toUpperCase();
+}
+
 function calculateShortPutPremiumUSD(simulation: TradeSimulation): number {
   return simulation.optionLegs
     .filter((leg) => leg.type === "put" && leg.side === "sell")
@@ -536,13 +544,16 @@ export function syncWheelCycleWithNShortPutSimulation(params: {
   simulations?: TradeSimulation[];
 }): { wheelCycles: WheelCycle[]; wheelEvents: WheelEvent[] } {
   if (!isNShortPutWheelSimulation(params.simulation)) return params;
-  const result = reconcileWheelDerivedState({
+  const simulations = params.simulations?.some((item) => item.id === params.simulation.id)
+    ? params.simulations
+    : [params.simulation, ...(params.simulations ?? [])];
+  const reconciled = reconcileWheelDerivedState({
     cycles: params.wheelCycles,
     events: params.wheelEvents,
-    simulations: params.simulations ?? [params.simulation],
+    simulations,
     workspace: params.workspace,
   });
-  return { wheelCycles: result.cycles, wheelEvents: result.events };
+  return { wheelCycles: reconciled.cycles, wheelEvents: reconciled.events };
 }
 
 export function syncWheelCycleWithCoveredCallSimulation(params: {
@@ -895,7 +906,10 @@ function loadInitialWheelCycles(): Record<WorkspaceMode, WheelCycle[]> {
     demo: [],
     live: [],
   });
-  return { demo: loaded.demo.map(normalizeWheelCycle), live: loaded.live.map(normalizeWheelCycle) };
+  return {
+    demo: loaded.demo.map(normalizeWheelCycle),
+    live: loaded.live.map(normalizeWheelCycle),
+  };
 }
 
 function loadInitialWheelEvents(): Record<WorkspaceMode, WheelEvent[]> {
@@ -936,10 +950,26 @@ const initialWorkspace: WorkspaceMode = loadJson<WorkspaceMode>("us-options-acti
 const initialSimulationsByWorkspace = loadInitialSimulations();
 const loadedWheelCyclesByWorkspace = loadInitialWheelCycles();
 const loadedWheelEventsByWorkspace = loadInitialWheelEvents();
-const initialDemoWheelReconciliation = reconcileWheelDerivedState({ cycles: loadedWheelCyclesByWorkspace.demo, events: loadedWheelEventsByWorkspace.demo, simulations: initialSimulationsByWorkspace.demo, workspace: "demo" });
-const initialLiveWheelReconciliation = reconcileWheelDerivedState({ cycles: loadedWheelCyclesByWorkspace.live, events: loadedWheelEventsByWorkspace.live, simulations: initialSimulationsByWorkspace.live, workspace: "live" });
-const initialWheelCyclesByWorkspace = { demo: initialDemoWheelReconciliation.cycles, live: initialLiveWheelReconciliation.cycles };
-const initialWheelEventsByWorkspace = { demo: initialDemoWheelReconciliation.events, live: initialLiveWheelReconciliation.events };
+const initialDemoWheelReconciliation = reconcileWheelDerivedState({
+  cycles: loadedWheelCyclesByWorkspace.demo,
+  events: loadedWheelEventsByWorkspace.demo,
+  simulations: initialSimulationsByWorkspace.demo,
+  workspace: "demo",
+});
+const initialLiveWheelReconciliation = reconcileWheelDerivedState({
+  cycles: loadedWheelCyclesByWorkspace.live,
+  events: loadedWheelEventsByWorkspace.live,
+  simulations: initialSimulationsByWorkspace.live,
+  workspace: "live",
+});
+const initialWheelCyclesByWorkspace = {
+  demo: initialDemoWheelReconciliation.cycles,
+  live: initialLiveWheelReconciliation.cycles,
+};
+const initialWheelEventsByWorkspace = {
+  demo: initialDemoWheelReconciliation.events,
+  live: initialLiveWheelReconciliation.events,
+};
 if (initialLiveWheelReconciliation.changed) {
   saveJson(WHEEL_KEY, initialWheelCyclesByWorkspace);
   saveJson(WHEEL_EVENTS_KEY, initialWheelEventsByWorkspace);
@@ -1096,7 +1126,12 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       });
       wheelCycles = shortPutSynced.wheelCycles;
       wheelEvents = shortPutSynced.wheelEvents;
-      const reconciled = reconcileWheelDerivedState({ cycles: wheelCycles, events: wheelEvents, simulations, workspace: state.activeWorkspace });
+      const reconciled = reconcileWheelDerivedState({
+        cycles: wheelCycles,
+        events: wheelEvents,
+        simulations,
+        workspace: state.activeWorkspace,
+      });
       wheelCycles = reconciled.cycles;
       wheelEvents = reconciled.events;
       const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: wheelCycles };
@@ -1105,6 +1140,32 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       saveJson(WHEEL_KEY, wheelCyclesByWorkspace);
       saveJson(WHEEL_EVENTS_KEY, wheelEventsByWorkspace);
       return { simulationsByWorkspace, selectedSimulationIds, wheelCyclesByWorkspace, wheelEventsByWorkspace, simulations, wheelCycles, wheelEvents, selectedSimulationId: normalized.id };
+    }),
+  applySimulationBatch: (simulations) =>
+    set((state) => {
+      const normalized = simulations.map((simulation) => normalizeSimulation(simulation, state.activeWorkspace));
+      const simulationsByWorkspace = { ...state.simulationsByWorkspace, [state.activeWorkspace]: normalized };
+      const reconciled = reconcileWheelDerivedState({
+        cycles: state.wheelCyclesByWorkspace[state.activeWorkspace],
+        events: state.wheelEventsByWorkspace[state.activeWorkspace],
+        simulations: normalized,
+        workspace: state.activeWorkspace,
+      });
+      const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: reconciled.cycles };
+      const wheelEventsByWorkspace = { ...state.wheelEventsByWorkspace, [state.activeWorkspace]: reconciled.events };
+      saveJson(SIMULATIONS_KEY, simulationsByWorkspace);
+      if (reconciled.changed) {
+        saveJson(WHEEL_KEY, wheelCyclesByWorkspace);
+        saveJson(WHEEL_EVENTS_KEY, wheelEventsByWorkspace);
+      }
+      return {
+        simulationsByWorkspace,
+        simulations: normalized,
+        wheelCyclesByWorkspace,
+        wheelEventsByWorkspace,
+        wheelCycles: reconciled.cycles,
+        wheelEvents: reconciled.events,
+      };
     }),
   replaceWorkspaceData: (incoming) =>
     set((state) => {

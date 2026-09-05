@@ -46,10 +46,10 @@ import {
   describeBestSaxoHistoryOptionLegMismatch,
   createEffectiveSaxoHistoryCandidates,
   findEntryHistoryMatches,
+  resolveEntryHistoryEvidence,
   mapOpeningExecutionHistoryStatusToEntryCompletionStatus,
   mergeOpeningExecutionIntoEntryExecution,
   resolveOpeningExecution,
-  resolveEntryHistoryEvidence,
   findSaxoSyntheticForwardSimulationForPair,
   findSaxoAssignmentStockAcquisitionItem,
   resolveSaxoSyntheticForwardFillEvidence,
@@ -91,8 +91,11 @@ import { SimulationEditor } from "@/components/wizard/SimulationEditor";
 import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker, type FxQuote } from "@/lib/marketData";
+import { applyCurrentOptionPricePreview, createCurrentOptionPricePreviewRow, getCurrentOptionPriceTargets, type CurrentOptionPricePreviewRow } from "@/domain/bulkOptionPrice";
+import { fetchSaxoOptionPremiumCandidatesPreview, fetchSaxoStatus } from "@/features/saxo/saxoApiClient";
 import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
+import { consumeSaxoOauthReturnMarker, isSaxoOauthReturn, shouldScheduleSaxoOauthReturnFocus, type SaxoOauthReturnFocusState } from "@/lib/saxoOauthReturn";
 import { useCandidatesStore } from "@/store/useCandidatesStore";
 import { DEFAULT_BROKER_COMMISSION_USD, DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, useOptionsStore } from "@/store/useOptionsStore";
 import type { CandidateSymbol } from "@/types/candidates";
@@ -109,6 +112,7 @@ function parseTickerFromSaxoSymbol(value: string | undefined): string {
 
 function formatTokyoDate(utc: string): string {
   const date = new Date(utc);
+  // An invalid broker timestamp is not evidence for today's trade date.
   if (Number.isNaN(date.getTime())) return "";
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
@@ -258,10 +262,12 @@ export default function App() {
   );
   const [quoteStatus, setQuoteStatus] = useState("");
   const [closeDecisionFocusRequest, setCloseDecisionFocusRequest] = useState<{ anchorId: string; requestId: number } | null>(null);
-  const [editorFocusRequest, setEditorFocusRequest] = useState<{ anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string } | null>(null);
+  const [editorFocusRequest, setEditorFocusRequest] = useState<{ anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string; exitOrderReview?: boolean } | null>(null);
   const [performanceYear, setPerformanceYear] = useState(() => Number(formatLocalDate().slice(0, 4)));
   const [activeView, setActiveView] = useState<"positions" | "performance">("positions");
   const [dashboardHistoryOpen, setDashboardHistoryOpen] = useState(false);
+  // This is view-only state: do not persist it to the workspace or exported JSON.
+  const [positionFocusSimulationId, setPositionFocusSimulationId] = useState<string | null>(null);
   const [journalFocusSimulationId, setJournalFocusSimulationId] = useState<string | null>(null);
   const [coveredCallReferenceOpen, setCoveredCallReferenceOpen] = useState(false);
   const [closeDecisionSectionOpen, setCloseDecisionSectionOpen] = useState(false);
@@ -269,14 +275,27 @@ export default function App() {
   const [saxoPositionCandidates, setSaxoPositionCandidates] = useState<SaxoApiPositionSnapshot[]>([]);
   const [saxoHistoryCandidates, setSaxoHistoryCandidates] = useState<SaxoHistoryDiscoveryItem[]>([]);
   const [saxoHasPendingReflection, setSaxoHasPendingReflection] = useState(true);
-  const [isSaxoDetailOpen, setIsSaxoDetailOpen] = useState(() =>
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("saxoConnected") === "1",
+  // OAuth returns to the application with a one-shot UI marker.  The marker is
+  // deliberately only used to restore the read-only panel; it must never cause
+  // an import, candidate adoption, or any persisted state change.
+  const [oauthReturnPending] = useState(() =>
+    typeof window !== "undefined" && isSaxoOauthReturn(window.location.search),
   );
+  const [isSaxoDetailOpen, setIsSaxoDetailOpen] = useState(() => oauthReturnPending);
   const [hasSaxoDetailUserState, setHasSaxoDetailUserState] = useState(false);
   const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
   const [sameDayUsdJpyQuote, setSameDayUsdJpyQuote] = useState<FxQuote | null>(null);
   const [saxoHistoryFetchState, setSaxoHistoryFetchState] = useState<OpeningHistoryFetchState>("not_fetched");
+  const [bulkOptionPricePreview, setBulkOptionPricePreview] = useState<CurrentOptionPricePreviewRow[] | null>(null);
+  const [bulkOptionPriceMessage, setBulkOptionPriceMessage] = useState("");
+  const [bulkOptionPriceLoading, setBulkOptionPriceLoading] = useState(false);
+  const [bulkOptionPriceCapability, setBulkOptionPriceCapability] = useState<"available" | "unavailable" | "checking">("checking");
+  const [bulkOptionPriceProgress, setBulkOptionPriceProgress] = useState({ total: 0, completed: 0 });
+  const [bulkOptionPriceReferenceConfirmed, setBulkOptionPriceReferenceConfirmed] = useState(false);
   const candidatePanelRef = useRef<HTMLDivElement | null>(null);
+  const saxoApiDetailsRef = useRef<HTMLDivElement | null>(null);
+  const saxoBulkFetchButtonRef = useRef<HTMLButtonElement | null>(null);
+  const oauthReturnFocusStateRef = useRef<SaxoOauthReturnFocusState>("idle");
   const {
     activeWorkspace,
     accountInputs,
@@ -292,6 +311,7 @@ export default function App() {
     selectSimulation,
     deleteSimulation,
     upsertSimulation,
+    applySimulationBatch,
     replaceWorkspaceData,
     createWheelCycleFromSimulation,
     createStockTransferFromSimulation,
@@ -311,6 +331,42 @@ export default function App() {
     updateCandidatePositionDraftReview,
   } = useCandidatesStore();
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (!shouldScheduleSaxoOauthReturnFocus(oauthReturnPending, oauthReturnFocusStateRef.current)) return;
+    // These state updates deliberately precede the DOM operation.  An OAuth
+    // return must reveal the positions view and the panel before moving focus.
+    oauthReturnFocusStateRef.current = "scheduled";
+    setActiveView("positions");
+    setIsSaxoDetailOpen(true);
+
+    let frame = 0;
+    let attempts = 0;
+    const focusReturnTarget = () => {
+      const anchor = saxoApiDetailsRef.current;
+      const bulkFetchButton = saxoBulkFetchButtonRef.current;
+      if ((!anchor || !bulkFetchButton) && attempts++ < 8) {
+        frame = window.requestAnimationFrame(focusReturnTarget);
+        return;
+      }
+      if (!anchor || !bulkFetchButton) {
+        // Do not mark it consumed if the operation surface was not rendered.
+        // This avoids a delayed or unsafe auto-navigation after a re-render.
+        oauthReturnFocusStateRef.current = "idle";
+        return;
+      }
+      anchor.scrollIntoView({ block: "start" });
+      bulkFetchButton.focus({ preventScroll: true });
+      oauthReturnFocusStateRef.current = "consumed";
+    window.history.replaceState({}, "", consumeSaxoOauthReturnMarker(window.location));
+    };
+    frame = window.requestAnimationFrame(focusReturnTarget);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      // React StrictMode intentionally mounts effects twice in development.
+      // Only reset a not-yet-run schedule; a completed return remains consumed.
+      if (oauthReturnFocusStateRef.current === "scheduled") oauthReturnFocusStateRef.current = "idle";
+    };
+  }, [oauthReturnPending]);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
   useEffect(() => {
     if (activeWorkspace !== "live") {
@@ -328,6 +384,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, [activeWorkspace]);
+  useEffect(() => {
+    if (import.meta.env.GITHUB_PAGES === "true") { setBulkOptionPriceCapability("unavailable"); return; }
+    let cancelled = false;
+    fetchSaxoStatus().then((status) => {
+      if (!cancelled) setBulkOptionPriceCapability(status.capabilities?.bulkOptionPremiumPreview ? "available" : "unavailable");
+    }).catch(() => { if (!cancelled) setBulkOptionPriceCapability("unavailable"); });
+    return () => { cancelled = true; };
   }, [activeWorkspace]);
   useEffect(() => {
     if (journalFocusSimulationId && !simulations.some((simulation) => simulation.id === journalFocusSimulationId)) {
@@ -383,8 +447,36 @@ export default function App() {
         if (JSON.stringify(nextExecution) !== JSON.stringify(execution)) changed = true;
         return nextExecution;
       });
+      const supersededCandidateIds = new Set<string>();
+      const confirmedCandidateIds = new Map<string, string[]>();
+      for (const execution of nextExecutions) {
+        if (execution.confirmed || execution.source !== "saxo_api_estimate" || execution.historyCompletionStatus === "source_conflict") continue;
+        const hasManualField = Object.values(execution.openingFieldSources ?? {}).some((source) => source === "manual");
+        if (hasManualField) continue;
+        const leg = simulation.optionLegs.find((candidate) => candidate.id === execution.legId);
+        if (!leg) continue;
+        const confirmed = nextExecutions.find((candidate) =>
+          candidate.confirmed && candidate.legId === execution.legId &&
+          !Object.values(candidate.openingFieldSources ?? {}).some((source) => source === "manual") &&
+          saxoHistoryCandidates.some((item) =>
+            isSaxoHistoryMatchingEntryExecution(simulation, leg, candidate, item) &&
+            isSaxoHistoryMatchingEntryExecution(simulation, leg, execution, item),
+          ),
+        );
+        if (!confirmed) continue;
+        const candidateIds = Array.from(new Set([...(confirmed.historyCandidateIds ?? []), ...(execution.historyCandidateIds ?? [])]));
+        confirmedCandidateIds.set(confirmed.id, candidateIds);
+        supersededCandidateIds.add(execution.id);
+        changed = true;
+      }
+      const reconciledExecutions = nextExecutions
+        .filter((execution) => !supersededCandidateIds.has(execution.id))
+        .map((execution) => {
+          const candidateIds = confirmedCandidateIds.get(execution.id);
+          return candidateIds ? { ...execution, historyCandidateIds: candidateIds } : execution;
+        });
       if (changed) {
-        upsertSimulation({ ...simulation, optionEntryExecutions: nextExecutions });
+        upsertSimulation({ ...simulation, optionEntryExecutions: reconciledExecutions });
       }
     });
   }, [saxoHistoryCandidates, saxoHistoryFetchState, saxoPositionCandidates, simulations, upsertSimulation]);
@@ -475,6 +567,55 @@ export default function App() {
           : "為替を取得できませんでした。既存の為替レートは変更していません。",
       );
     }
+  };
+  const bulkOptionPriceAvailable = bulkOptionPriceCapability === "available";
+  const previewBulkOptionPrices = async () => {
+    if (!bulkOptionPriceAvailable) {
+      setBulkOptionPriceMessage("公開版ではSaxo read-only一括取得を利用できません。個別入力で確認してください。");
+      return;
+    }
+    setBulkOptionPriceReferenceConfirmed(false);
+    const targets = getCurrentOptionPriceTargets(simulations);
+    if (targets.length === 0) {
+      setBulkOptionPricePreview([]);
+      setBulkOptionPriceMessage("取得対象の建玉中Stock Option脚はありません。");
+      return;
+    }
+    setBulkOptionPriceProgress({ total: targets.length, completed: 0 });
+    setBulkOptionPriceMessage("候補価格をread-onlyで取得中...");
+    setBulkOptionPriceLoading(true);
+    try {
+      const response = await fetchSaxoOptionPremiumCandidatesPreview(targets.map((target) => ({
+        targetId: target.targetId, symbol: target.ticker, expiry: target.expiry, strike: target.strike, optionType: target.optionType,
+        accountKey: target.accountKey, uic: target.uic, assetType: "StockOption", positionId: target.positionId, instrumentCode: target.instrumentCode,
+      })));
+      const resultByTarget = new Map(response.results.map((result) => [result.targetId, result]));
+      const rows = targets.map((target) => {
+        const result = resultByTarget.get(target.targetId);
+        return result?.candidate ? createCurrentOptionPricePreviewRow(target, result.candidate) : { target, status: "unavailable" as const, reason: result?.error ?? "対象応答がありません" };
+      });
+      setBulkOptionPricePreview(rows);
+      setBulkOptionPriceProgress({ total: targets.length, completed: rows.length });
+      setBulkOptionPriceMessage(`候補を${rows.length}脚取得しました。確認後に成功分だけ一括反映できます。`);
+    } catch (error) {
+      setBulkOptionPricePreview(null);
+      const message = error instanceof Error ? error.message : "Saxo候補価格を取得できませんでした。";
+      setBulkOptionPriceMessage(/not_found|実装していません|404/i.test(message) ? "SaxoローカルAPIが旧版です。ローカルAPIを更新して再起動してください。個別取得は利用できます。" : `${message} 既存価格は変更していません。`);
+    } finally {
+      setBulkOptionPriceLoading(false);
+    }
+  };
+  const applyBulkOptionPrices = () => {
+    if (!bulkOptionPricePreview) return;
+    const next = applyCurrentOptionPricePreview(simulations, bulkOptionPricePreview, { includeConfirmedReferences: bulkOptionPriceReferenceConfirmed });
+    const changed = next.filter((simulation, index) => simulation !== simulations[index]).length;
+    if (changed === 0) {
+      setBulkOptionPriceMessage("反映できる候補はありません。Mid/Lastのみや片脚欠損は個別に確認してください。");
+      return;
+    }
+    applySimulationBatch(next);
+    setBulkOptionPriceReferenceConfirmed(false);
+    setBulkOptionPriceMessage(`取得成功分を一回の保存で反映しました。現在決済見込みは再計算済みです。`);
   };
 
   const downloadCsv = () => {
@@ -655,6 +796,13 @@ export default function App() {
       saxoSourceType: "current_position",
       historyCompletionStatus: mapOpeningExecutionHistoryStatusToEntryCompletionStatus(opening.historyStatus),
       historyCandidateIds: historyMatches.map((match) => match.item.id),
+      sourceTradeDate: bestHistory?.tradeDate,
+      executionTimeUtc: opening.executionTimeUtc?.source === "position" ? opening.executionTimeUtc.value : undefined,
+      canonicalTradeDate: opening.executionTimeUtc?.source === "position" ? formatTokyoDate(opening.executionTimeUtc.value) : undefined,
+      saxoPositionId: position.positionId ?? position.id,
+      saxoOrderId: bestHistory?.orderId,
+      saxoTicketId: bestHistory?.ticketId,
+      saxoUic: position.uic,
       confirmed: false,
     };
     const finalizedDraftExecution = { ...draftExecution, memo: buildOpeningEntryMemo(draftExecution, isNAccount) };
@@ -919,6 +1067,9 @@ export default function App() {
         : normalizedPosition.quantity !== undefined
           ? Math.max(1, Math.abs(normalizedPosition.quantity))
           : targetLeg.quantity;
+    // ExecutionTimeOpen is not a trade-date substitute.  A new entry stays
+    // unconfirmed until a matching history trade date or manual ticket date
+    // exists.
     const actualTradeDate = bestHistory?.tradeDate ?? existingEntry?.tradeDate ?? "";
     const accountCode = normalizedPositionAccountCode;
     const isNAccount = accountCode === "N";
@@ -982,6 +1133,13 @@ export default function App() {
       openingFieldSources: existingEntry?.openingFieldSources,
       openingFieldEvidence: existingEntry?.openingFieldEvidence,
       historyCandidateIds: historyMatches.map((match) => match.item.id),
+      sourceTradeDate: bestHistory?.tradeDate,
+      executionTimeUtc: opening.executionTimeUtc?.source === "position" ? opening.executionTimeUtc.value : existingEntry?.executionTimeUtc,
+      canonicalTradeDate: opening.executionTimeUtc?.source === "position" ? formatTokyoDate(opening.executionTimeUtc.value) : existingEntry?.canonicalTradeDate,
+      saxoPositionId: normalizedPosition.positionId ?? normalizedPosition.id,
+      saxoOrderId: bestHistory?.orderId ?? existingEntry?.saxoOrderId,
+      saxoTicketId: bestHistory?.ticketId ?? existingEntry?.saxoTicketId,
+      saxoUic: normalizedPosition.uic ?? existingEntry?.saxoUic,
       confirmed: existingEntry?.confirmed ?? false,
     };
     const entryExecution = existingEntry?.confirmed || isNAccount
@@ -1219,7 +1377,12 @@ export default function App() {
     if (historyTarget === "unknown") return undefined;
     if (historyTarget === "stock_settlement") return undefined;
     const latestState = useOptionsStore.getState();
-    if (item.kind === "order_activity" && !item.hasExplicitCloseEvidence && historyTarget === "close") return resolveOrderActivityCloseMatch(item, latestState.simulations);
+    // A merged OA+report candidate retains OA as its display primary, but its
+    // explicit report close must use the ordinary contract matcher instead of
+    // the PositionId-only OA path.
+    if (item.kind === "order_activity" && !item.hasExplicitCloseEvidence && historyTarget === "close") {
+      return resolveOrderActivityCloseMatch(item, latestState.simulations);
+    }
     return resolveSaxoHistoryOptionLegMatch(
       latestState.simulations,
       item,
@@ -1443,6 +1606,8 @@ export default function App() {
       }
       if (!isOrderActivityOnly && existingExecution.executionEvidenceStatus && existingExecution.accountingStatus !== "arrived") {
         const isN = target.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+        // Report arrival completes the same draft's accounting fields, but it
+        // never turns the activity confirmation into a formal close.
         const resolvedCommission = resolveSaxoHistoryCloseDraftCommission({ accountEnvironment: target.accountEnvironment, accountingPending: false, transactionCost: item.transactionCost, draft: existingExecution });
         const completedExecutionBase: OptionCloseExecution = {
           ...existingExecution,
@@ -1480,7 +1645,10 @@ export default function App() {
             ? completedAutofill.missingFields
             : existingExecution.realizedPnlAutofillMissingFields,
         };
-        upsertSimulation({ ...target, optionCloseExecutions: (target.optionCloseExecutions ?? []).map((execution) => execution.id === completedExecution.id ? completedExecution : execution) });
+        upsertSimulation({
+          ...target,
+          optionCloseExecutions: (target.optionCloseExecutions ?? []).map((execution) => execution.id === completedExecution.id ? completedExecution : execution),
+        });
       }
       const successMessage = `履歴候補から作成された決済実績があります。7. 決済実績で内容を確認してください。${resolvedTarget.accountConfirmationWarning ? ` ${resolvedTarget.accountConfirmationWarning}` : ""}`;
       setQuoteStatus(successMessage);
@@ -1749,6 +1917,15 @@ export default function App() {
     const inputKind = field === "exit_price" ? "price" : "fee";
     setCloseDecisionFocusRequest({ anchorId: legId ? `current-estimate-${inputKind}-${legId}` : "current-estimate-completion", requestId: Date.now() + Math.random() });
   };
+  const openSaxoExitOrderRule = (simulationId: string, legId: string) => {
+    // This opens an app-side review card only.  It deliberately does not
+    // submit, amend, or otherwise operate on the Saxo order.
+    setJournalFocusSimulationId(null);
+    selectSimulation(simulationId);
+    setActiveView("positions");
+    setIsEditorOpen(true);
+    setEditorFocusRequest({ anchorId: `exit-rule-${legId}`, requestId: Date.now() + Math.random(), exitOrderReview: true });
+  };
   const goToPendingCashEffectSource = (effect: PendingAccountCashEffect) => {
     setJournalFocusSimulationId(null);
     selectSimulation(effect.sourceSimulationId);
@@ -1808,9 +1985,17 @@ export default function App() {
     onOpenLinkedSimulation: openSimulationEditorAt,
     onOpenSyntheticForwardDashboard: openSyntheticForwardDashboard,
     onOpenHistoryTarget: openSelectedSimulationHistoryTarget,
+    onShowEndedHistory: () => {
+      setActiveView("positions");
+      setDashboardHistoryOpen(true);
+      window.setTimeout(() => document.getElementById("position-dashboard")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    },
     onOpenWheelManagement: openWheelManagement,
+    onOpenExitOrderRule: openSaxoExitOrderRule,
     onDownloadJson: downloadJson,
     onPendingStateChange: setSaxoHasPendingReflection,
+    oauthReconnectReturn: oauthReturnPending,
+    bulkFetchButtonRef: saxoBulkFetchButtonRef,
   };
   const pendingSaxoStockSettlementItems = saxoHistoryCandidates.filter(
     (item) => getSaxoHistoryCandidateTarget(item) === "stock_settlement",
@@ -1898,8 +2083,27 @@ export default function App() {
                 onCurrentEstimateAction={goToCurrentEstimateInput}
                 currentEstimateFxQuote={sameDayUsdJpyQuote}
                 onRefreshFx={refreshAllFx}
+                bulkOptionPricePreview={bulkOptionPricePreview}
+                bulkOptionPriceMessage={bulkOptionPriceMessage}
+                bulkOptionPriceLoading={bulkOptionPriceLoading}
+                bulkOptionPriceProgress={bulkOptionPriceProgress}
+                bulkOptionPriceReferenceConfirmed={bulkOptionPriceReferenceConfirmed}
+                onBulkOptionPriceReferenceConfirmedChange={setBulkOptionPriceReferenceConfirmed}
+                onBulkOptionPriceDialogClose={() => setBulkOptionPriceReferenceConfirmed(false)}
+                bulkOptionPriceAvailable={bulkOptionPriceAvailable}
+                onFetchBulkOptionPrices={previewBulkOptionPrices}
+                onApplyBulkOptionPrices={applyBulkOptionPrices}
                 journalFocusSimulationId={journalFocusSimulationId}
                 onClearJournalFocus={() => setJournalFocusSimulationId(null)}
+                positionFocusSimulationId={positionFocusSimulationId}
+                onPositionFocus={(id) => {
+                  selectOnly(id);
+                  setJournalFocusSimulationId(null);
+                  setPositionFocusSimulationId(id);
+                }}
+                onClearPositionFocus={() => setPositionFocusSimulationId(null)}
+                saxoOrders={saxoOrderCandidates}
+                onSaxoExitOrderAction={openSaxoExitOrderRule}
               />
               {isCandidatesOpen ? (
                 <div ref={candidatePanelRef}>
@@ -1933,10 +2137,16 @@ export default function App() {
                   新規建玉
                 </button>
               </section>
-              <CollapsibleSection title="Saxo API詳細" collapsed>
-                <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
-              </CollapsibleSection>
-              <CollapsibleSection title="口座全体の余力・証拠金詳細" collapsed={![accountInputs.P, ...(activeWorkspace === "live" ? [accountInputs.N] : [])].some((account) => resolveAccountMarginUsageWarning(account) !== undefined)}>
+              <div id="saxo-api-details" ref={saxoApiDetailsRef} tabIndex={-1} className="scroll-mt-4 focus:outline-none">
+                <CollapsibleSection title="Saxo API詳細" collapsed>
+                  <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
+                </CollapsibleSection>
+              </div>
+              <CollapsibleSection
+                title="口座全体の余力・証拠金詳細"
+                collapsed={![accountInputs.P, ...(activeWorkspace === "live" ? [accountInputs.N] : [])]
+                  .some((account) => resolveAccountMarginUsageWarning(account) !== undefined)}
+              >
                 <AccountOverview
                   workspace={activeWorkspace}
                   accountInputs={accountInputs}
@@ -2152,8 +2362,27 @@ export default function App() {
               onCurrentEstimateAction={goToCurrentEstimateInput}
               currentEstimateFxQuote={sameDayUsdJpyQuote}
               onRefreshFx={refreshAllFx}
+              bulkOptionPricePreview={bulkOptionPricePreview}
+              bulkOptionPriceMessage={bulkOptionPriceMessage}
+              bulkOptionPriceLoading={bulkOptionPriceLoading}
+              bulkOptionPriceProgress={bulkOptionPriceProgress}
+              bulkOptionPriceReferenceConfirmed={bulkOptionPriceReferenceConfirmed}
+              onBulkOptionPriceReferenceConfirmedChange={setBulkOptionPriceReferenceConfirmed}
+              onBulkOptionPriceDialogClose={() => setBulkOptionPriceReferenceConfirmed(false)}
+              bulkOptionPriceAvailable={bulkOptionPriceAvailable}
+              onFetchBulkOptionPrices={previewBulkOptionPrices}
+              onApplyBulkOptionPrices={applyBulkOptionPrices}
               journalFocusSimulationId={journalFocusSimulationId}
               onClearJournalFocus={() => setJournalFocusSimulationId(null)}
+              positionFocusSimulationId={positionFocusSimulationId}
+              onPositionFocus={(id) => {
+                selectOnly(id);
+                setJournalFocusSimulationId(null);
+                setPositionFocusSimulationId(id);
+              }}
+              onClearPositionFocus={() => setPositionFocusSimulationId(null)}
+              saxoOrders={saxoOrderCandidates}
+              onSaxoExitOrderAction={openSaxoExitOrderRule}
             />
             {orderPrepCoveredCallMode ? (
               <CoveredCallOrderPrepPanel
@@ -2187,7 +2416,7 @@ export default function App() {
                 onDownloadJson={downloadJson}
               />
             ) : null}
-            {isCandidatesOpen ? (
+            {!positionFocusSimulationId && isCandidatesOpen ? (
               <div ref={candidatePanelRef}>
                 <CandidatePanel
                   candidates={candidates}
@@ -2213,6 +2442,7 @@ export default function App() {
                 externalQuoteModeLabel={externalQuoteModeLabel}
                 onChange={upsertSimulation}
                 saxoHistoryCandidates={saxoHistoryCandidates}
+                saxoOrders={saxoOrderCandidates}
                 onDiscardDraft={(id) => {
                   deleteSimulation(id);
                   setIsEditorOpen(false);
@@ -2244,29 +2474,35 @@ export default function App() {
                 onCloseDecisionAction={(anchorId) => {
                   setIsEditorOpen(false);
                   setJournalFocusSimulationId(null);
+                  setCloseDecisionSectionOpen(true);
+                  setCoveredCallReferenceOpen(true);
                   setCloseDecisionFocusRequest({ anchorId, requestId: Date.now() });
                 }}
               />
             ) : null}
-            <CollapsibleSection
-              title={collapseSaxoPanel ? "Saxo API詳細" : undefined}
-              subtitle={collapseSaxoPanel ? saxoPanelSubtitle : undefined}
-              collapsed={collapseSaxoPanel}
-              open={collapseSaxoPanel ? isSaxoDetailOpen : undefined}
-              onOpenChange={(open) => {
-                setHasSaxoDetailUserState(true);
-                setIsSaxoDetailOpen(open);
-              }}
-            >
-              <SaxoReadOnlyPanel
-                {...saxoReadOnlyPanelProps}
-                oauthReconnectReturn={
-                  typeof window !== "undefined" && new URLSearchParams(window.location.search).get("saxoConnected") === "1"
-                }
-                onRequestClose={() => setIsSaxoDetailOpen(false)}
-              />
-            </CollapsibleSection>
-            <CollapsibleSection
+            {!positionFocusSimulationId ? <div id="saxo-api-details" ref={saxoApiDetailsRef} tabIndex={-1} className="scroll-mt-4 focus:outline-none">
+              <CollapsibleSection
+                title={collapseSaxoPanel ? "Saxo API詳細" : undefined}
+                subtitle={collapseSaxoPanel ? saxoPanelSubtitle : undefined}
+                collapsed={collapseSaxoPanel}
+                open={collapseSaxoPanel ? isSaxoDetailOpen : undefined}
+                onOpenChange={(open) => {
+                  setHasSaxoDetailUserState(true);
+                  setIsSaxoDetailOpen(open);
+                }}
+              >
+                <SaxoReadOnlyPanel
+                  {...saxoReadOnlyPanelProps}
+                  onRequestClose={() => {
+                    // Whether the panel was initially inline or collapsible,
+                    // a user close must make it collapsible and closed.
+                    setHasSaxoDetailUserState(true);
+                    setIsSaxoDetailOpen(false);
+                  }}
+                />
+              </CollapsibleSection>
+            </div> : null}
+            {!positionFocusSimulationId ? <CollapsibleSection
               title={collapseAccountOverview ? "口座全体の余力・証拠金詳細" : undefined}
               subtitle={
                 collapseAccountOverview
@@ -2287,7 +2523,7 @@ export default function App() {
                 onResolveCashEffect={goToPendingCashEffectSource}
                 onChange={updateAccountState}
               />
-            </CollapsibleSection>
+            </CollapsibleSection> : null}
             {historyResultMode ? (
               <HistoryStatusCard
                 simulation={selectedWithAccount}
@@ -2671,7 +2907,7 @@ export default function App() {
               </>
               )
             ) : null}
-            {activeWorkspace === "live" ? (
+            {!positionFocusSimulationId && activeWorkspace === "live" ? (
               <CollapsibleSection
                 title={compactCoveredCallMode ? "ホイール管理詳細" : undefined}
                 subtitle={compactCoveredCallMode ? "主判断後、ホイール状態を確認する場合に開きます。" : undefined}
@@ -2696,9 +2932,9 @@ export default function App() {
                   onCreateCoveredCallFromCycle={(cycle) => createCoveredCallFromWheelCycle(cycle.id)}
                 />
               </CollapsibleSection>
-            ) : (
+            ) : !positionFocusSimulationId ? (
               <DemoWheelNotice />
-            )}
+            ) : null}
           </>
         )}
       </div>

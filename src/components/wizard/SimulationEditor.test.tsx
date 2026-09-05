@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SimulationEditor } from "./SimulationEditor";
 import type { TradeSimulation } from "@/types/domain";
-import type { SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
+import type { SaxoApiOrderSnapshot, SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 
 afterEach(() => {
   cleanup();
@@ -164,6 +164,42 @@ describe("SimulationEditor", () => {
     expect(screen.queryByText(/不足項目: .*取引費用USD/)).not.toBeInTheDocument();
   });
 
+  it("stores a manual Saxo total transaction cost as manual evidence and clears it back to missing instead of zero", () => {
+    const onChange = vi.fn();
+    render(
+      <SimulationEditor
+        simulation={buildVisaLongCallSimulation({ status: "entry_confirmation" })}
+        workspace="live"
+        canUseExternalQuotes={false}
+        externalQuoteModeLabel="無効"
+        onChange={onChange}
+      />,
+    );
+
+    const input = screen.getByRole("spinbutton", { name: /Saxo総取引費用 JPY/ });
+    fireEvent.change(input, { target: { value: "-4157" } });
+
+    const afterManualInput = onChange.mock.calls.at(-1)?.[0] as TradeSimulation;
+    expect(afterManualInput.optionEntryExecutions?.[0]).toMatchObject({
+      brokerTotalTransactionCostJPY: -4157,
+      openingFieldSources: { brokerTotalTransactionCostJPY: "manual" },
+    });
+    expect(afterManualInput.optionEntryExecutions?.[0].openingFieldEvidence?.brokerTotalTransactionCostJPY?.source).toBe("manual");
+
+    fireEvent.change(input, { target: { value: "" } });
+    const afterClear = onChange.mock.calls.at(-1)?.[0] as TradeSimulation;
+    expect(afterClear.optionEntryExecutions?.[0].brokerTotalTransactionCostJPY).toBeUndefined();
+    expect(afterClear.optionEntryExecutions?.[0].openingFieldSources?.brokerTotalTransactionCostJPY).toBeUndefined();
+    expect(afterClear.optionEntryExecutions?.[0].openingFieldEvidence?.brokerTotalTransactionCostJPY).toBeUndefined();
+
+    fireEvent.change(input, { target: { value: "0" } });
+    const afterExplicitZero = onChange.mock.calls.at(-1)?.[0] as TradeSimulation;
+    expect(afterExplicitZero.optionEntryExecutions?.[0]).toMatchObject({
+      brokerTotalTransactionCostJPY: 0,
+      openingFieldSources: { brokerTotalTransactionCostJPY: "manual" },
+    });
+  });
+
   it("stores a manually transcribed trade date with evidence", () => {
     const onChange = vi.fn();
     render(
@@ -183,6 +219,104 @@ describe("SimulationEditor", () => {
       openingFieldSources: { tradeDate: "manual" },
     });
     expect(afterManualInput.optionEntryExecutions?.[0].openingFieldEvidence?.tradeDate?.source).toBe("manual");
+  });
+
+  it("keeps card-level save as the only primary action while a 3-A card is unconfirmed", () => {
+    render(
+      <SimulationEditor
+        simulation={buildVisaLongCallSimulation({ status: "entry_confirmation" })}
+        workspace="live"
+        canUseExternalQuotes={false}
+        externalQuoteModeLabel="無効"
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "建玉開始を確認済みにする" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "確認して正式保存する" })).toHaveLength(1);
+    expect(screen.getByText("3-A各カードで正式保存してください")).toBeInTheDocument();
+  });
+
+  it("auto-finalizes a Saxo draft on the last 3-A card save without a second bulk confirmation", () => {
+    const onChange = vi.fn();
+    render(
+      <SimulationEditor
+        simulation={buildVisaLongCallSimulation({ status: "entry_confirmation" })}
+        workspace="live"
+        canUseExternalQuotes={false}
+        externalQuoteModeLabel="無効"
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "確認して正式保存する" }));
+
+    expect(onChange).toHaveBeenCalledOnce();
+    const next = onChange.mock.calls[0][0] as TradeSimulation;
+    expect(next.status).toBe("open");
+    expect(next.name).toBe("V");
+    expect(next.optionEntryExecutions?.[0]).toMatchObject({ confirmed: true });
+    expect(next.fixtureMeta?.notes).toContain("正式保存しました");
+  });
+
+  it("persists the confirmed 3-A trade date as the simulation entry date", () => {
+    const onChange = vi.fn();
+    render(
+      <SimulationEditor
+        simulation={buildVisaLongCallSimulation({ entryDate: "2026-07-01", status: "entry_confirmation" })}
+        workspace="live"
+        canUseExternalQuotes={false}
+        externalQuoteModeLabel="無効"
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("取引日"), { target: { value: "2026-06-30" } });
+    fireEvent.click(screen.getByRole("button", { name: "確認して正式保存する" }));
+
+    const next = onChange.mock.calls.at(-1)?.[0] as TradeSimulation;
+    expect(next.entryDate).toBe("2026-06-30");
+    expect(next.optionEntryExecutions?.[0]).toMatchObject({ tradeDate: "2026-06-30", confirmed: true });
+  });
+
+  it("keeps synthetic forward in entry confirmation after the last leg save when parent confirmation still remains", () => {
+    const onChange = vi.fn();
+    const simulation = buildVisaLongCallSimulation({
+      status: "entry_confirmation",
+      name: "NVDA / API取込下書き",
+      ticker: "NVDA",
+      strategyType: "synthetic_forward",
+      accountCode: "N",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      accountCurrency: "USD",
+      optionLegs: [
+        { id: "synthetic-call", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18", assignmentPolicy: "unknown" },
+        { id: "synthetic-put", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", putIntent: "accept_assignment", assignmentPolicy: "unknown" },
+      ],
+      optionEntryExecutions: [
+        { id: "synthetic-entry-call", legId: "synthetic-call", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 26.25, settlementCurrency: "USD", commissionUSD: 2.25, source: "saxo_api_estimate", historyCandidateIds: ["call-trade"], confirmed: true },
+        { id: "synthetic-entry-put", legId: "synthetic-put", tradeDate: "2026-07-16", contracts: 1, fillPriceUSD: 21.05, settlementCurrency: "USD", commissionUSD: 2.25, source: "saxo_api_estimate", historyCandidateIds: ["put-trade"], confirmed: false },
+      ],
+      syntheticForwardTicket: undefined,
+    });
+
+    render(
+      <SimulationEditor
+        simulation={simulation}
+        workspace="live"
+        canUseExternalQuotes={false}
+        externalQuoteModeLabel="無効"
+        onChange={onChange}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "建玉開始を確認済みにする" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "確認して正式保存する" }));
+
+    expect(onChange).toHaveBeenCalledOnce();
+    const next = onChange.mock.calls[0][0] as TradeSimulation;
+    expect(next.status).toBe("entry_confirmation");
+    expect(next.optionEntryExecutions?.every((execution) => execution.confirmed)).toBe(true);
   });
 
   it("shows the synthetic-forward saved panel and hides draft actions after both legs are confirmed", () => {
@@ -210,6 +344,7 @@ describe("SimulationEditor", () => {
   it.each(["call", "put"] as const)("shows an anonymous long-%s Saxo close target in the same UI and save set", (type) => {
     const simulation = buildSampleLongOptionCloseSimulation(type);
     render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} />);
+
     expect(screen.getAllByText(`${type === "call" ? "C" : "P"}買い 100 / 2026-12-18 / 1枚`).length).toBeGreaterThan(0);
     expect(screen.queryByText("対象脚未選択")).not.toBeInTheDocument();
     expect(screen.getAllByLabelText("対象脚").some((select) => (select as HTMLSelectElement).value === "sample-long-leg")).toBe(true);
@@ -217,11 +352,13 @@ describe("SimulationEditor", () => {
     expect(screen.queryByRole("button", { name: "この決済実績を確認する" })).not.toBeInTheDocument();
   });
 
-  it("confirms a full close and changes status atomically without a legacy status CTA", () => {
+  it("confirms a full close and changes status in the same update without a second status CTA", () => {
     const onChange = vi.fn();
     const simulation = buildSampleLongOptionCloseSimulation("call");
     render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={onChange} />);
+
     fireEvent.click(screen.getByRole("button", { name: "確認して正式保存" }));
+    expect(onChange).toHaveBeenCalledOnce();
     const next = onChange.mock.calls[0][0] as TradeSimulation;
     expect(next.status).toBe("closed");
     expect(next.optionCloseExecutions?.[0]).toMatchObject({ confirmed: true, confirmationStatus: "confirmed" });
@@ -230,7 +367,9 @@ describe("SimulationEditor", () => {
 
   it("blocks an invalid Saxo history close leg before it can change confirmation state", () => {
     const onChange = vi.fn();
-    render(<SimulationEditor simulation={buildSampleLongOptionCloseSimulation("call", "missing-leg")} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={onChange} />);
+    const simulation = buildSampleLongOptionCloseSimulation("call", "missing-leg");
+    render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={onChange} />);
+
     expect(screen.getByText("対象脚が現在の建玉から見つかりません。正式保存できません。")).toBeInTheDocument();
     const saveButton = screen.getByRole("button", { name: "確認して正式保存" });
     expect(saveButton).toBeDisabled();
@@ -258,6 +397,42 @@ describe("SimulationEditor", () => {
     expect(document.getElementById("exit-rule-avoid-put-leg")).toBeInTheDocument();
     expect(document.getElementById("exit-rules")).toBeInTheDocument();
     expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("saves one matched Saxo OCO pair as an app-side exit rule and then shows the completion state", () => {
+    const onOpenDashboard = vi.fn();
+    const initial: TradeSimulation = {
+      ...buildAvoidAssignmentShortPutSimulation(),
+      id: "anonymous-oco", ticker: "SAMPLE", status: "open", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD",
+      optionLegs: [{ id: "oco-put", type: "put", side: "sell", strikeUSD: 400, premiumUSD: 7.9, quantity: 1, expiryDate: "2026-10-16", putIntent: "avoid_assignment", assignmentPolicy: "avoid" }],
+    };
+    const baseOrder = {
+      accountKey: "anonymous-account", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "SAMPLE/16V26P400:XCBF", assetType: "StockOption" as const,
+      optionType: "put" as const, strike: 400, expiry: "2026-10-16", side: "buy" as const, quantity: 1, status: "Working",
+      orderRelation: "Oco", duration: "Gtc", missingFields: [], fetchedAt: "2026-09-04T00:00:00.000Z",
+    };
+    const orders: SaxoApiOrderSnapshot[] = [
+      { ...baseOrder, id: "anonymous-limit", orderType: "Limit", price: 1.9 },
+      { ...baseOrder, id: "anonymous-stop", orderType: "StopIfTraded", stopPrice: 6.2 },
+    ];
+    function Harness() {
+      const [simulation, setSimulation] = useState(initial);
+      return <SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={setSimulation} onOpenDashboard={onOpenDashboard} saxoOrders={orders} focusRequest={{ anchorId: "exit-rule-oco-put", requestId: 1, exitOrderReview: true }} />;
+    }
+
+    render(<Harness />);
+    expect(screen.getByText("Saxo取得済みの決済注文候補")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "この内容でアプリに保存" }));
+    expect(screen.queryByRole("button", { name: "この内容でアプリに保存" })).not.toBeInTheDocument();
+    expect(screen.getByText("Saxoで稼働中の出口注文")).toBeInTheDocument();
+    expect(screen.getByText(/OCOは、どちらか一方が約定するともう一方を取り消す組み合わせ/)).toBeInTheDocument();
+    expect(screen.getByText("$1.90で買戻す指値")).toBeInTheDocument();
+    expect(screen.getByText("$6.20で買戻す逆指値")).toBeInTheDocument();
+    expect(screen.getByText(/税・手数料前 約75\.9%/)).toBeInTheDocument();
+    expect(screen.getByText("アプリの参考ルールを表示・編集")).toBeInTheDocument();
+    expect(screen.getByText("$3.16")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "ダッシュボードへ戻る" }));
+    expect(onOpenDashboard).toHaveBeenCalledOnce();
   });
 });
 
@@ -381,7 +556,9 @@ function buildAvoidAssignmentShortPutSimulation(): TradeSimulation {
 function buildSampleLongOptionCloseSimulation(type: "call" | "put", executionLegId = "sample-long-leg"): TradeSimulation {
   const simulationId = "sample-long-option";
   return {
-    id: simulationId, status: "open", name: "SAMPLE", ticker: "SAMPLE", strategyType: type === "call" ? "long_call" : "long_put", currentPriceUSD: 100, fxRateJPY: 150, accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", entryDate: "2026-08-01", expiryDate: "2026-12-18", dte: 139, referenceFxRateJPY: 150, stockPosition: null,
+    id: simulationId, status: "open", name: "SAMPLE", ticker: "SAMPLE", strategyType: type === "call" ? "long_call" : "long_put",
+    currentPriceUSD: 100, fxRateJPY: 150, accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD",
+    entryDate: "2026-08-01", expiryDate: "2026-12-18", dte: 139, referenceFxRateJPY: 150, stockPosition: null,
     optionLegs: [{ id: "sample-long-leg", type, side: "buy", strikeUSD: 100, premiumUSD: 10, quantity: 1, expiryDate: "2026-12-18", isCovered: false, assignmentPolicy: "unknown" }],
     optionEntryExecutions: [{ id: "sample-entry", legId: "sample-long-leg", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 10, commissionUSD: 1, settlementCurrency: "USD", inputMode: "USD_EXECUTION_CALC", source: "manual", confirmed: true }],
     optionCloseExecutions: [{ id: "sample-close", legId: executionLegId, closeDate: "2026-08-10", contracts: 1, closePriceUSD: 12, commissionUSD: 1, settlementCurrency: "USD", source: "saxo_history", sourceCandidateId: "anonymous-candidate", sourceTradeId: "anonymous-trade", targetPositionId: simulationId, confirmationStatus: "pending", confirmed: false }],

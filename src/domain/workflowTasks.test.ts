@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
 import type { TradeSimulation } from "@/types/domain";
-import { getPrimaryWorkflowTask } from "./workflowTasks";
+import { getPrimaryWorkflowTask, getWorkflowTasks } from "./workflowTasks";
 
 const callLeg = sampleAmznSimulation.optionLegs.find((leg) => leg.type === "call")!;
 const putLeg = sampleAmznSimulation.optionLegs.find((leg) => leg.type === "put")!;
@@ -121,7 +121,7 @@ describe("workflow tasks", () => {
     expect(task.focusField).toBe("close-decision-call-long-call");
   });
 
-  it("does not offer a second status-change task when a full close is confirmed", () => {
+  it("does not offer a second status-change task when a full buyback close is confirmed", () => {
     const sim = createOpenSimulation({
       optionCloseExecutions: [
         {
@@ -163,7 +163,7 @@ describe("workflow tasks", () => {
     expect(getPrimaryWorkflowTask(sim).label).toBe("決済実績を確認");
   });
 
-  it("shows the remaining quantity rather than a second expiry status-change task", () => {
+  it("does not offer a second expiry status-change task when an expiry execution is confirmed", () => {
     const sim = createOpenSimulation({
       optionCloseExecutions: [
         {
@@ -180,6 +180,48 @@ describe("workflow tasks", () => {
     });
 
     expect(getPrimaryWorkflowTask(sim).label).toBe("残存脚を反対売買判断");
+  });
+
+  it("routes a partially closed synthetic to the remaining P sell close decision", () => {
+    const call = { ...callLeg, id: "call-closed", type: "call" as const, side: "buy" as const, quantity: 1 };
+    const put = { ...putLeg, id: "put-open", type: "put" as const, side: "sell" as const, quantity: 1 };
+    const sim = createOpenSimulation({
+      strategyType: "synthetic_forward",
+      optionLegs: [call, put],
+      optionEntryExecutions: [
+        { ...createOpenSimulation().optionEntryExecutions![0], legId: call.id },
+        { ...createOpenSimulation().optionEntryExecutions![1], legId: put.id },
+      ],
+      optionCloseExecutions: [{ id: "close-call", legId: call.id, closeKind: "buyback", confirmed: true, closeDate: "2026-06-02", contracts: 1, settlementCurrency: "JPY", source: "manual" }],
+    });
+    expect(getPrimaryWorkflowTask(sim)).toMatchObject({ label: "P売りを反対売買判断", targetAnchor: "close-decision", focusField: "close-decision-put-put-open" });
+  });
+
+  it("routes a partially closed synthetic to the remaining C buy close decision", () => {
+    const call = { ...callLeg, id: "call-open", type: "call" as const, side: "buy" as const, quantity: 1 };
+    const put = { ...putLeg, id: "put-closed", type: "put" as const, side: "sell" as const, quantity: 1 };
+    const sim = createOpenSimulation({
+      strategyType: "synthetic_forward",
+      optionLegs: [call, put],
+      optionEntryExecutions: [
+        { ...createOpenSimulation().optionEntryExecutions![0], legId: call.id },
+        { ...createOpenSimulation().optionEntryExecutions![1], legId: put.id },
+      ],
+      optionCloseExecutions: [{ id: "close-put", legId: put.id, closeKind: "buyback", confirmed: true, closeDate: "2026-06-02", contracts: 1, settlementCurrency: "JPY", source: "manual" }],
+    });
+    expect(getPrimaryWorkflowTask(sim)).toMatchObject({ label: "C買いを反対売買で決済", targetAnchor: "close-decision", focusField: "close-decision-call-call-open" });
+  });
+
+  it("keeps each remaining leg reachable and prioritizes drafts or invalid quantities", () => {
+    const sim = createOpenSimulation({
+      optionLegs: [{ ...putLeg, id: "two-put", quantity: 2 }],
+      optionEntryExecutions: [{ ...createOpenSimulation().optionEntryExecutions![0], legId: "two-put", contracts: 2 }],
+      optionCloseExecutions: [{ id: "first", legId: "two-put", closeKind: "buyback", confirmed: true, closeDate: "2026-06-02", contracts: 1, settlementCurrency: "JPY", source: "manual" }],
+    });
+    expect(getWorkflowTasks(sim)[0]).toMatchObject({ label: "P売りを反対売買判断", detail: expect.stringContaining("残り1枚") });
+    const draft = { ...sim, optionCloseExecutions: [...sim.optionCloseExecutions!, { id: "draft", legId: "two-put", closeKind: "buyback" as const, confirmed: false, closeDate: "2026-06-03", contracts: 1, settlementCurrency: "JPY" as const, source: "manual" as const }] };
+    expect(getPrimaryWorkflowTask(draft).label).toBe("決済実績を確認");
+    expect(getPrimaryWorkflowTask({ ...sim, optionCloseExecutions: [{ ...sim.optionCloseExecutions![0], contracts: 3 }] }).label).toBe("決済数量を確認");
   });
 
   it("asks for stock acquisition when an assigned short put has no stock acquisition", () => {

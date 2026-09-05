@@ -4,7 +4,7 @@ import { ChevronUp, JapaneseYen, RotateCw } from "lucide-react";
 import type { DenominatorMode, ExitBrokerOrderType, ExitOrderPlan, ExitOrderPlanMode, ExitStopLossType, OptionCloseExecution, OptionEntryExecution, OptionEntryOpeningFieldKey, OptionLeg, PutIntent, SimulationStatus, StockTransferEvent, StrategyType, TradeSimulation } from "@/types/domain";
 import { DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, type WorkspaceMode } from "@/store/useOptionsStore";
 import { calculateDte, getShortOptionLegs } from "@/domain/calculations";
-import { calculateProfitTakeBuybackPriceUSD, getDefaultExitOrderPlanForLeg, getExitOrderPlanForLeg, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
+import { calculateProfitTakeBuybackPriceUSD, getConfirmedBrokerExitOrder, getDefaultExitOrderPlanForLeg, getExitOrderPlanForLeg, normalizeExitOrderPlans } from "@/domain/exitOrderPlan";
 import {
   DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
   applySaxoActualEntryCommission,
@@ -30,7 +30,7 @@ import { createJournalForSimulation } from "@/domain/entryRationaleJournal";
 import { getStatusLabel } from "@/domain/strategyLabels";
 import { EntryRationaleJournalPanel } from "@/components/journal/EntryRationaleJournalPanel";
 import { NumberInput } from "@/components/ui/NumberInput";
-import { isSaxoHistoryMatchingOptionLeg, parseSaxoOptionContract, type SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
+import { findOrderCandidatesForLeg, isSaxoHistoryMatchingOptionLeg, parseSaxoOptionContract, type SaxoApiOrderSnapshot, type SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
@@ -43,6 +43,7 @@ type SimulationEditorProps = {
   externalQuoteModeLabel: string;
   onChange: (simulation: TradeSimulation) => void;
   saxoHistoryCandidates?: SaxoHistoryDiscoveryItem[];
+  saxoOrders?: SaxoApiOrderSnapshot[];
   onDiscardDraft?: (simulationId: string) => void;
   onCloseDecisionAction?: (anchorId: string) => void;
   onCloseEditor?: () => void;
@@ -52,10 +53,10 @@ type SimulationEditorProps = {
   onReturnToSaxoHistory?: () => void;
   onRecreateSaxoHistoryCandidate?: (sourceTradeId?: string) => void;
   stockTransfer?: StockTransferEvent;
-  focusRequest?: { anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string } | null;
+  focusRequest?: { anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string; exitOrderReview?: boolean } | null;
 };
 
-export function SimulationEditor({ simulation, workspace, standardNOptionCommissionUSD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onOpenDashboard, onStockAcquisitionCompleteClose, onOpenPerformance, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
+export function SimulationEditor({ simulation, workspace, standardNOptionCommissionUSD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], saxoOrders = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onOpenDashboard, onStockAcquisitionCompleteClose, onOpenPerformance, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
   const [quoteStatus, setQuoteStatus] = useState<string>("");
   const [workflowNotice, setWorkflowNotice] = useState<{ message: string; actionLabel: string; anchorId: string } | null>(null);
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
@@ -372,6 +373,9 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
   const findEditorFocusInput = (target: HTMLElement | null, anchorId: string): HTMLElement | null | undefined => {
     if (!target) return null;
     if (anchorId.startsWith("exit-rule-")) {
+      // Saxo OCO review links intentionally focus the rule card itself.  The
+      // user first sees the matched pair and then chooses whether to save it.
+      if (focusRequest?.exitOrderReview) return target;
       const legId = anchorId.slice("exit-rule-".length);
       const leg = shortExitLegs.find((candidate) => candidate.id === legId);
       const plan = leg ? exitOrderPlans.find((candidate) => candidate.legId === leg.id) ?? getDefaultExitOrderPlanForLeg(leg) : undefined;
@@ -540,6 +544,9 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
       return;
     }
     if (execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending") {
+      // This is deliberately not a formal close.  It only removes the
+      // confirmed activity quantity from operational live surfaces until a
+      // reports source supplies accounting and the user confirms it.
       updateOptionCloseExecution(id, {
         executionEvidenceStatus: "user_confirmed_pending_accounting",
         accountingStatus: "pending",
@@ -568,6 +575,9 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
     );
     const nextExecution = applySaxoActualEntryCommission({
       ...execution,
+      // A date the user transcribed from the Saxo ticket is evidence in its
+      // own right.  Never replace it silently when a later history response
+      // disagrees; keep it visible and require reconciliation instead.
       tradeDate: hasManualTradeDate ? execution.tradeDate : (item.tradeDate ?? execution.tradeDate),
       contracts: item.quantity !== undefined ? Math.max(1, Math.abs(item.quantity)) : execution.contracts,
       fillPriceUSD: item.price ?? execution.fillPriceUSD,
@@ -785,7 +795,14 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
       status: "open",
       name: isSaxoApiDraft ? simulation.name.replace(/\s*\/\s*API取込下書き/g, "") : simulation.name,
       optionEntryExecutions: nextExecutions,
-      ...(confirmedTradeDate ? { entryDate: confirmedTradeDate, dte: calculateDte(confirmedTradeDate, simulation.expiryDate) } : {}),
+      // The formal entry date must agree with the confirmed 3-A evidence.
+      // This also prevents a stale draft's creation date from resurfacing after reload.
+      ...(confirmedTradeDate
+        ? {
+            entryDate: confirmedTradeDate,
+            dte: calculateDte(confirmedTradeDate, simulation.expiryDate),
+          }
+        : {}),
       ...(isSaxoApiDraft ? { fixtureMeta: buildConfirmedSaxoDraftFixtureMeta() } : {}),
     });
     setWorkflowNotice({
@@ -1217,7 +1234,18 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                 </div>
               ) : null}
               {isSaxoFilledSyntheticForward && simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? <p className="mt-2 text-xs font-semibold text-amber-800">実績総手数料は未取得です。建玉中の状態は維持し、3-Aで確認してください。</p> : null}
-              <Select label="シンセティックのP売り方針" value={getSyntheticPutAssignmentPolicy(simulation)} onChange={(value) => { if (value === "accept" || value === "avoid") onChange(applySyntheticPutAssignmentPolicy(simulation, value)); }} options={[["unknown", "方針未確認（既存値は変更しない）"], ["accept", "満期まで残して株式取得を許容する"], ["avoid", "満期前にC買い・P売りを二脚とも反対売買で閉じる（株取得しない）"]]} />
+              <Select
+                label="シンセティックのP売り方針"
+                value={getSyntheticPutAssignmentPolicy(simulation)}
+                onChange={(value) => {
+                  if (value === "accept" || value === "avoid") onChange(applySyntheticPutAssignmentPolicy(simulation, value));
+                }}
+                options={[
+                  ["unknown", "方針未確認（既存値は変更しない）"],
+                  ["accept", "満期まで残して株式取得を許容する"],
+                  ["avoid", "満期前にC買い・P売りを二脚とも反対売買で閉じる（株取得しない）"],
+                ]}
+              />
               <label className="mt-3 flex items-start gap-2 text-xs font-semibold"><input type="checkbox" checked={simulation.syntheticForwardTicket?.assignmentAccepted ?? false} onChange={(event) => updateSyntheticForwardTicket({ assignmentAccepted: event.target.checked })} />割当可能性と必要資金を確認した</label>
               <p className="mt-2 text-xs">証拠金余力・買付可能額はUSD現金残高ではありません。割当資金の充足判定には使いません。</p>
             </div>
@@ -1719,8 +1747,13 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                               : formatJPY(execution.openingFieldEvidence.brokerTransactionCostJPY.components.StampDuty)}
                           </div>
                         ) : null}
+                        {execution.brokerCurrencyConversionCostJPY === undefined && execution.brokerTotalTransactionCostJPY === undefined ? (
+                          <p className="-mt-1 text-xs leading-5 text-slate-500">
+                            為替変換費用とSaxo総取引費用は任意詳細です。APIに独立した実績がない場合は入力不要です。
+                          </p>
+                        ) : null}
                         <NumberInput
-                          label="為替変換費用 JPY"
+                          label="為替変換費用 JPY（任意詳細）"
                           value={execution.brokerCurrencyConversionCostJPY ?? Number.NaN}
                           emptyAsUndefined
                           suffix="JPY"
@@ -1733,7 +1766,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                         />
                         <FieldSource source={execution.openingFieldSources?.brokerCurrencyConversionCostJPY} />
                         <NumberInput
-                          label="Saxo総取引費用 JPY"
+                          label="Saxo総取引費用 JPY（任意詳細）"
                           value={execution.brokerTotalTransactionCostJPY ?? Number.NaN}
                           emptyAsUndefined
                           suffix="JPY"
@@ -1823,6 +1856,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
             const keepPercent = plan.profitTakePremiumKeepPercent ?? 60;
             const brokerOrderType = plan.brokerOrderType ?? "none";
             const manualMode = plan.mode === "manual_only";
+            const preEntry = simulation.status === "planned" || simulation.status === "entry_confirmation";
             const nakedCall = exitLeg.type === "call" && (exitLeg.callExitIntent === "naked_buyback" || (hasUncoveredCall && callPolicyValue === "naked_buyback"));
             const callCanSell = exitLeg.type === "call" && !nakedCall && simulation.stockPosition?.canSellAtStrike !== false;
             const callKeepStock = exitLeg.type === "call" && !nakedCall && simulation.stockPosition?.canSellAtStrike === false;
@@ -1834,6 +1868,40 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
             const showProfit = !callKeepStock && !nakedCall && (manualMode ? plan.profitTakeEnabled : ["closing_limit", "oco", "ifd", "ifd_oco"].includes(brokerOrderType));
             const showStop = !callKeepStock && !nakedCall && (manualMode ? plan.stopLossEnabled : ["closing_stop", "oco", "ifd_oco"].includes(brokerOrderType));
             const legLabel = `${exitLeg.type === "call" ? "C売り" : "P売り"} ${exitLeg.strikeUSD} ${exitLeg.expiryDate}`;
+            const expectedCloseSide = exitLeg.side === "sell" ? "buy" : "sell";
+            const matchingWorkingOrders = findOrderCandidatesForLeg(simulation, exitLeg, saxoOrders).filter((order) =>
+              order.status?.toLowerCase() === "working" &&
+              order.side === expectedCloseSide &&
+              order.quantity !== undefined &&
+              order.quantity > 0 &&
+              order.quantity <= exitLeg.quantity,
+            );
+            const takeProfitOrder = matchingWorkingOrders.find((order) => order.orderType?.toLowerCase() === "limit");
+            const upperExitOrder = matchingWorkingOrders.find((order) => /stop/.test(order.orderType?.toLowerCase() ?? ""));
+            const orderRoleIsKnown = Boolean(takeProfitOrder || upperExitOrder);
+            const savedOrderLink = plan.brokerOrderLink;
+            const confirmedBrokerExitOrder = getConfirmedBrokerExitOrder(plan);
+            const brokerProfitProtectedUSD = confirmedBrokerExitOrder
+              ? exitLeg.premiumUSD - confirmedBrokerExitOrder.takeProfitPriceUSD
+              : undefined;
+            const brokerProfitProtectedPercent =
+              brokerProfitProtectedUSD !== undefined && exitLeg.premiumUSD > 0
+                ? (brokerProfitProtectedUSD / exitLeg.premiumUSD) * 100
+                : undefined;
+            const linkedWorkingOrderCount = confirmedBrokerExitOrder
+              ? matchingWorkingOrders.filter(
+                  (order) => order.id === savedOrderLink?.takeProfitOrderKey || order.id === savedOrderLink?.upperExitOrderKey,
+                ).length
+              : 0;
+            const isSameOrderPrice = (saved: number | undefined, current: number | undefined) =>
+              saved === undefined || current === undefined ? saved === current : Math.abs(saved - current) < 0.000001;
+            const saxoOrderReviewConfirmed =
+              savedOrderLink?.source === "saxo_orders" &&
+              savedOrderLink.status === "confirmed" &&
+              savedOrderLink.takeProfitOrderKey === takeProfitOrder?.id &&
+              savedOrderLink.upperExitOrderKey === upperExitOrder?.id &&
+              isSameOrderPrice(savedOrderLink.takeProfitPriceUSD, takeProfitOrder?.price) &&
+              isSameOrderPrice(savedOrderLink.upperExitPriceUSD, upperExitOrder?.stopPrice ?? upperExitOrder?.price);
             if (callCanSell) {
               return (
                 <div key={exitLeg.id} className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
@@ -1848,6 +1916,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               <div
                 key={exitLeg.id}
                 id={`exit-rule-${exitLeg.id}`}
+                tabIndex={-1}
                 className={`rounded-md border bg-white p-3 ${
                   putAvoidAssignment || nakedCall ? "border-amber-300 bg-amber-50/40" : "border-slate-200"
                 }`}
@@ -1885,18 +1954,111 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                     現物株を保有せずにコールを売る前提です。株価が想定ラインを上抜けた場合は、逆指値などで買い戻して撤退する方針を確認します。急騰時や時間外の値飛びでは、想定より不利な価格で約定する可能性があります。
                   </div>
                 ) : null}
-                <div className="grid gap-3 xl:grid-cols-4">
+                {confirmedBrokerExitOrder ? (
+                  <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
+                    <div className="font-bold">Saxoで稼働中の出口注文</div>
+                    <p className="mt-1 text-xs leading-5">Saxoで稼働中・確認済み。OCOは、どちらか一方が約定するともう一方を取り消す組み合わせです。</p>
+                    <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+                      <div className="rounded bg-white px-2 py-2">
+                        <div className="font-bold">利確側</div>
+                        <div className="numeric-input mt-1 font-bold">{formatUSD(confirmedBrokerExitOrder.takeProfitPriceUSD)}で買戻す指値</div>
+                        <div className="mt-1 text-slate-600">
+                          建て{formatUSD(exitLeg.premiumUSD)}に対して{brokerProfitProtectedUSD === undefined ? "未計算" : `${formatUSD(brokerProfitProtectedUSD)}/株`}を確保
+                          {brokerProfitProtectedPercent === undefined ? "" : `（税・手数料前 約${brokerProfitProtectedPercent.toFixed(1)}%）`}
+                        </div>
+                      </div>
+                      <div className="rounded bg-white px-2 py-2">
+                        <div className="font-bold">撤退側</div>
+                        <div className="numeric-input mt-1 font-bold">{formatUSD(confirmedBrokerExitOrder.upperExitPriceUSD)}で買戻す逆指値</div>
+                        <div className="mt-1 text-slate-600">オプション価格が上昇した場合の利益保護・撤退注文</div>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-xs leading-5">
+                      状態: {linkedWorkingOrderCount === 2 ? "2注文ともWorking" : "確認時は2注文ともWorking（注文状態は次回取得で再確認）"}。アプリはSaxoの注文を変更していません。
+                    </p>
+                    {onOpenDashboard ? <button type="button" className="mt-2 rounded border border-emerald-700 bg-white px-2 py-1 text-xs font-bold text-emerald-800 hover:bg-emerald-100" onClick={onOpenDashboard}>ダッシュボードへ戻る</button> : null}
+                  </div>
+                ) : matchingWorkingOrders.length > 0 ? (
+                  <div className="mb-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
+                    <div className="font-bold">Saxo取得済みの決済注文候補</div>
+                    <p className="mt-1 text-xs leading-5">稼働中の注文を照合した候補です。ここでSaxoの注文は作成・変更・取消しません。</p>
+                    <div className="mt-2 grid gap-1 text-xs">
+                      {matchingWorkingOrders.map((order) => {
+                        const role = order.orderType?.toLowerCase() === "limit"
+                          ? "決済指値（利確）"
+                          : /stop/.test(order.orderType?.toLowerCase() ?? "")
+                            ? "決済逆指値（上側の撤退ライン）"
+                            : "注文種別未確認（役割は未分類）";
+                        const price = order.price ?? order.stopPrice;
+                        return <div key={order.id} className="flex flex-wrap items-center justify-between gap-2 rounded bg-white px-2 py-1.5"><span>{role} / {order.orderRelation ?? "関連種別未取得"} / {order.duration ?? "期間未取得"}</span><span className="numeric-input font-bold">{price === undefined ? "価格未取得" : `${formatUSD(price)} / 株`}</span></div>;
+                      })}
+                    </div>
+                    {orderRoleIsKnown ? (
+                      <>
+                        {saxoOrderReviewConfirmed ? (
+                          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-2 text-xs text-emerald-950">
+                            <div><span className="font-bold">確認済み</span> — Saxo注文をアプリ内の出口ルールとして保存しました。Saxo注文は変更していません。</div>
+                            <button type="button" className="rounded border border-emerald-700 bg-white px-2 py-1 font-bold text-emerald-800 hover:bg-emerald-100" onClick={onOpenDashboard}>ダッシュボードへ戻る</button>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="mt-2 text-xs leading-5">候補: {takeProfitOrder ? "利確" : ""}{takeProfitOrder && upperExitOrder ? " / " : ""}{upperExitOrder ? "上側の撤退" : ""}。内容を確認してから、アプリ内の出口ルールとして一度だけ保存します。</p>
+                            <button
+                              type="button"
+                              className="mt-2 rounded border border-sky-300 bg-white px-2 py-1 text-xs font-bold text-sky-800 hover:bg-sky-100"
+                              onClick={() => updateExitOrderPlan(exitLeg.id, {
+                                mode: "after_entry_closing_order",
+                                brokerOrderType: takeProfitOrder && upperExitOrder ? "oco" : takeProfitOrder ? "closing_limit" : "closing_stop",
+                                profitTakeEnabled: Boolean(takeProfitOrder),
+                                stopLossEnabled: Boolean(upperExitOrder),
+                                ...(upperExitOrder
+                                  ? {
+                                      stopLossType: "buyback_price" as const,
+                                      stopLossBuybackPriceUSD: upperExitOrder.stopPrice ?? upperExitOrder.price,
+                                    }
+                                  : {}),
+                                brokerOrderLink: {
+                                  source: "saxo_orders",
+                                  status: "confirmed",
+                                  takeProfitOrderKey: takeProfitOrder?.id,
+                                  upperExitOrderKey: upperExitOrder?.id,
+                                  takeProfitPriceUSD: takeProfitOrder?.price,
+                                  upperExitPriceUSD: upperExitOrder?.stopPrice ?? upperExitOrder?.price,
+                                  confirmedAt: new Date().toISOString(),
+                                },
+                              })}
+                            >この内容でアプリに保存</button>
+                          </>
+                        )}
+                      </>
+                    ) : <p className="mt-2 text-xs text-amber-800">注文種別が未取得のため、利確・撤退ラインへ自動分類しません。</p>}
+                  </div>
+                ) : null}
+                <details className={confirmedBrokerExitOrder ? "rounded-md border border-slate-200 bg-slate-50 p-3" : ""} open={!confirmedBrokerExitOrder}>
+                  {confirmedBrokerExitOrder ? (
+                    <>
+                      <summary className="cursor-pointer text-sm font-bold text-slate-700">アプリの参考ルールを表示・編集</summary>
+                      <p className="mt-2 text-xs leading-5 text-slate-600">ここはSaxo注文とは別のアプリ内の検討基準です。既定の60%は未設定の参考値であり、Saxo注文でも利用者が選択した値でもありません。</p>
+                    </>
+                  ) : null}
+                  <div className={`${confirmedBrokerExitOrder ? "mt-3 " : ""}grid gap-3 xl:grid-cols-4`}>
                   {callKeepStock || nakedCall ? null : (
                     <>
                       <Select
-                        label="Saxo出口注文の使い方"
+                        label="この建玉の出口は、どの方法で管理しますか？"
                         value={plan.mode}
                         onChange={(mode) => updateExitMode(exitLeg.id, mode as ExitOrderPlanMode)}
-                        options={[
-                          ["manual_only", "使わない（手動判断）"],
-                          ["after_entry_closing_order", "建玉後に決済注文を入れる"],
-                          ["attached_entry_exit_order", "新規注文と同時にIFD/OCOを入れる"],
-                        ]}
+                        options={preEntry
+                          ? [
+                              ["manual_only", "Saxoには注文を置かず、アプリだけで判断する"],
+                              ["after_entry_closing_order", "建玉後にSaxoへ決済注文を置く"],
+                              ["attached_entry_exit_order", "新規注文と同時にIFD/OCOを入れる"],
+                            ]
+                          : [
+                              ["manual_only", "Saxoには注文を置かず、アプリだけで判断する"],
+                              ["after_entry_closing_order", "Saxoにある注文と照合する／建玉後に決済注文を置く"],
+                              ...(plan.mode === "attached_entry_exit_order" ? [["attached_entry_exit_order", "建玉開始時の過去設定（方針を選び直す）"] as [string, string]] : []),
+                            ]}
                       />
                       <Select
                         label="Saxo側の注文タイプ"
@@ -1922,7 +2084,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                           ? "Saxoには出口注文を置かず、この脚のアプリ内判断基準として任意表示します。"
                           : plan.mode === "after_entry_closing_order"
                             ? "この売り脚に対して、あとから決済注文をSaxoに置く想定です。"
-                            : "この売り脚の新規注文と同時に、出口注文もSaxoに添付する想定です。"}
+                            : "これは建玉開始時の過去設定です。現在建玉のSaxo注文は上の候補と照合し、方針は必要に応じて選び直してください。"}
                       </div>
                     </>
                   )}
@@ -1964,7 +2126,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                           ["custom", "任意%"],
                         ]}
                       />
-                      <NumberInput label="任意の確保率" value={keepPercent} suffix="%" min={0} onChange={(profitTakePremiumKeepPercent) => updateExitOrderPlan(exitLeg.id, { profitTakePremiumKeepPercent })} />
+                      {![50, 60, 80].includes(keepPercent) ? <NumberInput label="任意の確保率" value={keepPercent} suffix="%" min={0} onChange={(profitTakePremiumKeepPercent) => updateExitOrderPlan(exitLeg.id, { profitTakePremiumKeepPercent })} /> : null}
                     </>
                   ) : null}
                   {callKeepStock || nakedCall ? null : (
@@ -2042,8 +2204,8 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       />
                       <NumberInput
                         inputId={`exit-rule-stop-loss-value-${exitLeg.id}`}
-                        label={plan.stopLossType === "stock_price_line" ? "損切り株価ライン" : plan.stopLossType === "loss_amount" ? "損切り損失額" : "損切り買戻し価格"}
-                        value={plan.stopLossType === "stock_price_line" ? plan.stopLossStockPriceUSD ?? 0 : plan.stopLossType === "loss_amount" ? (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? plan.stopLossAmountUSD ?? 0 : plan.stopLossAmountJPY ?? 0) : plan.stopLossBuybackPriceUSD ?? 0}
+                        label={plan.stopLossType === "stock_price_line" ? "上側の撤退株価ライン" : plan.stopLossType === "loss_amount" ? "上側の撤退損失額" : "上側の撤退買戻し価格"}
+                        value={plan.stopLossType === "stock_price_line" ? (plan.stopLossStockPriceUSD && plan.stopLossStockPriceUSD > 0 ? plan.stopLossStockPriceUSD : Number.NaN) : plan.stopLossType === "loss_amount" ? (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (plan.stopLossAmountUSD && plan.stopLossAmountUSD > 0 ? plan.stopLossAmountUSD : Number.NaN) : (plan.stopLossAmountJPY && plan.stopLossAmountJPY > 0 ? plan.stopLossAmountJPY : Number.NaN)) : (plan.stopLossBuybackPriceUSD && plan.stopLossBuybackPriceUSD > 0 ? plan.stopLossBuybackPriceUSD : Number.NaN)}
                         suffix={plan.stopLossType === "loss_amount" ? (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "USD" : "JPY") : plan.stopLossType === "stock_price_line" ? "USD" : "USD/株"}
                         min={0}
                         onChange={(value) =>
@@ -2070,7 +2232,8 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       onChange={(event) => updateExitOrderPlan(exitLeg.id, { memo: event.target.value })}
                     />
                   </label>
-                </div>
+                  </div>
+                </details>
               </div>
             );
           })}
@@ -2803,6 +2966,8 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                     <span className="text-slate-600">
                       {execution.confirmed
                         ? "この決済実績は確認済みです。"
+                        : execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending"
+                          ? "Saxoの決済約定証拠です。約定日時・対象脚・数量・価格を確認すると、精算情報待ちになります。損益・手数料・記帳額はまだ確定しません。"
                         : isSaxoHistoryCloseDraft
                           ? "Saxo履歴候補から作成された決済実績です。内容を確認してから正式保存してください。"
                           : "Saxo注文履歴で約定日、価格、数量、損益を確認してから確定してください。"}
@@ -2810,10 +2975,12 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                     <button
                       type="button"
                       className="rounded-md border border-emerald-300 bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-200 disabled:text-slate-500"
-                      disabled={!visibleResult || execution.confirmed || isInvalidSaxoHistoryCloseDraft || Boolean(uiInvalidReason)}
+                      disabled={(!(visibleResult || (execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending")) || execution.confirmed || isInvalidSaxoHistoryCloseDraft || Boolean(uiInvalidReason))}
                       onClick={() => confirmOptionCloseExecution(execution.id)}
                     >
-                      {execution.source === "saxo_history" ? "確認して正式保存" : "決済実績を確認済みにする"}
+                      {execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending"
+                        ? "決済約定を確認"
+                        : execution.source === "saxo_history" ? "確認して正式保存" : "決済実績を確認済みにする"}
                     </button>
                   </div>
                 </div>

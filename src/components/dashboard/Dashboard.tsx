@@ -1,6 +1,6 @@
 import type { RiskWarning, StockTransferEvent, TradeSimulation, WheelCycle, WorkflowTask } from "@/types/domain";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
-import { Fragment } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
@@ -16,7 +16,9 @@ import { getClosedSyntheticLegHistoryItems, getOptionCloseCompletion, getOptionL
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import type { FxQuote } from "@/lib/marketData";
 import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
-import type { CurrentOptionPricePreviewRow } from "@/domain/bulkOptionPrice";
+import { formatCurrentPriceStrikeDifference, formatCurrentPriceStrikePercent, getCurrentPriceStrikeDisplay } from "@/domain/currentPriceStrikeDisplay";
+import { getBulkApplicableTargetIds, getBulkOptionPricePreviewCounts, type CurrentOptionPricePreviewRow } from "@/domain/bulkOptionPrice";
+import { getSaxoExitOrderReviews, type SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
 
 const statusClassName = {
   planned: "bg-sky-100 text-sky-800",
@@ -33,22 +35,70 @@ function formatSignedUSD(value: number): string {
   return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
 }
 
+/** Rows for confirmed legs of a still-open synthetic parent.  These are history
+ * rows, deliberately rendered in the normal history tbody rather than as a
+ * second dashboard card. */
 function ClosedLegHistoryRows({ items, onOpen }: { items: ClosedSyntheticLegHistoryItem[]; onOpen?: (simulationId: string, executionId: string) => void }) {
   return <>{items.map((item) => {
-    const isN = item.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
-    const parentRemaining = getOptionLegCloseProgress(item.simulation).legs.filter((leg) => leg.legId !== item.legId).reduce((sum, leg) => sum + (leg.remainingContracts ?? 0), 0);
-    const primaryResults = item.closeResults.filter((result) => isN ? Number.isFinite(result.execution.realizedPnlUSD) : Number.isFinite(result.execution.brokerRealizedPnlJPY));
-    const primaryComplete = primaryResults.length === item.executions.length;
-    const totalPrimary = primaryResults.reduce((sum, result) => sum + (isN ? result.realizedPnlUSD : result.realizedPnlJPY), 0);
-    const referenceComplete = isN && item.closeResults.length === item.executions.length && item.executions.every((execution) => Number.isFinite(execution.brokerExchangeRateJPY ?? execution.fxRateJPY) && (execution.brokerExchangeRateJPY ?? execution.fxRateJPY)! > 0);
-    const label = item.leg.type === "call" ? "C買い" : "P売り";
-    const firstResult = item.closeResults[0]; const action = () => onOpen?.(item.simulationId, item.executionIds[0]);
-    return <tr key={item.id} data-history-kind="closed_leg" className="cursor-pointer border-b border-slate-100 bg-slate-50 text-slate-600 hover:bg-slate-100" onClick={action}>
-      <td className="py-3 pr-3 font-bold text-slate-950">{getSimulationTickerDisplayLabel(item.simulation)}</td><td className="py-3 pr-3"><span className="rounded bg-slate-200 px-2 py-1 text-xs font-bold text-slate-700">決済済み・親戦略継続中</span></td><td className="py-3 pr-3">{item.simulation.accountCode} / {item.simulation.accountCurrency}</td><td className="py-3 pr-3 font-semibold">Synthetic Forward内 {label}</td><td className="numeric-input py-3 pr-3 text-right">{item.leg.type === "call" ? "C" : "P"} {formatUSD(item.leg.strikeUSD)}</td><td className="py-3 pr-3">{item.leg.expiryDate}</td>
-      <td className="numeric-input py-3 pr-3 text-right">{primaryComplete ? <><span className="block">{isN ? formatSignedUSD(totalPrimary) : formatJPY(totalPrimary)}</span><span className="block text-[11px] text-slate-500">建玉時/決済時 {firstResult ? `${formatUSD(firstResult.entryPremiumUSD / (100 * Math.max(1, item.executions[0].contracts)))} / ${item.executions[0].closeKind === "expired" ? "満期" : item.executions[0].closePriceUSD === undefined ? "未確認" : formatUSD(item.executions[0].closePriceUSD)}` : "未確認"}</span></> : <span>実現損益 未確認</span>}{isN ? <span className="block text-[11px] text-slate-500">{referenceComplete ? `参考 ${formatJPY(item.closeResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0))}` : "参考JPY未確認"}</span> : null}</td>
-      <td className="numeric-input py-3 pr-3 text-right">{firstResult ? (isN ? formatUSD(firstResult.denominatorUSD ?? 0) : formatJPY(firstResult.denominatorJPY)) : "未確認"}</td><td className="numeric-input py-3 pr-3 text-right">{primaryComplete && firstResult ? formatPct(firstResult.annualReturnPct) : "未確認"}</td><td className="py-3 pr-3 text-right text-xs font-bold text-emerald-700">{primaryComplete ? "警告なし" : `${isN ? "USD" : "JPY"}実現損益 未確認`}</td><td className="py-3 pr-3 text-xs">親戦略は継続中（{item.leg.type === "call" ? "P売り" : "C買い"}{parentRemaining}枚残存）<span className="block text-slate-500">決済日 {item.closeDate}</span></td><td className="py-3 pr-3 text-right"><button type="button" className="rounded-md border border-teal-300 bg-white px-2 py-1 text-xs font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => { event.stopPropagation(); action(); }}>決済実績を確認</button></td>
-    </tr>;
-  })}</>;
+      const isN = item.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+      const parentRemaining = getOptionLegCloseProgress(item.simulation).legs.filter((leg) => leg.legId !== item.legId).reduce((sum, leg) => sum + (leg.remainingContracts ?? 0), 0);
+      const primaryResults = item.closeResults.filter((result) => isN ? Number.isFinite(result.execution.realizedPnlUSD) : Number.isFinite(result.execution.brokerRealizedPnlJPY));
+      const primaryComplete = primaryResults.length === item.executions.length;
+      const totalPrimary = primaryResults.reduce((sum, result) => sum + (isN ? result.realizedPnlUSD : result.realizedPnlJPY), 0);
+      const referenceComplete = isN && item.closeResults.length === item.executions.length && item.executions.every((execution) => Number.isFinite(execution.brokerExchangeRateJPY ?? execution.fxRateJPY) && (execution.brokerExchangeRateJPY ?? execution.fxRateJPY)! > 0);
+      const label = item.leg.type === "call" ? "C買い" : "P売り";
+      const firstResult = item.closeResults[0];
+      const action = () => onOpen?.(item.simulationId, item.executionIds[0]);
+      return <tr
+        key={item.id}
+        data-history-kind="closed_leg"
+        className="cursor-pointer border-b border-slate-100 bg-slate-50 text-slate-600 hover:bg-slate-100"
+        onClick={action}
+      >
+        <td className="py-3 pr-3 font-bold text-slate-950">{getSimulationTickerDisplayLabel(item.simulation)}</td>
+        <td className="py-3 pr-3"><span className="rounded bg-slate-200 px-2 py-1 text-xs font-bold text-slate-700">決済済み・親戦略継続中</span></td>
+        <td className="py-3 pr-3">{item.simulation.accountCode} / {item.simulation.accountCurrency}</td>
+        <td className="py-3 pr-3 font-semibold">Synthetic Forward内 {label}</td>
+        <td className="numeric-input py-3 pr-3 text-right">{item.leg.type === "call" ? "C" : "P"} {formatUSD(item.leg.strikeUSD)}</td>
+        <td className="py-3 pr-3">{item.leg.expiryDate}</td>
+        <td className="numeric-input py-3 pr-3 text-right">
+          {primaryComplete ? <><span className="block">{isN ? formatSignedUSD(totalPrimary) : formatJPY(totalPrimary)}</span><span className="block text-[11px] text-slate-500">建玉時/決済時 {firstResult ? `${formatUSD(firstResult.entryPremiumUSD / (100 * Math.max(1, item.executions[0].contracts)))} / ${item.executions[0].closeKind === "expired" ? "満期" : item.executions[0].closePriceUSD === undefined ? "未確認" : formatUSD(item.executions[0].closePriceUSD)}` : "未確認"}</span></> : <span>実現損益 未確認</span>}
+          {isN ? <span className="block text-[11px] text-slate-500">{referenceComplete ? `参考 ${formatJPY(item.closeResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0))}` : "参考JPY未確認"}</span> : null}
+        </td>
+        <td className="numeric-input py-3 pr-3 text-right">{firstResult ? (isN ? formatUSD(firstResult.denominatorUSD ?? 0) : formatJPY(firstResult.denominatorJPY)) : "未確認"}</td>
+        <td className="numeric-input py-3 pr-3 text-right">{primaryComplete && firstResult ? formatPct(firstResult.annualReturnPct) : "未確認"}</td>
+        <td className="py-3 pr-3 text-right text-xs font-bold text-emerald-700">{primaryComplete ? "警告なし" : `${isN ? "USD" : "JPY"}実現損益 未確認`}</td>
+        <td className="py-3 pr-3 text-xs">親戦略は継続中（{item.leg.type === "call" ? "P売り" : "C買い"}{parentRemaining}枚残存）<span className="block text-slate-500">決済日 {item.closeDate}</span></td>
+        <td className="py-3 pr-3 text-right"><button type="button" className="rounded-md border border-teal-300 bg-white px-2 py-1 text-xs font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => { event.stopPropagation(); action(); }}>決済実績を確認</button></td>
+      </tr>;
+    })}</>;
+}
+
+function BulkOptionPricePreview({ rows, simulations, referenceConfirmed, onReferenceConfirmedChange, onApply }: { rows: CurrentOptionPricePreviewRow[]; simulations: TradeSimulation[]; referenceConfirmed: boolean; onReferenceConfirmedChange: (checked: boolean) => void; onApply?: () => void }) {
+  const counts = getBulkOptionPricePreviewCounts(rows);
+  const applicable = getBulkApplicableTargetIds(rows, simulations, referenceConfirmed);
+  const ready = applicable.size;
+  const applyLabel = counts.ready === 0 && referenceConfirmed
+    ? `確認済み参考価格 ${ready}脚を一括反映`
+    : referenceConfirmed && counts.confirmableReference > 0
+      ? `通常${counts.ready}脚 + 確認済み参考価格${counts.confirmableReference}脚を一括反映`
+      : `取得成功分${ready}脚を一括反映`;
+  return <div className="mt-3 overflow-x-auto">
+    <table className="w-full min-w-[760px] text-xs">
+      <thead><tr className="border-b text-left text-slate-500"><th className="py-1">銘柄 / 脚</th><th>方向</th><th className="text-right">保存中</th><th className="text-right">Bid / Ask / Mid / Last</th><th className="text-right">採用候補</th><th>状態</th></tr></thead>
+      <tbody>{rows.map((row) => <tr className="border-b border-slate-100" key={row.target.targetId}>
+        <td className="py-1.5">{row.target.ticker} / {row.target.optionType === "call" ? "C" : "P"} {row.target.strike} {row.target.expiry}</td>
+        <td>{row.target.side === "buy" ? "売却候補" : "買戻し候補"}</td>
+        <td className="text-right">{row.target.savedPriceUSD ?? "—"}</td>
+        <td className="text-right">{[row.candidate?.bid, row.candidate?.ask, row.candidate?.mid, row.candidate?.last].map((v) => v ?? "—").join(" / ")}</td>
+        <td className="text-right">{row.selectedPriceUSD ?? "—"}{row.selectedField ? ` (${row.selectedField})` : ""}</td>
+        <td>{row.reason}{row.selectedField ? ` / ${row.selectedField} ${row.selectedField === "bid" ? row.candidate?.quoteDiagnostics?.priceTypeBid ?? "種別未取得" : row.candidate?.quoteDiagnostics?.priceTypeAsk ?? "種別未取得"}` : ""}{row.candidate?.fetchedAt ? ` / ${row.candidate.fetchedAt}` : ""}</td>
+      </tr>)}</tbody>
+    </table>
+    <p className="mt-2 text-xs text-slate-600">取得成功 {counts.successful}脚 / 通常 {counts.ready}脚 / 参考値・要確認 {counts.confirmableReference}脚 / 反映不可 {counts.unavailable}脚</p>
+    {counts.confirmableReference > 0 ? <label className="mt-2 flex items-start gap-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-950"><input type="checkbox" checked={referenceConfirmed} onChange={(event) => onReferenceConfirmedChange(event.target.checked)} /><span>表示中のOldIndicative {counts.confirmableReference}脚を取得時点の参考価格として使用することを確認しました</span></label> : null}
+    <div className="mt-2 flex items-center gap-3"><button type="button" disabled={ready === 0} className="rounded bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300" onClick={onApply}>{applyLabel}</button><span className="text-xs text-slate-500">合成建玉は二脚がそろう場合だけ同時に反映します。</span></div>
+  </div>;
 }
 
 export function getSimulationTickerDisplayLabel(simulation: TradeSimulation): string {
@@ -80,12 +130,23 @@ export function Dashboard({
   onCurrentEstimateAction,
   journalFocusSimulationId,
   onClearJournalFocus,
+  positionFocusSimulationId,
+  onPositionFocus,
+  onClearPositionFocus,
   currentEstimateFxQuote,
   onRefreshFx,
   bulkOptionPricePreview,
   bulkOptionPriceMessage,
   bulkOptionPriceAvailable = false,
   onFetchBulkOptionPrices,
+  onApplyBulkOptionPrices,
+  bulkOptionPriceLoading = false,
+  bulkOptionPriceProgress = { total: 0, completed: 0 },
+  bulkOptionPriceReferenceConfirmed = false,
+  onBulkOptionPriceReferenceConfirmedChange,
+  onBulkOptionPriceDialogClose,
+  saxoOrders = [],
+  onSaxoExitOrderAction,
 }: {
   simulations: TradeSimulation[];
   stockTransfers?: StockTransferEvent[];
@@ -105,21 +166,50 @@ export function Dashboard({
   onCurrentEstimateAction?: (simulationId: string, legId?: string, field?: string) => void;
   journalFocusSimulationId?: string | null;
   onClearJournalFocus?: () => void;
+  /** Ephemeral detail view. It is intentionally not persisted with simulations. */
+  positionFocusSimulationId?: string | null;
+  onPositionFocus?: (simulationId: string) => void;
+  onClearPositionFocus?: () => void;
   currentEstimateFxQuote?: FxQuote | null;
   onRefreshFx?: () => void;
   bulkOptionPricePreview?: CurrentOptionPricePreviewRow[] | null;
   bulkOptionPriceMessage?: string;
   bulkOptionPriceAvailable?: boolean;
   onFetchBulkOptionPrices?: () => void;
+  onApplyBulkOptionPrices?: () => void;
+  bulkOptionPriceLoading?: boolean;
+  bulkOptionPriceProgress?: { total: number; completed: number };
+  bulkOptionPriceReferenceConfirmed?: boolean;
+  onBulkOptionPriceReferenceConfirmedChange?: (checked: boolean) => void;
+  onBulkOptionPriceDialogClose?: () => void;
+  saxoOrders?: SaxoApiOrderSnapshot[];
+  onSaxoExitOrderAction?: (simulationId: string, legId: string) => void;
 }) {
+  const [isBulkDialogOpen, setIsBulkDialogOpen] = useState(false);
+  const bulkDialogCloseRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!isBulkDialogOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    bulkDialogCloseRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") { setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); } };
+    window.addEventListener("keydown", onKeyDown);
+    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", onKeyDown); };
+  }, [isBulkDialogOpen, onBulkOptionPriceDialogClose]);
   const showHistory = historyOpen;
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "entry_confirmation" || simulation.status === "open");
   const historySimulations = simulations.filter((simulation) => endedStatuses.has(simulation.status));
   const closedLegHistoryItems = !journalFocusSimulationId ? getClosedSyntheticLegHistoryItems(simulations) : [];
-  const focusedSimulation = journalFocusSimulationId
+  const exitOrderReviews = getSaxoExitOrderReviews(simulations, saxoOrders);
+  const pendingExitOrderReviews = exitOrderReviews.filter((review) => review.status === "pending");
+  const confirmedExitOrderReviews = exitOrderReviews.filter((review) => review.status === "confirmed");
+  const focusedSimulation = positionFocusSimulationId
+    ? simulations.find((simulation) => simulation.id === positionFocusSimulationId)
+    : journalFocusSimulationId
     ? simulations.find((simulation) => simulation.id === journalFocusSimulationId)
     : undefined;
-  const isJournalFocusMode = Boolean(focusedSimulation);
+  const isPositionFocusMode = Boolean(positionFocusSimulationId && focusedSimulation);
+  const isJournalFocusMode = Boolean(!isPositionFocusMode && focusedSimulation);
   const visibleSimulations = focusedSimulation ? [focusedSimulation] : [...currentSimulations, ...(showHistory ? historySimulations : [])];
   const hiddenByJournalFocusCount = focusedSimulation ? Math.max(0, simulations.length - 1) : 0;
 
@@ -140,7 +230,12 @@ export function Dashboard({
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
         <div className="flex flex-wrap items-center gap-2">
-          {isJournalFocusMode && focusedSimulation ? (
+          {isPositionFocusMode && focusedSimulation ? (
+            <>
+              <span className="font-semibold text-slate-900">{getSimulationTickerDisplayLabel(focusedSimulation)}を確認中</span>
+              {hiddenByJournalFocusCount > 0 ? <span className="text-slate-500">他{hiddenByJournalFocusCount}件を非表示</span> : null}
+            </>
+          ) : isJournalFocusMode && focusedSimulation ? (
             <>
               <span className="font-semibold text-slate-900">根拠入力中: {getJournalFocusLabel(focusedSimulation)}</span>
               {hiddenByJournalFocusCount > 0 ? <span className="text-slate-500">他{hiddenByJournalFocusCount}件は折りたたみ中</span> : null}
@@ -152,7 +247,17 @@ export function Dashboard({
             </>
           )}
         </div>
-        <div className="flex items-center gap-2"><button type="button" disabled={!bulkOptionPriceAvailable} title="公開版ではSaxoローカルAPIに接続しません" className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white disabled:bg-slate-400" onClick={onFetchBulkOptionPrices}>価格を一括更新</button>{isJournalFocusMode ? (
+        <div className="flex flex-wrap items-center gap-2">
+        {bulkOptionPriceAvailable ? <button type="button" title="取得時点の現在決済候補価格をread-onlyで確認します" aria-description="決済実績・状態・数量は変更しません" disabled={bulkOptionPriceLoading} className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white disabled:bg-slate-400" onClick={() => { setIsBulkDialogOpen(true); onFetchBulkOptionPrices?.(); }}>{bulkOptionPriceLoading ? `${bulkOptionPriceProgress.total}脚中 ${bulkOptionPriceProgress.completed}脚` : "価格を一括更新"}</button> : <span className="text-xs text-amber-700">SaxoローカルAPIが旧版です。ローカルAPIを更新して再起動してください。個別取得は利用できます。</span>}
+        {isPositionFocusMode ? (
+          <button
+            className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            onClick={onClearPositionFocus}
+          >
+            <ChevronDown size={14} />
+            全建玉一覧に戻る
+          </button>
+        ) : isJournalFocusMode ? (
           <button
             className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
             onClick={onClearJournalFocus}
@@ -168,9 +273,11 @@ export function Dashboard({
             {showHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             履歴 終了建玉{historySimulations.length}件・継続中戦略の決済済み脚{closedLegHistoryItems.length}件を{showHistory ? "畳む" : "表示"}
           </button>
-        )}</div>
+        )}
+        </div>
       </div>
-      {bulkOptionPriceMessage ? <p className="mt-2 text-right text-xs text-slate-500">{bulkOptionPriceMessage}</p> : null}
+      {bulkOptionPriceMessage && !isBulkDialogOpen ? <p className="mt-2 text-right text-xs text-slate-500">{bulkOptionPriceMessage}</p> : null}
+      {isBulkDialogOpen ? <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 pt-12" role="presentation"><div role="dialog" aria-modal="true" aria-labelledby="bulk-option-price-dialog-title" className="w-full max-w-5xl rounded-lg bg-white p-4 shadow-xl"><div className="flex items-start justify-between gap-3"><div><h3 id="bulk-option-price-dialog-title" className="text-base font-bold">現在オプション価格を一括更新</h3><p className="mt-1 text-xs text-slate-600">取得時点の現在決済候補価格。決済実績・状態・数量は変更しません。</p></div><button ref={bulkDialogCloseRef} type="button" aria-label="現在オプション価格の確認を閉じる" className="rounded border px-2 py-1 text-xs" onClick={() => { setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }}>閉じる</button></div>{bulkOptionPriceLoading ? <p className="mt-4 text-sm">候補価格を取得中...</p> : null}{bulkOptionPriceMessage ? <p className="mt-3 text-xs text-slate-600">{bulkOptionPriceMessage}</p> : null}{bulkOptionPricePreview?.length ? <BulkOptionPricePreview rows={bulkOptionPricePreview} simulations={simulations} referenceConfirmed={bulkOptionPriceReferenceConfirmed} onReferenceConfirmedChange={onBulkOptionPriceReferenceConfirmedChange ?? (() => {})} onApply={() => { onApplyBulkOptionPrices?.(); setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }} /> : null}</div></div> : null}
       {simulations.length === 0 ? (
         <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-5 text-sm leading-6 text-slate-600">
           このワークスペースにはまだ建玉がありません。上部の「新規建玉」から、Saxo画面を見ながら建玉を登録できます。
@@ -189,7 +296,7 @@ export function Dashboard({
               <th className="py-2 pr-3">状態</th>
               <th className="py-2 pr-3">口座</th>
               <th className="py-2 pr-3">戦略</th>
-              <th className="py-2 pr-3 text-right">権利行使価格</th>
+              <th className="py-2 pr-3 text-right">現在株価 / 権利行使価格</th>
               <th className="py-2 pr-3">満期</th>
               <th className="py-2 pr-3 text-right">プレミアム</th>
               <th className="py-2 pr-3 text-right">使用分母 / 実績分母</th>
@@ -243,21 +350,24 @@ export function Dashboard({
                 coveredCallCoverage,
               });
               const workflowTasks = getWorkflowTasks(simulationWithAccount);
+              const simulationExitOrderReviews = pendingExitOrderReviews.filter((review) => review.simulationId === simulation.id);
+              const simulationConfirmedExitOrderReviews = confirmedExitOrderReviews.filter((review) => review.simulationId === simulation.id);
               const primaryTask = getPrimaryWorkflowTask(simulationWithAccount);
               const closeCompletion = getOptionCloseCompletion(simulationWithAccount);
               const partialCloseSummary = closeCompletion.state === "partial"
-                ? getOptionLegCloseProgress(simulationWithAccount).legs.map((leg) => {
-                    const name = leg.type === "call" ? "C買い" : "P売り";
-                    return leg.state === "closed" ? `${name}${leg.confirmedClosedContracts}枚決済済み` : `${name}${leg.remainingContracts}枚残り`;
-                  }).join(" / ")
+                ? getOptionLegCloseProgress(simulationWithAccount).legs
+                    .map((leg) => {
+                      const name = `${leg.type === "call" ? "C買い" : "P売り"}`;
+                      return leg.state === "closed"
+                        ? `${name}${leg.confirmedClosedContracts}枚決済済み`
+                        : `${name}${leg.remainingContracts}枚残り`;
+                    })
+                    .join(" / ")
                 : null;
               const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
               const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
               const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
-              const strikeLabel = [
-                callLeg ? `C ${formatUSD(callLeg.strikeUSD)}` : "",
-                putLeg ? `P ${formatUSD(putLeg.strikeUSD)}` : "",
-              ].filter(Boolean).join(" / ") || "-";
+              const currentPriceStrikeDisplay = getCurrentPriceStrikeDisplay(simulation);
               const tickerLabel = getSimulationTickerDisplayLabel(simulation);
               const blockingCount = countableWarnings.filter((warning) => warning.blocking).length;
               const attentionCount = countableWarnings.filter((warning) => !warning.blocking).length;
@@ -270,13 +380,29 @@ export function Dashboard({
               const stockAcquisitionSummary = getStockAcquisitionSummary(simulation);
               const journalStatusLabel = getJournalStatusLabel(simulation.entryRationaleJournal, simulation.status);
               const journalStatusTone = getJournalStatusTone(journalStatusLabel);
-              const isFirstHistory = !isJournalFocusMode && showHistory && index === currentSimulations.length && historySimulations.length > 0;
+              const isFirstHistory = !isJournalFocusMode && !isPositionFocusMode && showHistory && index === currentSimulations.length && historySimulations.length > 0;
               const isSyntheticAnnualRateNotApplicable = premiumDisplay.annualReturnApplicability === "not_applicable_synthetic";
               const isNStandaloneShortPut = simulation.strategyType === "short_put" && isNAccountRow && putLeg?.type === "put" && putLeg.side === "sell";
-              const shortPutPolicy = isNStandaloneShortPut && (putLeg.assignmentPolicy === "accept" || putLeg.assignmentPolicy === "avoid") ? putLeg.assignmentPolicy : "unknown";
+              const isFocusedPositionRow = isPositionFocusMode && simulation.id === focusedSimulation?.id;
+              const togglePositionFocus = () => {
+                if (isHistoryRow) {
+                  onSelect(simulation.id);
+                  return;
+                }
+                if (isFocusedPositionRow) {
+                  onClearPositionFocus?.();
+                  return;
+                }
+                onPositionFocus?.(simulation.id);
+              };
+              const shortPutPolicy = isNStandaloneShortPut && (putLeg.assignmentPolicy === "accept" || putLeg.assignmentPolicy === "avoid")
+                ? putLeg.assignmentPolicy
+                : "unknown";
               const shortPutAvoidsAssignment = shortPutPolicy === "avoid";
               const showsShortPutCurrentPnl = isNStandaloneShortPut && shortPutPolicy !== "avoid";
-              const usesCurrentEstimate = !isHistoryRow && currentEstimate.kind !== "not_applicable" && (simulation.strategyType === "synthetic_forward" || simulation.strategyType === "long_call" || simulation.strategyType === "long_put" || shortPutAvoidsAssignment);
+              const usesCurrentEstimate = !isHistoryRow && currentEstimate.kind !== "not_applicable" && (
+                simulation.strategyType === "synthetic_forward" || simulation.strategyType === "long_call" || simulation.strategyType === "long_put" || shortPutAvoidsAssignment
+              );
               const annualReturnLabel =
                 isSyntheticAnnualRateNotApplicable
                   ? "適用外"
@@ -297,20 +423,36 @@ export function Dashboard({
                 <Fragment key={simulation.id}>
                 {isFirstHistory ? (
                   <>
-                    <tr className="bg-slate-100"><td colSpan={12} className="py-2 pr-3 text-xs font-bold text-slate-600">履歴: 決済済み・権利行使済み・満期終了</td></tr>
+                    <tr className="bg-slate-100">
+                      <td colSpan={12} className="py-2 pr-3 text-xs font-bold text-slate-600">
+                        履歴: 決済済み・権利行使済み・満期終了
+                      </td>
+                    </tr>
                     <ClosedLegHistoryRows items={closedLegHistoryItems} onOpen={onHistoryLegAction} />
                   </>
                 ) : null}
                 <tr
                   key={simulation.id}
-                  className={`cursor-pointer border-b border-slate-100 ${
-                    simulation.id === selectedId
-                      ? "bg-teal-50"
+                    tabIndex={!isHistoryRow ? 0 : undefined}
+                    aria-selected={!isHistoryRow ? isFocusedPositionRow : undefined}
+                    aria-pressed={!isHistoryRow ? isFocusedPositionRow : undefined}
+                  aria-label={!isHistoryRow ? `${tickerLabel}の詳細を${isFocusedPositionRow ? "閉じる" : "表示する"}` : undefined}
+                  className={`border-b border-slate-100 outline-none transition-colors ${
+                    isFocusedPositionRow
+                      ? "cursor-pointer bg-emerald-100 ring-2 ring-inset ring-emerald-500"
                       : endedStatuses.has(simulation.status)
-                        ? "bg-slate-50 text-slate-500 hover:bg-slate-100"
-                        : "hover:bg-slate-50"
+                        ? "bg-slate-50 text-slate-500"
+                        : !isHistoryRow
+                          ? "cursor-pointer bg-white hover:bg-emerald-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500"
+                          : "bg-white"
                   }`}
-                  onClick={() => onSelect(simulation.id)}
+                  onClick={togglePositionFocus}
+                  onKeyDown={(event) => {
+                    if (!isHistoryRow && (event.key === "Enter" || event.key === " ")) {
+                      event.preventDefault();
+                      togglePositionFocus();
+                    }
+                  }}
                 >
                   <td className="py-3 pr-3 font-bold text-slate-950">
                     <span className="block">{tickerLabel}</span>
@@ -373,7 +515,25 @@ export function Dashboard({
                     ) : null}
                     {compositeFunding ? <div className={`mt-1 text-xs ${compositeFunding.status === "sufficient" ? "text-emerald-700" : "text-amber-700"}`}>P割当資金 {formatUSD(compositeFunding.requiredUSD)}: {compositeFunding.status === "sufficient" ? "充足" : compositeFunding.status === "insufficient" ? "不足" : "未確認"}</div> : null}
                   </td>
-                  <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">{strikeLabel}</td>
+                  <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">
+                    {currentPriceStrikeDisplay.currentPriceUSD === undefined ? (
+                      <>
+                        <span className="block text-amber-800">現在株価 未取得</span>
+                        <span className="block text-[11px] font-normal text-slate-500">上部の「価格を一括更新」で取得</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="block font-bold text-slate-950">現在株価 {formatUSD(currentPriceStrikeDisplay.currentPriceUSD)}</span>
+                        {currentPriceStrikeDisplay.legs.map((leg) => (
+                          <span key={leg.id} className="block text-xs font-semibold text-slate-700">
+                            {leg.strikeUSD === undefined ? `${leg.label} 権利行使価格 未取得` : (
+                              <>{leg.label} {formatUSD(leg.strikeUSD)}{formatCurrentPriceStrikeDifference(leg.differenceUSD) && formatCurrentPriceStrikePercent(leg.differencePct) ? ` / ${formatCurrentPriceStrikeDifference(leg.differenceUSD)} / ${formatCurrentPriceStrikePercent(leg.differencePct)}` : ""}</>
+                            )}
+                          </span>
+                        ))}
+                      </>
+                    )}
+                  </td>
                   <td className="py-3 pr-3 text-slate-700">{simulation.expiryDate}</td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {!premiumDisplay.hasPremiumInput && !isHistoryRow ? (
@@ -432,11 +592,78 @@ export function Dashboard({
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {usesCurrentEstimate ? (
-                      <span className="block text-[11px] font-bold text-slate-500">{currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel ? `${currentEstimate.evaluatedLegLabel}残存の現在決済年率` : "現在決済年率"}</span>
+                      <span className="block text-[11px] font-bold text-slate-500">
+                        {currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel
+                          ? `${currentEstimate.evaluatedLegLabel}残存の現在決済年率`
+                          : "現在決済年率"}
+                      </span>
                     ) : !isHistoryRow && premiumDisplay.annualReturnPct !== undefined ? (
                       <span className="block text-[11px] font-bold text-slate-500">プレミアム年率</span>
                     ) : null}
-                    {usesCurrentEstimate && currentEstimate.kind === "available" ? <><span className={`block ${currentEstimate.annualizedReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{currentEstimate.annualizedReturnPct >= 0 ? "+" : ""}{formatPct(currentEstimate.annualizedReturnPct)}</span>{currentEstimate.currency === "JPY" ? <><span className={`block text-[11px] ${currentEstimate.profitJPY >= 0 ? "text-emerald-700" : "text-red-700"}`}>概算損益 {formatJPY(currentEstimate.profitJPY, { signed: true })} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span><span className="block text-[10px] text-slate-500">{formatCurrentEstimateFxEvidence(currentEstimate.fx)}</span></> : <><span className={`block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>{currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel ? `${currentEstimate.evaluatedLegLabel}残存の概算損益` : simulation.strategyType === "synthetic_forward" ? "合算概算損益" : "概算損益"} {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span>{currentEstimateIsRemainingLeg ? <span className="block text-[10px] text-slate-500">他方の脚は決済済み・残存脚のみ評価中</span> : null}</>}</> : usesCurrentEstimate && currentEstimate.kind === "missing" ? <><span className="block text-slate-500">未計算</span><span className="block text-[11px] text-slate-500">{currentEstimate.reason}</span>{currentEstimate.reason === "為替レート 未確認" ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={onRefreshFx}>為替を取得</button> : ["exit_price", "close_fee"].includes(currentEstimate.missingRequirements[0]?.field ?? "") ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={() => onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field)}>不足情報を確認</button> : null}</> : <>{annualReturnLabel}{showsShortPutCurrentPnl && currentEstimate.kind === "available" && currentEstimate.currency !== "JPY" ? <span className={`mt-1 block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>現在買戻し概算損益 {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span> : showsShortPutCurrentPnl && currentEstimate.kind === "missing" ? <><span className="mt-1 block text-[11px] text-slate-500">現在買戻し概算損益 未計算 / {currentEstimate.reason}</span>{["exit_price", "close_fee"].includes(currentEstimate.missingRequirements[0]?.field ?? "") ? <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => { event.stopPropagation(); onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field); }}>不足情報を確認</button> : null}</> : null}{isSyntheticAnnualRateNotApplicable ? <span className="mt-1 block text-left text-[11px] font-medium leading-4 text-slate-500">建玉時ネット額はプレミアム年率として評価しません</span> : null}</>}
+                    {usesCurrentEstimate && currentEstimate.kind === "available" ? (
+                      <>
+                        <span className={`block ${currentEstimate.annualizedReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{currentEstimate.annualizedReturnPct >= 0 ? "+" : ""}{formatPct(currentEstimate.annualizedReturnPct)}</span>
+                        {currentEstimate.currency === "JPY" ? (
+                          <>
+                            <span className={`block text-[11px] ${currentEstimate.profitJPY >= 0 ? "text-emerald-700" : "text-red-700"}`}>概算損益 {formatJPY(currentEstimate.profitJPY, { signed: true })} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}</span>
+                            <span className="block text-[10px] text-slate-500">{formatCurrentEstimateFxEvidence(currentEstimate.fx)}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className={`block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                              {currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel
+                                ? `${currentEstimate.evaluatedLegLabel}残存の概算損益`
+                                : simulation.strategyType === "synthetic_forward" ? "合算概算損益" : "概算損益"} {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}
+                            </span>
+                            {currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel ? (
+                              <span className="block text-[10px] text-slate-500">他方の脚は決済済み・残存脚のみ評価中</span>
+                            ) : null}
+                          </>
+                        )}
+                      </>
+                    ) : usesCurrentEstimate && currentEstimate.kind === "missing" ? (
+                      <>
+                        <span className="block text-slate-500">未計算</span>
+                        <span className="block text-[11px] text-slate-500">{currentEstimate.reason}</span>
+                        {currentEstimate.reason === "為替レート 未確認" ? (
+                          <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={onRefreshFx}>為替を取得</button>
+                        ) : currentEstimate.missingRequirements[0]?.field === "exit_price" || currentEstimate.missingRequirements[0]?.field === "close_fee" ? (
+                          <button
+                            type="button"
+                            className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
+                            onClick={() => onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field)}
+                          >
+                            不足情報を確認
+                          </button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        {annualReturnLabel}
+                        {showsShortPutCurrentPnl && currentEstimate.kind === "available" && currentEstimate.currency !== "JPY" ? (
+                          <span className={`mt-1 block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                            現在買戻し概算損益 {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}
+                          </span>
+                        ) : showsShortPutCurrentPnl && currentEstimate.kind === "missing" ? (
+                          <>
+                            <span className="mt-1 block text-[11px] text-slate-500">現在買戻し概算損益 未計算 / {currentEstimate.reason}</span>
+                            {currentEstimate.missingRequirements[0]?.field === "exit_price" || currentEstimate.missingRequirements[0]?.field === "close_fee" ? (
+                              <button
+                                type="button"
+                                className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field);
+                                }}
+                              >
+                                不足情報を確認
+                              </button>
+                            ) : null}
+                          </>
+                        ) : null}
+                        {isSyntheticAnnualRateNotApplicable ? <span className="mt-1 block text-left text-[11px] font-medium leading-4 text-slate-500">建玉時ネット額はプレミアム年率として評価しません</span> : null}
+                      </>
+                    )}
                     {isHistoryRow ? <span className="mt-1 block text-[11px] font-semibold text-slate-500">税前 / 税後</span> : null}
                     {!isHistoryRow && premiumDisplay.coveredCallAssignmentEstimate ? (
                       <span className="mt-2 block rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-sky-950">
@@ -498,6 +725,32 @@ export function Dashboard({
                   </td>
                   <td className="py-3 pr-3">
                     {partialCloseSummary ? <p className="mb-1 text-[11px] font-semibold leading-4 text-slate-600">一部決済済み: {partialCloseSummary}</p> : null}
+                    {simulationExitOrderReviews.map((review) => {
+                      const prices = [review.takeProfitOrder?.price, review.upperExitOrder?.stopPrice ?? review.upperExitOrder?.price]
+                        .filter((price): price is number => typeof price === "number" && Number.isFinite(price) && price > 0)
+                        .map((price) => formatUSD(price));
+                      return (
+                        <button
+                          key={`${review.simulationId}:${review.legId}`}
+                          type="button"
+                          className="mb-1 w-full rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-left text-xs font-bold text-sky-900 hover:bg-sky-100"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onSaxoExitOrderAction?.(review.simulationId, review.legId);
+                          }}
+                        >
+                          Saxo OCO確認待ち / {prices.join(" / ") || "価格未取得"}を確認
+                        </button>
+                      );
+                    })}
+                    {simulationConfirmedExitOrderReviews.map((review) => (
+                      <span
+                        key={`${review.simulationId}:${review.legId}:confirmed`}
+                        className="mb-1 inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800"
+                      >
+                        Saxo OCO照合済み
+                      </span>
+                    ))}
                     {primaryTask.type === "complete" ? (
                       <span
                         className="inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800"
@@ -505,7 +758,30 @@ export function Dashboard({
                       >
                         完了（追加操作なし）
                       </span>
-                    ) : <div className="grid gap-1">{workflowTasks.map((workflowTask) => <button key={workflowTask.id} type="button" className={`rounded-md border px-2 py-1 text-left text-xs font-bold ${workflowTask.severity === "danger" ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100" : workflowTask.severity === "warning" ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100" : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"}`} title={workflowTask.detail} onClick={(event) => { event.stopPropagation(); onWorkflowTaskAction?.(simulation.id, workflowTask); }}>{workflowTask.label}</button>)}</div>}
+                    ) : (
+                      <div className="grid gap-1">
+                        {workflowTasks.map((workflowTask) => (
+                          <button
+                            key={workflowTask.id}
+                            type="button"
+                            className={`rounded-md border px-2 py-1 text-left text-xs font-bold ${
+                              workflowTask.severity === "danger"
+                                ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
+                                : workflowTask.severity === "warning"
+                                  ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                                  : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"
+                            }`}
+                            title={workflowTask.detail}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onWorkflowTaskAction?.(simulation.id, workflowTask);
+                            }}
+                          >
+                            {workflowTask.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </td>
                   <td className="py-3 pr-3 text-right">
                     <button

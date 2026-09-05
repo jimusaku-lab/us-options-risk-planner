@@ -14,7 +14,10 @@ import {
   findSaxoSyntheticForwardSimulationForPair,
   resolveSaxoSyntheticForwardFillEvidence,
   findOrderCandidatesForLeg,
+  getSaxoExitOrderReviews,
   getSaxoHistoryCandidateKeys,
+  getSaxoHistoryInstanceKeys,
+  getSaxoHistoryPersistentKeys,
   getSaxoHistoryCandidateTarget,
   isFinalOrderActivityClose,
   isSaxoHistoryAutoCreatableClose,
@@ -81,7 +84,12 @@ describe("Saxo read-only account sync", () => {
     const effective = createEffectiveSaxoHistoryCandidates([activity, trade, closed]);
     expect(effective).toHaveLength(1);
     expect(effective[0]).toMatchObject({ id: activity.id, kind: "order_activity", accountingState: "arrived", profitLossAccountCurrency: 12 });
-    expect(getSaxoHistoryCandidateKeys(effective[0])).toEqual(expect.arrayContaining([activity.id, trade.id, closed.id]));
+    expect(getSaxoHistoryCandidateKeys(effective[0])).toEqual(expect.arrayContaining([
+      getSaxoHistoryStableKey(activity),
+      getSaxoHistoryStableKey(trade),
+      getSaxoHistoryStableKey(closed),
+    ]));
+    expect(getSaxoHistoryCandidateKeys(effective[0])).not.toEqual(expect.arrayContaining([activity.id, trade.id, closed.id]));
   });
   it("uses only direct P/JPY opening evidence and cross-validates explicit OpenCost components", () => {
     const position = {
@@ -120,20 +128,50 @@ describe("Saxo read-only account sync", () => {
     expect(resolution.openingTransactionCostJpy?.value).not.toBe(-99_999);
   });
 
-  it("treats price-missing order activities as corroborating one accounting opening fill", () => {
-    const position = {
-      id: "anonymous-opening", accountKey: "masked", accountAssignment: "P" as const,
-      kind: "option" as const, side: "long" as const, optionType: "call" as const,
-      symbol: "SAMPLE", quantity: 1, strike: 100, expiry: "2027-01-15", missingFields: [], fetchedAt: "2026-08-12T00:00:00.000Z",
-    } satisfies SaxoApiPositionSnapshot;
-    const shared = { accountId: "masked-account", accountCode: "P" as const, assetType: "StockOption", symbol: "SAMPLE", optionType: "call" as const, strike: 100, expiry: "2027-01-15", buySell: "buy" as const, openClose: "open" as const, quantity: 1, tradeDate: "2026-08-12" };
-    const matches = findEntryHistoryMatches(position, [
-      { id: "activity", kind: "order_activity", ...shared },
-      { id: "trade", kind: "trade", ...shared, price: 1.25, bookedAmountAccountCurrency: -130 },
-    ]);
+  it("merges duplicate activity evidence with one accounting trade for a P/JPY opening", () => {
+    const position: SaxoApiPositionSnapshot = {
+      id: "opening-position", accountKey: "masked", accountAssignment: "P", accountCode: "P",
+      kind: "option", side: "long", optionType: "call", symbol: "SAMPLE", quantity: 1, strike: 220,
+      expiry: "2027-01-15", premiumOpenPrice: 17.6, missingFields: [], fetchedAt: "2026-08-25T00:00:00.000Z",
+      openingExecution: {
+        executionTimeUtc: "2026-08-24T14:20:03.821Z", executionTimeSourceField: "ExecutionTimeOpen",
+        openingFxRate: 160.724835, openingFxRateSourceField: "ConversionRateOpen",
+        marketValueOpenInBaseCurrency: -282876, marketValueOpenSourceField: "MarketValueOpenInBaseCurrency",
+        openingTransactionCostComponents: { Commission: 321, ExchangeFee: 6, StampDuty: 32 },
+        openingTransactionCostSourceField: "Costs.OpenCostInBaseCurrency", capturedAt: "2026-08-25T00:00:00.000Z",
+      },
+    };
+    const shared = {
+      accountKey: "masked", accountCode: "P" as const, assetType: "StockOption", symbol: "SAMPLE", optionType: "call" as const,
+      strike: 220, expiry: "2027-01-15", buySell: "buy" as const, openClose: "open" as const,
+      quantity: 1, price: 17.6, tradeDate: "2026-08-24",
+    };
+    const activities: SaxoHistoryDiscoveryItem[] = [
+      { id: "activity-one", kind: "order_activity", ...shared, price: undefined },
+      { id: "activity-two", kind: "order_activity", ...shared, price: undefined },
+    ];
+    const trade: SaxoHistoryDiscoveryItem = { id: "trade-accounting", kind: "trade", ...shared, bookedAmountAccountCurrency: -283235 };
+    const matches = findEntryHistoryMatches(position, [...activities, trade]);
     const evidence = resolveEntryHistoryEvidence(matches);
+    const resolution = resolveOpeningExecution(position, matches);
     expect(evidence.sourceConflict).toBe(false);
-    expect(evidence.item?.id).toBe("trade");
+    expect(evidence.item?.id).toBe("trade-accounting");
+    expect(resolution.historyStatus).toBe("history_match_complete");
+    expect(resolution.executionTimeUtc?.value).toBe("2026-08-24T14:20:03.821Z");
+    expect(resolution.openingBookedAmountJpy?.value).toBe(-283235);
+    expect(resolution.openingPremiumJpy?.value).toBe(-282876);
+    expect(resolution.openingTransactionCostJpy?.value).toBe(359);
+    expect(resolution.openingFxRate?.value).toBe(160.724835);
+  });
+
+  it("keeps genuinely different entry fills as a source conflict", () => {
+    const position = { id: "conflict-position", accountKey: "masked", accountAssignment: "P" as const, kind: "option" as const, side: "long" as const, optionType: "call" as const, symbol: "SAMPLE", quantity: 1, strike: 220, expiry: "2027-01-15", premiumOpenPrice: 17.6, missingFields: [], fetchedAt: "2026-08-25T00:00:00.000Z" };
+    const matches = findEntryHistoryMatches(position, [
+      { id: "fill-one", kind: "trade", accountKey: "masked", accountCode: "P", assetType: "StockOption", symbol: "SAMPLE", optionType: "call", strike: 220, expiry: "2027-01-15", buySell: "buy", openClose: "open", quantity: 1, price: 17.6, tradeDate: "2026-08-24" },
+      { id: "fill-two", kind: "trade", accountKey: "masked", accountCode: "P", assetType: "StockOption", symbol: "SAMPLE", optionType: "call", strike: 220, expiry: "2027-01-15", buySell: "buy", openClose: "open", quantity: 1, price: 18.1, tradeDate: "2026-08-24" },
+    ]);
+    expect(resolveEntryHistoryEvidence(matches).sourceConflict).toBe(true);
+    expect(resolveOpeningExecution(position, matches).historyStatus).toBe("source_conflict");
   });
 
   it("blocks P/JPY opening completion when direct opening values conflict", () => {
@@ -177,11 +215,11 @@ describe("Saxo read-only account sync", () => {
       openingExecution: {
         executionTimeUtc: "2026-08-11T15:08:30.104000Z",
         executionTimeSourceField: "ExecutionTimeOpen",
-        openingFxRate: 123.456789,
+        openingFxRate: 160.827855,
         openingFxRateSourceField: "ConversionRateOpen",
-        marketValueOpenInBaseCurrency: -152500,
+        marketValueOpenInBaseCurrency: -383574,
         marketValueOpenSourceField: "MarketValueOpenInBaseCurrency",
-        openingTransactionCostComponents: { Commission: 300, ExchangeFee: 12, StampDuty: 5 },
+        openingTransactionCostComponents: { Commission: 322, ExchangeFee: 6, StampDuty: 32 },
         openingTransactionCostCompleteness: "component_aggregate",
         openingTransactionCostSourceField: "Costs.OpenCostInBaseCurrency",
         capturedAt: "2026-08-12T00:00:00.000Z",
@@ -190,17 +228,17 @@ describe("Saxo read-only account sync", () => {
     const history = [{
       item: {
         id: "anonymous-qcom-open", kind: "trade" as const, accountCode: "P" as const, accountCurrency: "JPY",
-        symbol: "ALFA", assetType: "StockOption", optionType: "call" as const, strike: 125, expiry: "2027-01-15",
-        quantity: 1, buySell: "buy" as const, openClose: "open" as const, price: 12.34, tradeDate: "2026-08-11",
-        bookedAmountAccountCurrency: -152817,
+        symbol: "QCOM", assetType: "StockOption", optionType: "call" as const, strike: 160, expiry: "2027-01-15",
+        quantity: 1, buySell: "buy" as const, openClose: "open" as const, price: 23.85, tradeDate: "2026-08-11",
+        bookedAmountAccountCurrency: -383934,
       }, score: 10, reasons: ["匿名fixture"],
     }];
     const resolution = resolveOpeningExecution(position, history);
     expect(resolution.historyStatus).toBe("history_match_complete");
-    expect(resolution.openingBookedAmountJpy?.value).toBe(-152817);
-    expect(resolution.openingPremiumJpy?.value).toBe(-152500);
-    expect(resolution.openingTransactionCostJpy?.value).toBe(317);
-    expect(resolution.openingFxRate?.value).toBe(123.456789);
+    expect(resolution.openingBookedAmountJpy?.value).toBe(-383934);
+    expect(resolution.openingPremiumJpy?.value).toBe(-383574);
+    expect(resolution.openingTransactionCostJpy?.value).toBe(360);
+    expect(resolution.openingFxRate?.value).toBe(160.827855);
   });
 
   it("falls back to explicit raw OpenCostInBaseCurrency components when the normalized projection is absent", () => {
@@ -219,46 +257,46 @@ describe("Saxo read-only account sync", () => {
       openingExecution: {
         executionTimeUtc: "2026-08-11T15:08:30.104000Z",
         executionTimeSourceField: "ExecutionTimeOpen",
-        openingFxRate: 123.456789,
+        openingFxRate: 160.827855,
         openingFxRateSourceField: "ConversionRateOpen",
-        marketValueOpenInBaseCurrency: -152500,
+        marketValueOpenInBaseCurrency: -383574,
         marketValueOpenSourceField: "MarketValueOpenInBaseCurrency",
         capturedAt: "2026-08-12T00:00:00.000Z",
       },
       raw: {
         Costs: {
           OpenCostInBaseCurrency: {
-            Commission: 300,
-            ExchangeFee: "12",
-            StampDuty: 5,
+            Commission: 322,
+            ExchangeFee: "6",
+            StampDuty: 32,
           },
         },
       },
     } satisfies SaxoApiPositionSnapshot;
     const history = [{
       item: {
-        id: "anonymous-alfa-open-raw", kind: "trade" as const, accountCode: "P" as const, accountCurrency: "JPY",
-        symbol: "ALFA", assetType: "StockOption", optionType: "call" as const, strike: 125, expiry: "2027-01-15",
-        quantity: 1, buySell: "buy" as const, openClose: "open" as const, price: 12.34, tradeDate: "2026-08-11",
-        bookedAmountAccountCurrency: -152817,
+        id: "anonymous-qcom-open-raw", kind: "trade" as const, accountCode: "P" as const, accountCurrency: "JPY",
+        symbol: "QCOM", assetType: "StockOption", optionType: "call" as const, strike: 160, expiry: "2027-01-15",
+        quantity: 1, buySell: "buy" as const, openClose: "open" as const, price: 23.85, tradeDate: "2026-08-11",
+        bookedAmountAccountCurrency: -383934,
       }, score: 10, reasons: ["匿名fixture"],
     }];
     const resolution = resolveOpeningExecution(position, history);
     expect(resolution.historyStatus).toBe("history_match_complete");
     expect(resolution.openingTransactionCostJpy).toMatchObject({
-      value: 317,
+      value: 360,
       completeness: "cross_validated_component_aggregate",
-      components: { Commission: 300, ExchangeFee: 12, StampDuty: 5 },
+      components: { Commission: 322, ExchangeFee: 6, StampDuty: 32 },
     });
   });
 
   it("merges later opening history only into blank non-manual fields", () => {
     const resolution = {
       executionTimeUtc: { value: "2026-08-12", source: "trade_history" as const, sourceField: "tradeDate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
-      openingFxRate: { value: 123.456789, source: "trade_history" as const, sourceField: "exchangeRate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
-      openingPremiumJpy: { value: -152500, source: "position" as const, sourceField: "MarketValueOpenInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
-      openingTransactionCostJpy: { value: 317, source: "position" as const, sourceField: "Costs.OpenCostInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "cross_validated_component_aggregate" as const },
-      openingBookedAmountJpy: { value: -152817, source: "trade_history" as const, sourceField: "BookedAmountAccountCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingFxRate: { value: 160.827855, source: "trade_history" as const, sourceField: "exchangeRate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingPremiumJpy: { value: -383574, source: "position" as const, sourceField: "MarketValueOpenInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingTransactionCostJpy: { value: 360, source: "position" as const, sourceField: "Costs.OpenCostInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "cross_validated_component_aggregate" as const },
+      openingBookedAmountJpy: { value: -383934, source: "trade_history" as const, sourceField: "BookedAmountAccountCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
       historyStatus: "history_match_complete" as const,
     };
     const execution = {
@@ -266,7 +304,7 @@ describe("Saxo read-only account sync", () => {
       legId: "leg",
       tradeDate: "",
       contracts: 1,
-      fillPriceUSD: 12.34,
+      fillPriceUSD: 23.85,
       settlementCurrency: "JPY" as const,
       brokerPremiumJPY: -383000,
       brokerExchangeRateJPY: 150,
@@ -281,9 +319,9 @@ describe("Saxo read-only account sync", () => {
     };
     expect(mergeOpeningExecutionIntoEntryExecution(execution, resolution)).toMatchObject({
       tradeDate: "2026-08-12",
-      brokerBookedAmountJPY: -152817,
+      brokerBookedAmountJPY: -383934,
       brokerPremiumJPY: -383000,
-      brokerTransactionCostJPY: 317,
+      brokerTransactionCostJPY: 360,
       brokerExchangeRateJPY: 150,
       historyCompletionStatus: "history_match_complete",
       openingFieldSources: {
@@ -299,10 +337,10 @@ describe("Saxo read-only account sync", () => {
   it("does not overwrite a manual Saxo total transaction cost during late merge", () => {
     const resolution = {
       executionTimeUtc: { value: "2026-08-12", source: "trade_history" as const, sourceField: "tradeDate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
-      openingFxRate: { value: 123.456789, source: "trade_history" as const, sourceField: "exchangeRate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
-      openingPremiumJpy: { value: -152500, source: "position" as const, sourceField: "MarketValueOpenInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
-      openingTransactionCostJpy: { value: 317, source: "position" as const, sourceField: "Costs.OpenCostInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "cross_validated_component_aggregate" as const },
-      openingBookedAmountJpy: { value: -152817, source: "trade_history" as const, sourceField: "BookedAmountAccountCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingFxRate: { value: 160.827855, source: "trade_history" as const, sourceField: "exchangeRate", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingPremiumJpy: { value: -383574, source: "position" as const, sourceField: "MarketValueOpenInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
+      openingTransactionCostJpy: { value: 360, source: "position" as const, sourceField: "Costs.OpenCostInBaseCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "cross_validated_component_aggregate" as const },
+      openingBookedAmountJpy: { value: -383934, source: "trade_history" as const, sourceField: "BookedAmountAccountCurrency", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
       totalTransactionCostJpy: { value: 0, source: "trade_history" as const, sourceField: "TransactionCost", capturedAt: "2026-08-12T00:00:00.000Z", completeness: "direct" as const },
       historyStatus: "history_match_complete" as const,
     };
@@ -313,8 +351,8 @@ describe("Saxo read-only account sync", () => {
       contracts: 1,
       fillPriceUSD: 23.85,
       settlementCurrency: "JPY" as const,
-      brokerCurrencyConversionCostJPY: -2000,
-      brokerTotalTransactionCostJPY: -2317,
+      brokerCurrencyConversionCostJPY: -3801,
+      brokerTotalTransactionCostJPY: -4157,
       openingFieldSources: {
         brokerCurrencyConversionCostJPY: "manual" as const,
         brokerTotalTransactionCostJPY: "manual" as const,
@@ -326,8 +364,8 @@ describe("Saxo read-only account sync", () => {
     };
 
     expect(mergeOpeningExecutionIntoEntryExecution(execution, resolution)).toMatchObject({
-      brokerCurrencyConversionCostJPY: -2000,
-      brokerTotalTransactionCostJPY: -2317,
+      brokerCurrencyConversionCostJPY: -3801,
+      brokerTotalTransactionCostJPY: -4157,
       openingFieldSources: {
         brokerCurrencyConversionCostJPY: "manual",
         brokerTotalTransactionCostJPY: "manual",
@@ -592,7 +630,7 @@ describe("Saxo read-only account sync", () => {
       accountKey: "p-key",
       accountAssignment: "P",
       accountCode: "P",
-      symbol: "MNO",
+      symbol: "NVDA",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -613,14 +651,14 @@ describe("Saxo read-only account sync", () => {
     expect(rows[0].simulation?.id).toBe(simulation.id);
   });
 
-  it("groups MNO C210 long and P210 short into one synthetic-forward candidate and uses its parent fill", () => {
+  it("groups NVDA C210 long and P210 short into one synthetic-forward candidate and uses its parent fill", () => {
     const base = {
-      accountKey: "masked-account",
+      accountKey: "n-account-1234",
       accountAssignment: "N" as const,
       accountCode: "N" as const,
-      symbol: "MNO",
-      underlyingSymbol: "MNO",
-      underlyingIdentity: "uic:101:stock",
+      symbol: "NVDA",
+      underlyingSymbol: "NVDA",
+      underlyingIdentity: "uic:12345:stock",
       assetType: "StockOption",
       kind: "option" as const,
       quantity: 1,
@@ -636,16 +674,16 @@ describe("Saxo read-only account sync", () => {
     const pairs = findSaxoSyntheticForwardPairs([call, put]);
 
     expect(pairs).toHaveLength(1);
-    expect(pairs[0]).toMatchObject({ ticker: "MNO", accountCode: "N", expiry: "2026-12-18", strike: 210, quantity: 1 });
+    expect(pairs[0]).toMatchObject({ ticker: "NVDA", accountCode: "N", expiry: "2026-12-18", strike: 210, quantity: 1 });
     expect(findSaxoSyntheticForwardParentHistory(pairs[0], [
-      { id: "other", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO", assetType: "StockOption", price: 99 },
-      { id: "parent", orderId: "anonymous-parent-order", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO SyntheticUnderlying", assetType: "SyntheticUnderlying", price: 5.2 },
-    ])).toMatchObject({ orderId: "anonymous-parent-order", price: 5.2 });
+      { id: "other", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", price: 99 },
+      { id: "parent", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", price: 5.2 },
+    ])).toMatchObject({ orderId: "5425367936", price: 5.2 });
     expect(findSaxoSyntheticForwardPairs([{ ...put, strike: 211 }, call])).toHaveLength(0);
     expect(findSaxoSyntheticForwardPairs([
-      { ...call, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "MNO/18Z26C210:XCBF" },
-      { ...put, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "MNO/18Z26P210:XCBF" },
-    ])).toMatchObject([{ expiry: "2026-12-18", strike: 210, ticker: "MNO" }]);
+      { ...call, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "NVDA/18Z26C210:XCBF" },
+      { ...put, optionType: "unknown", strike: undefined, expiry: undefined, symbol: "NVDA/18Z26P210:XCBF" },
+    ])).toMatchObject([{ expiry: "2026-12-18", strike: 210, ticker: "NVDA" }]);
     const held = findSaxoSyntheticForwardPairing([
       { ...call, underlyingIdentity: undefined, underlyingSymbol: undefined, symbol: "" },
       { ...put, underlyingIdentity: undefined, underlyingSymbol: undefined, symbol: "" },
@@ -655,28 +693,28 @@ describe("Saxo read-only account sync", () => {
   });
 
   it("resolves only the matching synthetic-forward parent and never a different ticker", () => {
-    const base = { accountKey: "masked-account", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "MNO", underlyingSymbol: "MNO", underlyingIdentity: "uic:101:stock", assetType: "StockOption", kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z" };
+    const base = { accountKey: "n-account-1234", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "NVDA", underlyingSymbol: "NVDA", underlyingIdentity: "uic:12345:stock", assetType: "StockOption", kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z" };
     const pair = findSaxoSyntheticForwardPairs([{ ...base, id: "call", quantity: 1, side: "long", optionType: "call" }, { ...base, id: "put", quantity: -1, side: "short", optionType: "put" }])[0];
-    const target = createOpenPutSimulation({ id: "nvda-synthetic", status: "entry_confirmation", name: "MNO Synthetic Forward", ticker: "MNO", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", expiryDate: "2026-12-18", optionLegs: [{ id: "call-leg", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "call" }, { id: "put-leg", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "put" }] });
+    const target = createOpenPutSimulation({ id: "nvda-synthetic", status: "entry_confirmation", name: "NVDA Synthetic Forward", ticker: "NVDA", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", expiryDate: "2026-12-18", optionLegs: [{ id: "call-leg", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "call" }, { id: "put-leg", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", saxoPositionId: "put" }] });
     const visa = { ...target, id: "visa-long-call", ticker: "V", name: "VISA C340", optionLegs: [{ ...target.optionLegs[0], strikeUSD: 340 }, target.optionLegs[1]] };
     expect(findSaxoSyntheticForwardSimulationForPair(pair, [visa, target])?.id).toBe("nvda-synthetic");
   });
 
   it("requires the parent and both leg trades before treating a synthetic forward as filled", () => {
     const base = {
-      accountKey: "masked-account", accountAssignment: "N" as const, accountCode: "N" as const,
-      symbol: "MNO", underlyingSymbol: "MNO", underlyingIdentity: "uic:101:stock", assetType: "StockOption",
+      accountKey: "n-account-1234", accountAssignment: "N" as const, accountCode: "N" as const,
+      symbol: "NVDA", underlyingSymbol: "NVDA", underlyingIdentity: "uic:12345:stock", assetType: "StockOption",
       kind: "option" as const, expiry: "2026-12-18", strike: 210, currency: "USD", missingFields: [], fetchedAt: "2026-07-17T00:00:00.000Z",
     };
     const call: SaxoApiPositionSnapshot = { ...base, id: "call", positionId: "call-position", quantity: 1, side: "long", optionType: "call", premiumOpenPrice: 26.25 };
     const put: SaxoApiPositionSnapshot = { ...base, id: "put", positionId: "put-position", quantity: -1, side: "short", optionType: "put", premiumOpenPrice: 21.05 };
     const pair = findSaxoSyntheticForwardPairs([call, put])[0];
-    const parent: SaxoHistoryDiscoveryItem = { id: "parent-trade", orderId: "anonymous-parent-order", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO SyntheticUnderlying", assetType: "SyntheticUnderlying", quantity: 1, buySell: "buy", price: 5.2, tradeDate: "2026-07-16", currency: "USD" };
-    const callTrade: SaxoHistoryDiscoveryItem = { id: "call-trade", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO", assetType: "StockOption", optionType: "call", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "buy", openClose: "open", price: 26.25, tradeDate: "2026-07-16", currency: "USD" };
-    const putTrade: SaxoHistoryDiscoveryItem = { id: "put-trade", kind: "trade", accountKey: "masked-account", accountCode: "N", symbol: "MNO", assetType: "StockOption", optionType: "put", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "sell", openClose: "open", price: 21.05, tradeDate: "2026-07-16", currency: "USD" };
+    const parent: SaxoHistoryDiscoveryItem = { id: "parent-trade", orderId: "5425367936", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA SyntheticUnderlying", assetType: "SyntheticUnderlying", quantity: 1, buySell: "buy", price: 5.2, tradeDate: "2026-07-16", currency: "USD" };
+    const callTrade: SaxoHistoryDiscoveryItem = { id: "call-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "call", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "buy", openClose: "open", price: 26.25, tradeDate: "2026-07-16", currency: "USD" };
+    const putTrade: SaxoHistoryDiscoveryItem = { id: "put-trade", kind: "trade", accountKey: "n-ac...1234", accountCode: "N", symbol: "NVDA", assetType: "StockOption", optionType: "put", strike: 210, expiry: "2026-12-18", quantity: 1, buySell: "sell", openClose: "open", price: 21.05, tradeDate: "2026-07-16", currency: "USD" };
 
     expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade, putTrade])).toMatchObject({
-      status: "filled", parentHistory: { orderId: "anonymous-parent-order", price: 5.2 }, callHistory: { price: 26.25 }, putHistory: { price: 21.05 }, missing: [],
+      status: "filled", parentHistory: { orderId: "5425367936", price: 5.2 }, callHistory: { price: 26.25 }, putHistory: { price: 21.05 }, missing: [],
     });
     expect(resolveSaxoSyntheticForwardFillEvidence(pair, [parent, callTrade])).toMatchObject({ status: "incomplete", missing: ["put"] });
   });
@@ -685,7 +723,7 @@ describe("Saxo read-only account sync", () => {
     const simulation = createOpenPutSimulation({
       id: "planned-covered-call",
       status: "planned",
-      name: "MNO covered call planned",
+      name: "NVDA covered call planned",
       strategyType: "covered_call",
       accountCode: "N",
       accountEnvironment: "PROD_N_USD_SETTLEMENT",
@@ -716,7 +754,7 @@ describe("Saxo read-only account sync", () => {
       accountKey: "n-key",
       accountAssignment: "N",
       accountCode: "N",
-      symbol: "MNO",
+      symbol: "NVDA",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -759,11 +797,11 @@ describe("Saxo read-only account sync", () => {
       fetchedAt: "2026-06-09T00:00:00.000Z",
     };
 
-    expect(resolveSaxoPositionSymbol(position, [simulation])).toBe("MNO");
+    expect(resolveSaxoPositionSymbol(position, [simulation])).toBe("NVDA");
 
     const draft = createSaxoPositionDraftSummary(position, [simulation]);
-    expect(draft.ticker).toBe("MNO");
-    expect(draft.name).toContain("MNO");
+    expect(draft.ticker).toBe("NVDA");
+    expect(draft.name).toContain("NVDA");
   });
 
   it("resolves the underlying ticker from a Saxo option instrument code when position symbol is blank", () => {
@@ -773,7 +811,7 @@ describe("Saxo read-only account sync", () => {
       accountAssignment: "N",
       accountCode: "N",
       symbol: "",
-      instrumentCode: "MNO/24N26P195:XCBF",
+      instrumentCode: "NVDA/24N26P195:XCBF",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -787,8 +825,8 @@ describe("Saxo read-only account sync", () => {
       fetchedAt: "2026-07-01T00:00:00.000Z",
     };
 
-    expect(resolveSaxoPositionSymbol(position)).toBe("MNO");
-    expect(createSaxoPositionDraftSummary(position).ticker).toBe("MNO");
+    expect(resolveSaxoPositionSymbol(position)).toBe("NVDA");
+    expect(createSaxoPositionDraftSummary(position).ticker).toBe("NVDA");
   });
 
   it("reconciles assigned Saxo option positions even when Saxo omits the symbol but the option shape is unique", () => {
@@ -823,7 +861,7 @@ describe("Saxo read-only account sync", () => {
         id: "pos-1",
         accountKey: "unknown-key",
         accountAssignment: "unassigned",
-        symbol: "MNO",
+        symbol: "NVDA",
         assetType: "StockOption",
         kind: "option",
         quantity: -1,
@@ -848,7 +886,7 @@ describe("Saxo read-only account sync", () => {
         accountKey: "p-key",
         accountAssignment: "P",
         accountCode: "P",
-        symbol: "MNO",
+        symbol: "NVDA",
         assetType: "StockOption",
         quantity: 1,
         side: "buy",
@@ -857,6 +895,7 @@ describe("Saxo read-only account sync", () => {
         expiry: "2026-06-05",
         orderType: "Limit",
         price: 0.2,
+        status: "Working",
         isExitCandidate: true,
         missingFields: [],
         fetchedAt: "2026-06-09T00:00:00.000Z",
@@ -866,7 +905,7 @@ describe("Saxo read-only account sync", () => {
         accountKey: "n-key",
         accountAssignment: "N",
         accountCode: "N",
-        symbol: "MNO",
+        symbol: "NVDA",
         assetType: "StockOption",
         quantity: 1,
         side: "buy",
@@ -875,6 +914,7 @@ describe("Saxo read-only account sync", () => {
         expiry: "2026-06-05",
         orderType: "Limit",
         price: 0.2,
+        status: "Working",
         isExitCandidate: true,
         missingFields: [],
         fetchedAt: "2026-06-09T00:00:00.000Z",
@@ -885,6 +925,82 @@ describe("Saxo read-only account sync", () => {
 
     expect(matches).toHaveLength(1);
     expect(matches[0].id).toBe("order-1");
+  });
+
+  it("matches a Saxo option contract symbol by its underlying and rejects every contract mismatch", () => {
+    const simulation = {
+      ...createOpenPutSimulation(),
+      ticker: "SPGI",
+      accountCode: "N" as const,
+      accountEnvironment: "PROD_N_USD_SETTLEMENT" as const,
+      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], strikeUSD: 400, expiryDate: "2026-10-16", quantity: 1 }],
+    };
+    const base = {
+      accountKey: "n-key",
+      accountAssignment: "N" as const,
+      accountCode: "N" as const,
+      symbol: "SPGI/16V26P400:XCBF",
+      assetType: "StockOption",
+      quantity: 1,
+      side: "buy" as const,
+      optionType: "put" as const,
+      strike: 400,
+      expiry: "2026-10-16",
+      status: "Working",
+      isExitCandidate: true,
+      missingFields: [],
+      fetchedAt: "2026-09-04T00:00:00.000Z",
+    };
+    const matches = findOrderCandidatesForLeg(simulation, simulation.optionLegs[0], [
+      { ...base, id: "limit", orderType: "Limit", price: 1.9 },
+      { ...base, id: "stop", orderType: "StopIfTraded", price: 6.2 },
+      { ...base, id: "strike-mismatch", strike: 401 },
+      { ...base, id: "expiry-mismatch", expiry: "2026-10-17" },
+      { ...base, id: "side-mismatch", side: "sell" },
+      { ...base, id: "account-mismatch", accountAssignment: "P", accountCode: "P" },
+    ]);
+    expect(matches.map((item) => item.id)).toEqual(["limit", "stop"]);
+  });
+
+  it("groups one Saxo OCO limit/stop pair into one pending exit-rule review and reopens it when the pair changes", () => {
+    const simulation = {
+      ...createOpenPutSimulation(),
+      ticker: "SPGI",
+      accountCode: "N" as const,
+      accountEnvironment: "PROD_N_USD_SETTLEMENT" as const,
+      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], strikeUSD: 400, expiryDate: "2026-10-16", quantity: 1 }],
+    };
+    const base = {
+      accountKey: "n-key", accountAssignment: "N" as const, accountCode: "N" as const,
+      symbol: "SPGI/16V26P400:XCBF", assetType: "StockOption", quantity: 1, side: "buy" as const,
+      optionType: "put" as const, strike: 400, expiry: "2026-10-16", status: "Working", orderRelation: "Oco",
+      isExitCandidate: true, missingFields: [], fetchedAt: "2026-09-04T00:00:00.000Z",
+    };
+    const orders: SaxoApiOrderSnapshot[] = [
+      { ...base, id: "limit", orderType: "Limit", price: 1.9 },
+      { ...base, id: "stop", orderType: "StopIfTraded", price: 6.2 },
+    ];
+    const pending = getSaxoExitOrderReviews([simulation], orders);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ status: "pending", takeProfitOrder: { id: "limit" }, upperExitOrder: { id: "stop" } });
+
+    const confirmed = getSaxoExitOrderReviews([{
+      ...simulation,
+      exitOrderPlans: [{
+        scope: "leg" as const, legId: simulation.optionLegs[0].id, mode: "after_entry_closing_order" as const, brokerOrderType: "oco" as const,
+        profitTakeEnabled: true, stopLossEnabled: true, stopLossType: "buyback_price" as const,
+        brokerOrderLink: { source: "saxo_orders" as const, status: "confirmed" as const, takeProfitOrderKey: "limit", upperExitOrderKey: "stop", takeProfitPriceUSD: 1.9, upperExitPriceUSD: 6.2 },
+      }],
+    }], orders);
+    expect(confirmed[0]?.status).toBe("confirmed");
+    expect(getSaxoExitOrderReviews([{
+      ...simulation,
+      exitOrderPlans: [{
+        scope: "leg" as const, legId: simulation.optionLegs[0].id, mode: "after_entry_closing_order" as const, brokerOrderType: "oco" as const,
+        profitTakeEnabled: true, stopLossEnabled: true, stopLossType: "buyback_price" as const,
+        brokerOrderLink: { source: "saxo_orders" as const, status: "confirmed" as const, takeProfitOrderKey: "limit", upperExitOrderKey: "stop", takeProfitPriceUSD: 1.9, upperExitPriceUSD: 6.2 },
+      }],
+    }], [{ ...orders[0] }, { ...orders[1], price: 6.3 }])[0]?.status).toBe("pending");
   });
 
   it("classifies Saxo option history by open/close instead of buy/sell alone", () => {
@@ -928,7 +1044,7 @@ describe("Saxo read-only account sync", () => {
         id: "covered-call-unknown-close-buy",
         kind: "trade",
         assetType: "StockOption",
-        symbol: "MNO/10N26C225:XCBF",
+        symbol: "NVDA/10N26C225:XCBF",
         buySell: "buy",
         openClose: "unknown",
         quantity: 1,
@@ -949,7 +1065,7 @@ describe("Saxo read-only account sync", () => {
         id: "covered-call-open-sell",
         kind: "trade",
         assetType: "StockOption",
-        symbol: "MNO/10N26C225:XCBF",
+        symbol: "NVDA/10N26C225:XCBF",
         buySell: "sell",
         openClose: "open",
         quantity: 1,
@@ -962,7 +1078,7 @@ describe("Saxo read-only account sync", () => {
         id: "stock-transfer-sell",
         kind: "trade",
         assetType: "Stock",
-        symbol: "MNO",
+        symbol: "NVDA",
         buySell: "sell",
         openClose: "open",
         quantity: 100,
@@ -974,7 +1090,7 @@ describe("Saxo read-only account sync", () => {
         id: "stock-transfer-buy",
         kind: "trade",
         assetType: "Stock",
-        symbol: "MNO",
+        symbol: "NVDA",
         buySell: "buy",
         openClose: "close",
         quantity: 100,
@@ -987,7 +1103,7 @@ describe("Saxo read-only account sync", () => {
         kind: "trade",
         accountCode: "N",
         assetType: "Stock",
-        symbol: "MNO",
+        symbol: "NVDA",
         buySell: "sell",
         quantity: 100,
         price: 202.76,
@@ -1055,7 +1171,10 @@ describe("Saxo read-only account sync", () => {
 
     expect(effective).toHaveLength(1);
     expect(effective[0]).toMatchObject({ id: trade.id, kind: "trade", buySell: "sell", openClose: "close" });
-    expect(getSaxoHistoryCandidateKeys(effective[0])).toEqual(expect.arrayContaining([closedPosition.id, trade.id]));
+    expect(getSaxoHistoryCandidateKeys(effective[0])).toEqual(expect.arrayContaining([
+      getSaxoHistoryStableKey(closedPosition),
+      getSaxoHistoryStableKey(trade),
+    ]));
   });
 
   it("keeps account-currency PnL separate from USD booked amount when merging a close", () => {
@@ -1203,7 +1322,7 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       sourceIdMasked: "1234...abcd",
       accountKey: "7780...5082",
-      instrumentCode: "MNO/05M26P200:XCBF",
+      instrumentCode: "NVDA/05M26P200:XCBF",
       tradeDate: "2026-06-02",
       buySell: "buy",
       openClose: "open",
@@ -1213,8 +1332,8 @@ describe("Saxo read-only account sync", () => {
     const second = { ...first, id: "trade-2" };
 
     expect(getSaxoHistoryStableKey(first)).toBe(getSaxoHistoryStableKey(second));
-    expect(getSaxoHistoryCandidateKeys(second)).toContain("trade-2");
-    expect(getSaxoHistoryCandidateKeys(second)).toContain(getSaxoHistoryStableKey(first));
+    expect(getSaxoHistoryInstanceKeys(second)).toEqual(["trade-2"]);
+    expect(getSaxoHistoryPersistentKeys(second)).toEqual([getSaxoHistoryStableKey(first)]);
   });
 
   it("classifies zero-price put close as assignment instead of buyback close", () => {
@@ -1223,12 +1342,12 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       accountKey: "p-key",
       accountCode: "P",
-      symbol: "MNO",
+      symbol: "NVDA",
       assetType: "StockOption",
       optionType: "put",
       strike: 207.5,
       expiry: "2026-06-12",
-      instrumentCode: "MNO/12M26P207.5:XCBF",
+      instrumentCode: "NVDA/12M26P207.5:XCBF",
       quantity: 1,
       buySell: "buy",
       openClose: "close",
@@ -1247,7 +1366,7 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       accountKey: "p-key",
       accountCode: "P",
-      symbol: "MNO/12M26P207.5:XCBF",
+      symbol: "NVDA/12M26P207.5:XCBF",
       assetType: "StockOption",
       quantity: 1,
       buySell: "buy",
@@ -1267,12 +1386,12 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       accountKey: "p-key",
       accountCode: "P",
-      symbol: "MNO",
+      symbol: "NVDA",
       assetType: "StockOption",
       optionType: "put",
       strike: 207.5,
       expiry: "2026-06-12",
-      instrumentCode: "MNO/12M26P207.5:XCBF",
+      instrumentCode: "NVDA/12M26P207.5:XCBF",
       quantity: 1,
       buySell: "buy",
       openClose: "close",
@@ -1285,7 +1404,7 @@ describe("Saxo read-only account sync", () => {
       kind: "trade",
       accountKey: "p-key",
       accountCode: "P",
-      symbol: "MNO:XNAS",
+      symbol: "NVDA:XNAS",
       assetType: "Stock",
       quantity: 100,
       buySell: "buy",
@@ -1308,12 +1427,12 @@ describe("Saxo read-only account sync", () => {
       id: "entry-p200-option-symbol",
       kind: "trade",
       accountCode: "P",
-      symbol: "MNO/05M26P200:XCBF",
+      symbol: "NVDA/05M26P200:XCBF",
       assetType: "StockOption",
       optionType: "put",
       strike: 200,
       expiry: "2026-06-05",
-      instrumentCode: "MNO/05M26P200:XCBF",
+      instrumentCode: "NVDA/05M26P200:XCBF",
       buySell: "sell",
       openClose: "open",
       quantity: -1,
@@ -1330,9 +1449,9 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-buyback",
       kind: "trade",
       accountCode: "N",
-      symbol: "MNO/10N26C225:XCBF",
+      symbol: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
-      instrumentCode: "MNO/10N26C225:XCBF",
+      instrumentCode: "NVDA/10N26C225:XCBF",
       buySell: "buy",
       openClose: "close",
       quantity: 1,
@@ -1420,9 +1539,9 @@ describe("Saxo read-only account sync", () => {
         { id: "synthetic-put", type: "put", side: "sell", strikeUSD: 205, premiumUSD: 7, quantity: 1, expiryDate: "2026-09-18" },
       ],
     });
-    const callEntry: SaxoHistoryDiscoveryItem = { id: "synthetic-call-entry", kind: "trade", accountCode: "N", symbol: "MNO/18U26C205:XCBF", assetType: "StockOption", buySell: "buy", openClose: "open", quantity: 1, price: 8, tradeDate: "2026-07-16" };
+    const callEntry: SaxoHistoryDiscoveryItem = { id: "synthetic-call-entry", kind: "trade", accountCode: "N", symbol: "NVDA/18U26C205:XCBF", assetType: "StockOption", buySell: "buy", openClose: "open", quantity: 1, price: 8, tradeDate: "2026-07-16" };
     const callClose: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-call-close", buySell: "sell", openClose: "close", price: 9, tradeDate: "2026-07-17" };
-    const putEntry: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-put-entry", symbol: "MNO/18U26P205:XCBF", buySell: "sell", price: 7 };
+    const putEntry: SaxoHistoryDiscoveryItem = { ...callEntry, id: "synthetic-put-entry", symbol: "NVDA/18U26P205:XCBF", buySell: "sell", price: 7 };
 
     expect(getSaxoHistoryCandidateTargetForSimulations(callEntry, [simulation])).toBe("entry");
     expect(isSaxoHistoryMatchingOptionLeg(simulation, simulation.optionLegs[0], callEntry, "entry")).toBe(true);
@@ -1437,9 +1556,9 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-buyback",
       kind: "trade",
       accountCode: "N",
-      symbol: "MNO/10N26C225:XCBF",
+      symbol: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
-      instrumentCode: "MNO/10N26C225:XCBF",
+      instrumentCode: "NVDA/10N26C225:XCBF",
       buySell: "buy",
       openClose: "close",
       quantity: 1,
@@ -1456,7 +1575,7 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-p-account",
       kind: "trade",
       accountCode: "P",
-      symbol: "MNO/10N26C225:XCBF",
+      symbol: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1476,8 +1595,8 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-p-account-relaxed",
       kind: "trade",
       accountCode: "P",
-      symbol: "MNO/10N26C225:XCBF",
-      instrumentCode: "MNO/10N26C225:XCBF",
+      symbol: "NVDA/10N26C225:XCBF",
+      instrumentCode: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1506,7 +1625,7 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c225-ambiguous",
       kind: "trade",
       accountCode: "P",
-      symbol: "MNO/10N26C225:XCBF",
+      symbol: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1532,7 +1651,7 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c220-p-account",
       kind: "trade",
       accountCode: "P",
-      symbol: "MNO/10N26C220:XCBF",
+      symbol: "NVDA/10N26C220:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1552,7 +1671,7 @@ describe("Saxo read-only account sync", () => {
     const closeHistory: SaxoHistoryDiscoveryItem = {
       id: "nvda-c225-unmapped",
       kind: "trade",
-      symbol: "MNO/10N26C225:XCBF",
+      symbol: "NVDA/10N26C225:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "close",
@@ -1569,7 +1688,7 @@ describe("Saxo read-only account sync", () => {
       id: "nvda-c220-buyback",
       kind: "trade",
       accountCode: "N",
-      symbol: "MNO/10N26C220:XCBF",
+      symbol: "NVDA/10N26C220:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "unknown",
@@ -1603,12 +1722,12 @@ describe("Saxo read-only account sync", () => {
       id: "assignment-2075",
       kind: "trade",
       accountCode: "P",
-      symbol: "MNO/12M26P207.5:XCBF",
+      symbol: "NVDA/12M26P207.5:XCBF",
       assetType: "StockOption",
       optionType: "put",
       strike: 207.5,
       expiry: "2026-06-12",
-      instrumentCode: "MNO/12M26P207.5:XCBF",
+      instrumentCode: "NVDA/12M26P207.5:XCBF",
       buySell: "buy",
       openClose: "close",
       quantity: 1,
@@ -1638,7 +1757,7 @@ describe("Saxo read-only account sync", () => {
       id: "assignment-2075-implicit",
       kind: "trade",
       accountCode: "P",
-      symbol: "MNO/12M26P207.5:XCBF",
+      symbol: "NVDA/12M26P207.5:XCBF",
       assetType: "StockOption",
       buySell: "buy",
       openClose: "unknown",
@@ -1669,7 +1788,7 @@ describe("Saxo read-only account sync", () => {
     const closeHistory = {
       id: "close-p200",
       kind: "trade",
-      symbol: "MNO",
+      symbol: "NVDA",
       optionType: "put",
       strike: 200,
       expiry: "2026-06-05",
@@ -1689,7 +1808,7 @@ describe("Saxo read-only account sync", () => {
       id: "n-account-entry",
       kind: "trade",
       accountCode: "N",
-      symbol: "MNO",
+      symbol: "NVDA",
       optionType: "put",
       strike: 200,
       expiry: "2026-06-05",
@@ -1709,7 +1828,7 @@ describe("Saxo read-only account sync", () => {
       accountKey: "p-key",
       accountAssignment: "P",
       accountCode: "P",
-      symbol: "MNO",
+      symbol: "NVDA",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -1727,8 +1846,8 @@ describe("Saxo read-only account sync", () => {
       {
         id: "entry-2075",
         kind: "trade",
-        symbol: "MNO/12M26P207.5:XCBF",
-        instrumentCode: "MNO/12M26P207.5:XCBF",
+        symbol: "NVDA/12M26P207.5:XCBF",
+        instrumentCode: "NVDA/12M26P207.5:XCBF",
         optionType: "put",
         strike: 207.5,
         expiry: "2026-06-12",
@@ -1802,7 +1921,7 @@ describe("Saxo read-only account sync", () => {
       accountKey: "p-key",
       accountAssignment: "P",
       accountCode: "P",
-      symbol: "MNO",
+      symbol: "NVDA",
       assetType: "StockOption",
       kind: "option",
       quantity: -1,
@@ -1821,7 +1940,7 @@ describe("Saxo read-only account sync", () => {
         id: "entry-2075",
         kind: "trade",
         assetType: "StockOption",
-        symbol: "MNO",
+        symbol: "NVDA",
         optionType: "put",
         strike: 207.5,
         expiry: "2026-06-05",
@@ -1835,7 +1954,7 @@ describe("Saxo read-only account sync", () => {
         id: "close-200",
         kind: "trade",
         assetType: "StockOption",
-        symbol: "MNO",
+        symbol: "NVDA",
         optionType: "put",
         strike: 200,
         expiry: "2026-06-05",
@@ -1855,8 +1974,8 @@ function createOpenPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSim
   return {
     id: "sim-1",
     status: "open",
-    name: "MNO short put",
-    ticker: "MNO",
+    name: "NVDA short put",
+    ticker: "NVDA",
     strategyType: "short_put",
     currentPriceUSD: 142,
     fxRateJPY: 157,
@@ -1892,8 +2011,8 @@ function createOpenCoveredCallSimulation(patch: Partial<TradeSimulation> = {}): 
   return {
     id: "sim-covered-call",
     status: "open",
-    name: "MNO covered call",
-    ticker: "MNO",
+    name: "NVDA covered call",
+    ticker: "NVDA",
     strategyType: "covered_call",
     currentPriceUSD: 210,
     fxRateJPY: 157,

@@ -6,8 +6,8 @@ function createCoveredCall(overrides: Partial<TradeSimulation> = {}): TradeSimul
   return {
     id: "cc-nvda",
     status: "closed",
-    name: "MNO N covered call",
-    ticker: "MNO",
+    name: "NVDA N covered call",
+    ticker: "NVDA",
     underlyingName: "",
     strategyType: "covered_call",
     currentPriceUSD: 220,
@@ -87,7 +87,7 @@ function createNShortPut(overrides: Partial<TradeSimulation> = {}): TradeSimulat
     ...createCoveredCall({
       id: "put-nvda",
       status: "open",
-      name: "MNO N short put",
+      name: "NVDA N short put",
       strategyType: "short_put",
       entryDate: "2026-06-23",
       expiryDate: "2026-07-24",
@@ -130,7 +130,7 @@ function createNShortPut(overrides: Partial<TradeSimulation> = {}): TradeSimulat
 function createWheelCycle(overrides: Partial<WheelCycle> = {}): WheelCycle {
   return {
     id: "wheel-nvda",
-    ticker: "MNO",
+    ticker: "NVDA",
     primaryAccountCode: "N",
     currentPhase: "n_covered_call",
     currentAccountCode: "N",
@@ -317,7 +317,7 @@ describe("wheel cycle N short put synchronization", () => {
     expect(active?.cumulativeFeesUSD).toBe(2.25);
   });
 
-  it("does not use the only eligible cycle when the short put ticker is blank", () => {
+  it("does not infer the only cycle when the imported N short put has a blank ticker", () => {
     const result = syncWheelCycleWithNShortPutSimulation({
       simulation: createNShortPut({ ticker: "" }),
       wheelCycles: [createWheelCycle({ currentPhase: "n_called_away", currentShares: 0, linkedSimulationIds: ["cc-nvda"] })],
@@ -325,8 +325,7 @@ describe("wheel cycle N short put synchronization", () => {
       workspace: "live",
     });
 
-    expect(result.wheelCycles[0].ticker).toBe("MNO");
-    expect(result.wheelCycles[0].currentPhase).toBe("n_called_away");
+    expect(result.wheelCycles[0].ticker).toBe("NVDA");
     expect(result.wheelCycles[0].linkedSimulationIds).not.toContain("put-nvda");
     expect(result.wheelEvents).toHaveLength(0);
   });

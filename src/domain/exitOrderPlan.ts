@@ -4,6 +4,35 @@ import { getShortOptionLegs, getShortPutLegs } from "./calculations";
 export const DEFAULT_PROFIT_KEEP_PERCENT = 60;
 export const DEFAULT_CLOSE_DAYS_BEFORE_EXPIRY = 7;
 
+/**
+ * A confirmed broker link is evidence of an already-working Saxo exit order.
+ * It is intentionally separate from the app's editable reference rule; the
+ * latter must never replace a broker price in the primary decision display.
+ */
+export function getConfirmedBrokerExitOrder(plan: ExitOrderPlan): {
+  takeProfitPriceUSD: number;
+  upperExitPriceUSD: number;
+} | null {
+  const link = plan.brokerOrderLink;
+  if (
+    link?.source !== "saxo_orders" ||
+    link.status !== "confirmed" ||
+    !Number.isFinite(link.takeProfitPriceUSD) ||
+    (link.takeProfitPriceUSD ?? 0) <= 0 ||
+    !Number.isFinite(link.upperExitPriceUSD) ||
+    (link.upperExitPriceUSD ?? 0) <= 0
+  ) {
+    return null;
+  }
+  const takeProfitPriceUSD = link.takeProfitPriceUSD;
+  const upperExitPriceUSD = link.upperExitPriceUSD;
+  if (takeProfitPriceUSD === undefined || upperExitPriceUSD === undefined) return null;
+  return {
+    takeProfitPriceUSD,
+    upperExitPriceUSD,
+  };
+}
+
 export function calculateProfitTakeBuybackPriceUSD(premiumUSD: number, keepPercent: number): number {
   if (!Number.isFinite(premiumUSD) || premiumUSD <= 0 || !Number.isFinite(keepPercent)) return 0;
   return Math.max(0, premiumUSD * (1 - keepPercent / 100));
@@ -30,10 +59,10 @@ export function getDefaultExitOrderPlanForLeg(leg?: OptionLeg): ExitOrderPlan {
     profitTakeBuybackPriceUSD: calculateProfitTakeBuybackPriceUSD(premiumUSD, DEFAULT_PROFIT_KEEP_PERCENT),
     stopLossEnabled: false,
     stopLossType: "buyback_price",
-    stopLossBuybackPriceUSD: 0,
-    stopLossStockPriceUSD: 0,
-    stopLossAmountJPY: 0,
-    stopLossAmountUSD: 0,
+    stopLossBuybackPriceUSD: undefined,
+    stopLossStockPriceUSD: undefined,
+    stopLossAmountJPY: undefined,
+    stopLossAmountUSD: undefined,
     stopLossAmountCurrency: "JPY",
     latestCloseDaysBeforeExpiry: DEFAULT_CLOSE_DAYS_BEFORE_EXPIRY,
     latestCloseDaysBeforeExpiryUserSet: false,
@@ -118,14 +147,14 @@ function normalizeExitOrderPlanForLeg(
       calculateProfitTakeBuybackPriceUSD(premiumUSD, profitKeepPercent),
     stopLossEnabled: existing?.stopLossEnabled ?? simulation.stopLossRule?.enabled ?? false,
     stopLossType,
-    stopLossBuybackPriceUSD: existing?.stopLossBuybackPriceUSD ?? getStopValueByType(simulation.stopLossRule, "buyback_price"),
-    stopLossStockPriceUSD: existing?.stopLossStockPriceUSD ?? getStopValueByType(simulation.stopLossRule, "stock_price_line"),
-    stopLossAmountJPY: existing?.stopLossAmountJPY ?? (stopLossAmountCurrency === "JPY" ? legacyLossAmount : 0),
+    stopLossBuybackPriceUSD: existing?.stopLossBuybackPriceUSD && existing.stopLossBuybackPriceUSD > 0 ? existing.stopLossBuybackPriceUSD : getStopValueByType(simulation.stopLossRule, "buyback_price") || undefined,
+    stopLossStockPriceUSD: existing?.stopLossStockPriceUSD && existing.stopLossStockPriceUSD > 0 ? existing.stopLossStockPriceUSD : getStopValueByType(simulation.stopLossRule, "stock_price_line") || undefined,
+    stopLossAmountJPY: existing?.stopLossAmountJPY && existing.stopLossAmountJPY > 0 ? existing.stopLossAmountJPY : (stopLossAmountCurrency === "JPY" ? legacyLossAmount || undefined : undefined),
     stopLossAmountUSD:
       existing?.stopLossAmountUSD ??
       (stopLossAmountCurrency === "USD"
         ? existing?.stopLossAmountJPY ?? legacyLossAmount
-        : 0),
+        : undefined),
     stopLossAmountCurrency,
     latestCloseDaysBeforeExpiry: normalizedLatestCloseDays,
     latestCloseDaysBeforeExpiryUserSet: latestCloseDaysUserSet,

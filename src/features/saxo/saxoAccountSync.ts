@@ -331,7 +331,20 @@ export function mergeOpeningExecutionIntoEntryExecution(
     execution.brokerPremiumJPY === undefined ||
     execution.brokerTransactionCostJPY === undefined ||
     execution.brokerExchangeRateJPY === undefined;
-  if (execution.confirmed && !hasMissingAutofillableField) return execution;
+  // A complete confirmed record stays immutable. A historical record saved
+  // while a direct field was unavailable may only receive that missing value;
+  // manual sources below remain protected.
+  const executionTimeUtc = resolution.executionTimeUtc?.source === "position" ? resolution.executionTimeUtc.value : execution.executionTimeUtc;
+  const canonicalTradeDate = executionTimeUtc ? toTokyoDate(executionTimeUtc) : execution.canonicalTradeDate;
+  const sourceTradeDate = resolution.executionTimeUtc?.source === "trade_history" ? resolution.executionTimeUtc.value : execution.sourceTradeDate;
+  const provenanceOnly = {
+    ...(executionTimeUtc ? { executionTimeUtc } : {}),
+    ...(canonicalTradeDate ? { canonicalTradeDate } : {}),
+    ...(sourceTradeDate ? { sourceTradeDate } : {}),
+  };
+  if (execution.confirmed && !hasMissingAutofillableField) {
+    return Object.keys(provenanceOnly).length === 0 ? execution : { ...execution, ...provenanceOnly };
+  }
   const nextFieldSources = { ...(execution.openingFieldSources ?? {}) };
   const nextFieldEvidence = { ...(execution.openingFieldEvidence ?? {}) };
   const hasManualTradeDate = execution.openingFieldSources?.tradeDate === "manual";
@@ -345,6 +358,7 @@ export function mergeOpeningExecutionIntoEntryExecution(
   );
   const nextExecution: OptionEntryExecution = {
     ...execution,
+    ...provenanceOnly,
     historyCompletionStatus: hasManualTradeDateConflict
       ? "source_conflict"
       : mapOpeningExecutionHistoryStatusToEntryCompletionStatus(resolution.historyStatus),
@@ -651,6 +665,7 @@ export type SaxoPositionReconciliationRow = {
 export type SaxoApiOrderSnapshot = {
   id: string;
   orderId?: string;
+  /** Local-runtime only: never render or export the unmasked activity identity. */
   positionId?: string;
   accountKey: string;
   accountId?: string;
@@ -734,6 +749,7 @@ export type SaxoHistoryDiscoveryItem = {
   fillAmount?: number;
   cumulativeFilledAmount?: number;
   requestedAmount?: number;
+  /** order activity is execution evidence only; reports supply accounting. */
   accountingState?: "unavailable" | "pending" | "arrived";
   evidenceSources?: Array<"order_activity" | "trade" | "closed_position">;
   hasFinalFillEvidence?: boolean;
@@ -771,12 +787,41 @@ export function getSaxoHistoryStableKey(item: SaxoHistoryDiscoveryItem): string 
     .join("|");
 }
 
+/**
+ * A response-local key may use the normalizer's array index. It is safe only
+ * for React rows and in-memory expansion state; it must never be persisted.
+ */
+export function getSaxoHistoryInstanceKeys(item: SaxoHistoryDiscoveryItem): string[] {
+  return item.id ? [item.id] : [];
+}
+
+export function isSaxoHistoryEphemeralInstanceKey(value: string): boolean {
+  return /^(?:order_activity|trade|closed_position)-\d+$/.test(value);
+}
+
+/**
+ * Stable, semantic identities for reflected/ignored state and execution
+ * provenance. Deliberately excludes `${kind}-${index}` normalizer IDs.
+ */
+export function getSaxoHistoryPersistentKeys(item: SaxoHistoryDiscoveryItem): string[] {
+  return Array.from(
+    new Set(
+      [getSaxoHistoryStableKey(item), ...(item.relatedCandidateKeys ?? [])]
+        .filter((key): key is string => Boolean(key) && !isSaxoHistoryEphemeralInstanceKey(key)),
+    ),
+  );
+}
+
+/** @deprecated Use getSaxoHistoryPersistentKeys for durable state. */
 export function getSaxoHistoryCandidateKeys(item: SaxoHistoryDiscoveryItem): string[] {
-  return Array.from(new Set([getSaxoHistoryStableKey(item), item.id, ...(item.relatedCandidateKeys ?? [])].filter(Boolean)));
+  return getSaxoHistoryPersistentKeys(item);
 }
 
 function historyCloseFingerprint(item: SaxoHistoryDiscoveryItem): string | undefined {
   if (getSaxoHistoryCandidateTarget(item) !== "close") return undefined;
+  // A close is never merged just because it happened on the same date.  When
+  // stable IDs are unavailable across report families, every explicit
+  // contract/side/quantity/price field must agree before it is eligible.
   const contract = [
     // A confirmed P/N assignment is the primary boundary.  Only when neither
     // source has one may the same-kind masked source account key be auxiliary.
@@ -794,12 +839,17 @@ function historyCloseFingerprint(item: SaxoHistoryDiscoveryItem): string | undef
 }
 
 function resolveHistoryAccountIdentity(item: SaxoHistoryDiscoveryItem): string | undefined {
+  // Cross-source report correlation must use only the same identity kind.
+  // AccountKey is intentionally not substituted here: it is not present in
+  // every report family and must not override a matching masked AccountId.
   return item.accountCode ? `code:${item.accountCode}` : item.accountId ? `id:${item.accountId}` : item.accountNumber ? `number:${item.accountNumber}` : item.accountKey ? `key:${item.accountKey}` : undefined;
 }
 
 /**
- * Collapses uniquely matching close evidence before it reaches UI or draft
- * creation.  An order activity is fill evidence, never accounting evidence.
+ * Collapses all uniquely matching close evidence before it reaches UI or draft
+ * creation.  An order activity is a fill observation, not accounting: it can
+ * stand alone and later converge with either report family without creating a
+ * second execution.
  */
 export function createEffectiveSaxoHistoryCandidates(items: SaxoHistoryDiscoveryItem[]): SaxoHistoryDiscoveryItem[] {
   const groups = new Map<string, SaxoHistoryDiscoveryItem[]>();
@@ -818,7 +868,7 @@ export function createEffectiveSaxoHistoryCandidates(items: SaxoHistoryDiscovery
     const closed = group.filter((item) => item.kind === "closed_position");
     const prices = new Set(group.map((item) => normalizeHistoryKeyPart(item.price)).filter((value) => value !== "_"));
     const uics = new Set(group.map((item) => normalizeHistoryKeyPart(item.uic)).filter((uic) => uic !== "_"));
-    const relatedCandidateKeys = group.flatMap((item) => getSaxoHistoryCandidateKeys(item));
+    const relatedCandidateKeys = Array.from(new Set(group.flatMap((item) => getSaxoHistoryPersistentKeys(item))));
     const directValueConflict = (field: keyof SaxoHistoryDiscoveryItem) => {
       const values = new Set(group.map((item) => normalizeHistoryKeyPart(item[field])).filter((value) => value !== "_" && value !== "unknown"));
       return values.size > 1;
@@ -838,6 +888,8 @@ export function createEffectiveSaxoHistoryCandidates(items: SaxoHistoryDiscovery
       if (!primary) continue;
       effective.push({
         ...primary,
+        // An activity identity remains the stable local linkage when present;
+        // report data completes that same candidate rather than replacing it.
         id: activity?.id ?? trade?.id ?? closedItem?.id ?? primary.id,
         kind: activity ? "order_activity" : primary.kind,
         orderId: activity?.orderId ?? trade?.orderId ?? closedItem?.orderId,
@@ -1034,6 +1086,7 @@ export const SAXO_READONLY_ENDPOINTS = [
   "GET /api/saxo/closed-positions",
   "GET /api/saxo/trades",
   "GET /api/saxo/options/premium-candidate",
+  "POST /api/saxo/options/premium-candidates/preview",
 ] as const;
 
 export const SAXO_FORBIDDEN_ORDER_ROUTE_PATTERNS = [
@@ -1207,12 +1260,87 @@ export function findOrderCandidatesForLeg(
 ): SaxoApiOrderSnapshot[] {
   return orders.filter((order) => {
     if (order.accountAssignment !== simulation.accountCode) return false;
-    if (normalizeSymbol(order.symbol ?? "") !== normalizeSymbol(simulation.ticker)) return false;
-    if (order.optionType && order.optionType !== "unknown" && order.optionType !== leg.type) return false;
-    if (order.strike !== undefined && Math.abs(order.strike - leg.strikeUSD) > 0.001) return false;
-    if (order.expiry && normalizeDate(order.expiry) !== normalizeDate(leg.expiryDate)) return false;
+    const orderTicker = resolveSaxoOrderUnderlyingSymbol(order);
+    if (!orderTicker || orderTicker !== normalizeSymbol(simulation.ticker)) return false;
+    if (order.optionType !== leg.type) return false;
+    if (order.strike === undefined || Math.abs(order.strike - leg.strikeUSD) > 0.001) return false;
+    if (!order.expiry || normalizeDate(order.expiry) !== normalizeDate(leg.expiryDate)) return false;
+    const expectedCloseSide = leg.side === "sell" ? "buy" : "sell";
+    if (order.side !== expectedCloseSide) return false;
+    if (order.quantity === undefined || !Number.isFinite(order.quantity) || order.quantity <= 0 || order.quantity > leg.quantity) return false;
+    if (order.status?.toLowerCase() !== "working") return false;
     return true;
   });
+}
+
+/**
+ * A review task is an application-side representation of one Saxo OCO exit
+ * rule for one option leg.  Two broker orders are deliberately grouped here:
+ * the user confirms the pair once, rather than treating its limit and stop
+ * legs as two unrelated pieces of work.
+ *
+ * This function never writes broker data and only returns orders that already
+ * passed the strict contract/account/side matcher above.
+ */
+export type SaxoExitOrderReview = {
+  simulationId: string;
+  legId: string;
+  ticker: string;
+  accountCode: SaxoAccountCode;
+  takeProfitOrder?: SaxoApiOrderSnapshot;
+  upperExitOrder?: SaxoApiOrderSnapshot;
+  /** A confirmed link becomes pending again if Saxo now shows a changed pair. */
+  status: "pending" | "confirmed";
+};
+
+export function getSaxoExitOrderReviews(
+  simulations: TradeSimulation[],
+  orders: SaxoApiOrderSnapshot[],
+): SaxoExitOrderReview[] {
+  const reviews: SaxoExitOrderReview[] = [];
+  for (const simulation of simulations) {
+    if (simulation.status !== "open") continue;
+    for (const leg of simulation.optionLegs) {
+      // Exit-rule reconciliation is only meaningful for the short option that
+      // would be bought back. Long-option price candidates remain independent.
+      if (leg.side !== "sell") continue;
+      const matching = findOrderCandidatesForLeg(simulation, leg, orders);
+      const takeProfitOrder = matching.find((order) => order.orderType?.toLowerCase() === "limit");
+      const upperExitOrder = matching.find((order) => /stop/.test(order.orderType?.toLowerCase() ?? ""));
+      if (!takeProfitOrder && !upperExitOrder) continue;
+
+      const link = simulation.exitOrderPlans?.find((plan) => plan.legId === leg.id)?.brokerOrderLink;
+      const sameOrder = (savedKey: string | undefined, current: SaxoApiOrderSnapshot | undefined) =>
+        current === undefined ? savedKey === undefined : savedKey === current.id;
+      const samePrice = (saved: number | undefined, current: number | undefined) =>
+        saved === undefined || current === undefined ? saved === current : Math.abs(saved - current) < 0.000001;
+      const confirmed =
+        link?.source === "saxo_orders" &&
+        link.status === "confirmed" &&
+        sameOrder(link.takeProfitOrderKey, takeProfitOrder) &&
+        sameOrder(link.upperExitOrderKey, upperExitOrder) &&
+        samePrice(link.takeProfitPriceUSD, takeProfitOrder?.price) &&
+        samePrice(link.upperExitPriceUSD, upperExitOrder?.stopPrice ?? upperExitOrder?.price);
+
+      reviews.push({
+        simulationId: simulation.id,
+        legId: leg.id,
+        ticker: simulation.ticker,
+        accountCode: simulation.accountCode,
+        takeProfitOrder,
+        upperExitOrder,
+        status: confirmed ? "confirmed" : "pending",
+      });
+    }
+  }
+  return reviews;
+}
+
+/** Resolve the underlying before matching.  Saxo option symbols such as
+ * `SPGI/16V26P400:XCBF` are contract identifiers, not raw ticker strings. */
+function resolveSaxoOrderUnderlyingSymbol(order: SaxoApiOrderSnapshot): string | undefined {
+  const parsed = parseLikelyTicker(order.symbol ?? "");
+  return parsed ?? undefined;
 }
 
 export function reconcileSaxoPositions(
@@ -1428,47 +1556,64 @@ export type SaxoEntryHistoryMatch = {
   reasons: string[];
 };
 
-/** Merges corroborating Activity and accounting-trade records for one exact opening fill. */
+/**
+ * A Saxo order activity and the later accounting trade can describe the same
+ * opening fill.  They are corroborating evidence, not competing fills.  This
+ * resolver deliberately accepts only one exact economic-fill family and then
+ * prefers the accounting-complete trade for booked values and trade date.
+ */
 export function resolveEntryHistoryEvidence(matches: SaxoEntryHistoryMatch[]): {
   item?: SaxoHistoryDiscoveryItem;
   relatedCandidateIds: string[];
   sourceConflict: boolean;
 } {
   if (matches.length === 0) return { relatedCandidateIds: [], sourceConflict: false };
+  // Order Activities can omit the price that the later accounting trade has.
+  // Omitted evidence is compatible with an otherwise exact fill family; only
+  // two present, different values create a source conflict.
   const familyValues = (family: SaxoEntryHistoryMatch[], select: (item: SaxoHistoryDiscoveryItem) => string | undefined) =>
     Array.from(new Set(family.map((match) => select(match.item)).filter((value): value is string => Boolean(value))));
-  const accountIdentity = (item: SaxoHistoryDiscoveryItem) => item.accountCode ?? item.accountKey ?? item.accountId ?? item.accountNumber;
+  const accountIdentity = (item: SaxoHistoryDiscoveryItem) =>
+    item.accountCode ?? item.accountKey ?? item.accountId ?? item.accountNumber;
   const comparableFields: Array<(item: SaxoHistoryDiscoveryItem) => string | undefined> = [
     accountIdentity,
     (item) => resolveSaxoHistoryUnderlyingSymbol(item) ?? (normalizeSymbol(item.symbol ?? "") || undefined),
     (item) => resolveSaxoHistoryOptionType(item),
     (item) => resolveSaxoHistoryStrike(item)?.toFixed(6),
-    (item) => { const expiry = resolveSaxoHistoryExpiry(item); return expiry ? normalizeDate(expiry) : undefined; },
+    (item) => {
+      const expiry = resolveSaxoHistoryExpiry(item);
+      return expiry ? normalizeDate(expiry) : undefined;
+    },
     (item) => item.buySell,
     (item) => item.quantity === undefined ? undefined : Math.abs(item.quantity).toFixed(6),
     (item) => item.price === undefined ? undefined : item.price.toFixed(6),
     (item) => item.tradeDate ? normalizeDate(item.tradeDate) : undefined,
   ];
-  const compatible = (family: SaxoEntryHistoryMatch[], candidate: SaxoEntryHistoryMatch) => comparableFields.every((select) => {
-    const candidateValue = select(candidate.item);
-    const known = familyValues(family, select);
-    return !candidateValue || known.length === 0 || (known.length === 1 && known[0] === candidateValue);
-  });
+  const isCompatible = (family: SaxoEntryHistoryMatch[], candidate: SaxoEntryHistoryMatch) =>
+    comparableFields.every((select) => {
+      const candidateValue = select(candidate.item);
+      const known = familyValues(family, select);
+      return !candidateValue || known.length === 0 || (known.length === 1 && known[0] === candidateValue);
+    });
   const families: SaxoEntryHistoryMatch[][] = [];
   const ambiguousMembers = new Set<SaxoEntryHistoryMatch>();
   for (const match of [...matches].sort((a, b) => openingEvidencePriority(b.item) - openingEvidencePriority(a.item) || b.score - a.score)) {
-    const eligible = families.filter((family) => compatible(family, match));
-    if (eligible.length === 1) eligible[0].push(match);
-    else if (eligible.length === 0) families.push([match]);
+    const compatible = families.filter((family) => isCompatible(family, match));
+    if (compatible.length === 1) compatible[0].push(match);
+    else if (compatible.length === 0) families.push([match]);
     else ambiguousMembers.add(match);
   }
   const relatedCandidateIds = matches.map((match) => match.item.id);
   if (families.length !== 1 || ambiguousMembers.size > 0) return { relatedCandidateIds, sourceConflict: true };
-  const item = [...families[0]].sort((a, b) => openingEvidencePriority(b.item) - openingEvidencePriority(a.item) || b.score - a.score)[0]?.item;
+  const family = families[0];
+  const item = [...family]
+    .sort((a, b) => openingEvidencePriority(b.item) - openingEvidencePriority(a.item) || b.score - a.score)[0]
+    ?.item;
   return { item, relatedCandidateIds, sourceConflict: false };
 }
 
 function openingEvidencePriority(item: SaxoHistoryDiscoveryItem): number {
+  // A trade with an account-currency booked amount is the accounting record.
   if (item.kind === "trade" && item.bookedAmountAccountCurrency !== undefined) return 4;
   if (item.kind === "trade" && item.bookedAmount !== undefined) return 3;
   if (item.kind === "trade") return 2;
@@ -1491,11 +1636,17 @@ export function getSaxoHistoryCandidateTarget(item: SaxoHistoryDiscoveryItem): S
   return "unknown";
 }
 
+/** Strictly classify the audit record; an order lifecycle update is not a close fill. */
 export function isFinalOrderActivityClose(item: SaxoHistoryDiscoveryItem): boolean {
   if (item.kind !== "order_activity") return false;
   return item.activityStatus === "FinalFill" && item.activitySubStatus === "Confirmed";
 }
 
+/**
+ * Order Activities omit ToOpenClose in the observed Saxo shape.  They become
+ * close evidence only through this exact saved-leg identity match; no ticker,
+ * date, singleton-position or missing-position inference is permitted.
+ */
 export function resolveOrderActivityCloseMatch(item: SaxoHistoryDiscoveryItem, simulations: TradeSimulation[]): SaxoHistoryResolvedOptionLegMatch | undefined {
   if (!isFinalOrderActivityClose(item) || !item.positionId || !item.accountCode || !Number.isFinite(item.uic)) return undefined;
   const quantity = Math.abs(item.fillAmount ?? item.cumulativeFilledAmount ?? 0);
@@ -1505,14 +1656,19 @@ export function resolveOrderActivityCloseMatch(item: SaxoHistoryDiscoveryItem, s
     return simulation.optionLegs.flatMap((leg) => {
       const opposite = leg.side === "buy" ? "sell" : "buy";
       if (leg.saxoPositionId !== item.positionId || leg.saxoUic !== item.uic || item.buySell !== opposite) return [];
-      const remaining = leg.quantity - (simulation.optionCloseExecutions ?? []).filter((execution) => execution.confirmed && execution.legId === leg.id).reduce((sum, execution) => sum + execution.contracts, 0);
-      return quantity <= remaining ? [{ simulation, leg, diagnostics: getSaxoHistoryOptionLegMatchDiagnostics(simulation, leg, { ...item, openClose: "close" }, "close") }] : [];
+      const remaining = leg.quantity - (simulation.optionCloseExecutions ?? [])
+        .filter((execution) => execution.confirmed && execution.legId === leg.id)
+        .reduce((sum, execution) => sum + execution.contracts, 0);
+      if (quantity > remaining) return [];
+      return [{ simulation, leg, diagnostics: getSaxoHistoryOptionLegMatchDiagnostics(simulation, leg, { ...item, openClose: "close" }, "close") }];
     });
   });
   return matches.length === 1 ? { ...matches[0], accountConfirmationWarning: undefined } : undefined;
 }
 
 export function isSaxoHistoryAutoCreatableClose(item: SaxoHistoryDiscoveryItem): boolean {
+  // Activity can create only an unconfirmed accounting-pending draft; it
+  // remains insufficient for a formal close until a report arrives.
   return (item.kind === "order_activity" ? isFinalOrderActivityClose(item) : getSaxoHistoryCandidateTarget(item) === "close") && (item.buySell === "buy" || item.buySell === "sell");
 }
 
@@ -1520,7 +1676,9 @@ export function getSaxoHistoryCandidateTargetForSimulations(
   item: SaxoHistoryDiscoveryItem,
   simulations: TradeSimulation[],
 ): SaxoHistoryCandidateTarget {
-  if (item.hasExplicitCloseEvidence) return resolveSaxoHistoryOptionLegMatch(simulations, item, "close") ? "close" : "unknown";
+  if (item.hasExplicitCloseEvidence) {
+    return resolveSaxoHistoryOptionLegMatch(simulations, item, "close") ? "close" : "unknown";
+  }
   if (item.kind === "order_activity") return resolveOrderActivityCloseMatch(item, simulations) ? "close" : "unknown";
   const baseTarget = getSaxoHistoryCandidateTarget(item);
   if (baseTarget === "assignment" || baseTarget === "stock_settlement") return baseTarget;
@@ -1846,10 +2004,34 @@ export function isSaxoHistoryMatchingEntryExecution(
 ): boolean {
   if (!isSaxoHistoryMatchingOptionLeg(simulation, leg, item, "entry")) return false;
   if (execution.legId !== leg.id) return false;
-  if (!dateMatches(execution.tradeDate, item.tradeDate)) return false;
   if (!numberMatches(execution.fillPriceUSD, item.price, 0.0001)) return false;
   if (!numberMatches(execution.contracts, getSaxoHistoryContractsForLeg(item, leg), 0.0001)) return false;
-  return true;
+  // A matching contract shape and calendar date are not sufficient to collapse
+  // two executions. Keep same-day fills separate unless the account identity
+  // and a stable Saxo/source identity make this the same economic execution.
+  const expectedAccountKey = leg.saxoAccountKey ?? simulation.fixtureMeta?.saxoAccountKey;
+  const accountMatches = Boolean(
+    (item.accountCode && simulation.accountCode && item.accountCode === simulation.accountCode) ||
+      (item.accountKey && expectedAccountKey && (
+        item.accountKey === expectedAccountKey ||
+        item.accountKey === maskSaxoIdentifier(expectedAccountKey)
+      )),
+  );
+  if (!accountMatches) return false;
+  const candidateKeys = new Set(execution.historyCandidateIds ?? []);
+  if (getSaxoHistoryCandidateKeys(item).some((key) => candidateKeys.has(key))) return true;
+  if (leg.saxoPositionId && item.positionId && leg.saxoPositionId === item.positionId) return true;
+  if (leg.saxoUic !== undefined && item.uic !== undefined && leg.saxoUic === item.uic) return true;
+  if (execution.saxoPositionId && item.positionId && execution.saxoPositionId === item.positionId) return true;
+  if (execution.saxoOrderId && item.orderId && execution.saxoOrderId === item.orderId) return true;
+  if (execution.saxoTicketId && item.ticketId && execution.saxoTicketId === item.ticketId) return true;
+  if (execution.saxoUic !== undefined && item.uic !== undefined && execution.saxoUic === item.uic) return true;
+  return Boolean(
+    dateMatches(execution.tradeDate, item.tradeDate) &&
+    execution.executionTimeUtc && item.activityTime &&
+    Number.isFinite(Date.parse(execution.executionTimeUtc)) &&
+    Date.parse(execution.executionTimeUtc) === Date.parse(item.activityTime),
+  );
 }
 
 export function isSaxoHistoryMatchingCloseExecution(
@@ -2092,6 +2274,12 @@ function parseLikelyTicker(value: string): string | undefined {
 
 function normalizeDate(value: string): string {
   return value.replace(/\//g, "-").slice(0, 10);
+}
+
+function toTokyoDate(value: string): string | undefined {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
 
 function dateMatches(left: string | undefined, right: string | undefined): boolean {

@@ -8,9 +8,18 @@ describe("stored N-option standard setting migration", () => {
     expect(normalizeStoredSettings({ ...base, defaultNOptionCommissionUSD: 2.25 }).defaultNOptionCommissionUSD).toBe(2.24);
     expect(normalizeStoredSettings({ ...base, defaultNOptionCommissionUSD: 3.1 }).defaultNOptionCommissionUSD).toBe(3.1);
   });
+
   it("persists the corresponding aggregate parent correction once for a confirmed N synthetic", () => {
     const synthetic = {
-      id: "stored-nvda-synthetic", status: "open", ticker: "MNO", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", fxRateJPY: 150, expiryDate: "2026-12-18",
+      id: "stored-nvda-synthetic",
+      status: "open",
+      ticker: "NVDA",
+      strategyType: "synthetic_forward",
+      accountCode: "N",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      accountCurrency: "USD",
+      fxRateJPY: 150,
+      expiryDate: "2026-12-18",
       optionLegs: [
         { id: "call", type: "call", side: "buy", strikeUSD: 210, premiumUSD: 26.25, quantity: 1, expiryDate: "2026-12-18" },
         { id: "put", type: "put", side: "sell", strikeUSD: 210, premiumUSD: 21.05, quantity: 1, expiryDate: "2026-12-18", putIntent: "accept_assignment" },
@@ -20,9 +29,18 @@ describe("stored N-option standard setting migration", () => {
         { id: "put-entry", legId: "put", tradeDate: "2026-08-13", contracts: 1, fillPriceUSD: 21.05, settlementCurrency: "USD", commissionUSD: 2.25, commissionSource: "standard_default", source: "manual", confirmed: true },
       ],
       optionCloseExecutions: [],
-      syntheticForwardTicket: { netFillPriceUSD: 5.2, actualTotalCommissionUSD: 4.5, entryCostUSD: 524.5, netFillSource: "leg_aggregate", actualTotalCommissionSource: "leg_aggregate", entryCostSource: "leg_aggregate" },
+      syntheticForwardTicket: {
+        netFillPriceUSD: 5.2,
+        actualTotalCommissionUSD: 4.5,
+        entryCostUSD: 524.5,
+        netFillSource: "leg_aggregate",
+        actualTotalCommissionSource: "leg_aggregate",
+        entryCostSource: "leg_aggregate",
+      },
     } as unknown as TradeSimulation;
+
     const migrated = migrateStoredLiveSimulation(synthetic);
+
     expect(migrated.syntheticForwardTicket).toMatchObject({ actualTotalCommissionUSD: 4.48, entryCostUSD: 524.48 });
     expect(migrateStoredLiveSimulation(migrated)).toBe(migrated);
   });
@@ -32,27 +50,27 @@ describe("normalizeSimulation manual opening total cost persistence", () => {
   const baseSimulation: TradeSimulation = {
     id: "manual-total-cost-simulation",
     status: "entry_confirmation",
-    name: "ALFA / API取込下書き",
-    ticker: "ALFA",
-    underlyingName: "Alpha Test",
+    name: "QCOM / API取込下書き",
+    ticker: "QCOM",
+    underlyingName: "Qualcomm",
     strategyType: "long_call",
-    currentPriceUSD: 125,
-    fxRateJPY: 123.456789,
+    currentPriceUSD: 160,
+    fxRateJPY: 160.827855,
     accountCode: "P",
     accountEnvironment: "PROD_P_JPY_SETTLEMENT",
     accountCurrency: "JPY",
     entryDate: "2026-08-12",
     expiryDate: "2027-01-15",
     dte: 156,
-    referenceFxRateJPY: 123.456789,
+    referenceFxRateJPY: 160.827855,
     stockPosition: null,
     optionLegs: [
       {
-        id: "alfa-leg",
+        id: "qcom-leg",
         type: "call",
         side: "buy",
-        strikeUSD: 125,
-        premiumUSD: 12.34,
+        strikeUSD: 160,
+        premiumUSD: 23.85,
         quantity: 1,
         expiryDate: "2027-01-15",
         assignmentPolicy: "unknown",
@@ -60,18 +78,18 @@ describe("normalizeSimulation manual opening total cost persistence", () => {
     ],
     optionEntryExecutions: [
       {
-        id: "alfa-entry",
-        legId: "alfa-leg",
+        id: "qcom-entry",
+        legId: "qcom-leg",
         tradeDate: "2026-08-12",
         contracts: 1,
-        fillPriceUSD: 12.34,
+        fillPriceUSD: 23.85,
         settlementCurrency: "JPY",
-        brokerBookedAmountJPY: -152817,
-        brokerPremiumJPY: -152500,
-        brokerTransactionCostJPY: 317,
-        brokerCurrencyConversionCostJPY: -2000,
-        brokerTotalTransactionCostJPY: -2317,
-        brokerExchangeRateJPY: 123.456789,
+        brokerBookedAmountJPY: -383934,
+        brokerPremiumJPY: -383574,
+        brokerTransactionCostJPY: 360,
+        brokerCurrencyConversionCostJPY: -3801,
+        brokerTotalTransactionCostJPY: -4157,
+        brokerExchangeRateJPY: 160.827855,
         inputMode: "P_JPY_BROKER_STATEMENT",
         source: "saxo_api_estimate",
         confirmed: false,
@@ -111,8 +129,8 @@ describe("normalizeSimulation manual opening total cost persistence", () => {
     const reloaded = normalizeSimulation(JSON.parse(JSON.stringify(baseSimulation)), "live");
 
     expect(reloaded.optionEntryExecutions?.[0]).toMatchObject({
-      brokerCurrencyConversionCostJPY: -2000,
-      brokerTotalTransactionCostJPY: -2317,
+      brokerCurrencyConversionCostJPY: -3801,
+      brokerTotalTransactionCostJPY: -4157,
       openingFieldSources: {
         brokerCurrencyConversionCostJPY: "manual",
         brokerTotalTransactionCostJPY: "manual",
@@ -187,8 +205,8 @@ describe("normalizeSimulation stock settlement migration", () => {
   const baseSimulation: TradeSimulation = {
     id: "legacy-stock-settlement-simulation",
     status: "closed",
-    name: "MNO covered call",
-    ticker: "MNO",
+    name: "NVDA covered call",
+    ticker: "NVDA",
     underlyingName: "NVIDIA",
     strategyType: "covered_call",
     currentPriceUSD: 202.76,

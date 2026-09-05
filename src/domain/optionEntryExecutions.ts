@@ -131,9 +131,30 @@ export function getOptionEntryExecutions(simulation: TradeSimulation): OptionEnt
 
 export function hasUnconfirmedOptionEntryExecutions(simulation: TradeSimulation): boolean {
   if (simulation.status !== "open" && simulation.status !== "entry_confirmation") return false;
+  return needsOptionEntryConfirmation(simulation);
+}
+
+/**
+ * A duplicate, unconfirmed Saxo record must not make a leg actionable when a
+ * complete confirmed execution already covers that leg's quantity.  This is
+ * deliberately quantity based so partial fills still require confirmation.
+ */
+export function needsOptionEntryConfirmation(simulation: TradeSimulation): boolean {
   const executions = getOptionEntryExecutions(simulation);
-  const optionLegs = simulation.optionLegs;
-  return executions.length < optionLegs.length || executions.some((execution) => !execution.confirmed);
+  return simulation.optionLegs.some((leg) => {
+    const coveredContracts = executions
+      .filter((execution) => execution.legId === leg.id && execution.confirmed && isCompleteConfirmedEntryExecution(execution))
+      .reduce((sum, execution) => sum + execution.contracts, 0);
+    return coveredContracts + 0.0001 < leg.quantity;
+  });
+}
+
+function isCompleteConfirmedEntryExecution(execution: OptionEntryExecution): boolean {
+  if (!execution.tradeDate || !Number.isFinite(execution.fillPriceUSD) || execution.fillPriceUSD <= 0) return false;
+  if (!Number.isFinite(execution.contracts) || execution.contracts <= 0) return false;
+  // Accounting completeness has its own warning path.  It is not a reason to
+  // reopen a user-confirmed entry or to duplicate a history candidate.
+  return true;
 }
 
 function signedLegMultiplier(leg?: OptionLeg): number {

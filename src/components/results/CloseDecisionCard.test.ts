@@ -1,11 +1,10 @@
+import React from "react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createElement } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
-import type { OptionLeg, TradeSimulation } from "@/types/domain";
 import type { AccountInputs } from "@/store/useOptionsStore";
+import type { OptionLeg, TradeSimulation } from "@/types/domain";
 import {
-  CloseDecisionCard,
   buildLongOptionValueSnapshot,
   buildOptionValueTimeline,
   buildOptionPriceComparison,
@@ -14,6 +13,7 @@ import {
   calculateLongOptionExitBreakevenPriceUSD,
   calculateOptionValueProgress,
   getOptionValueProgressMessage,
+  CloseDecisionCard,
   getPremiumCandidateManualInputGuidance,
   getLongOptionExitOrderLineCandidate,
   getPremiumCandidatePrice,
@@ -21,36 +21,32 @@ import {
   upsertOptionValueSnapshot,
 } from "./CloseDecisionCard";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
-function createAccountInputs(): AccountInputs {
+function createOrder(overrides: Partial<SaxoApiOrderSnapshot>): SaxoApiOrderSnapshot {
   return {
-    P: {
-      accountCode: "P",
-      currency: "JPY",
-      cashBalance: 200_224,
-      buyingPower: 200_224,
-      marginAvailable: 200_224,
-      marginUsagePercent: 0,
-      updatedAt: "2026-07-05T00:00:00.000Z",
-    },
-    N: {
-      accountCode: "N",
-      currency: "USD",
-      cashBalance: 10_000,
-      buyingPower: 10_000,
-      marginAvailable: 10_000,
-      marginUsagePercent: 0,
-      updatedAt: "2026-07-05T00:00:00.000Z",
-    },
+    id: overrides.id ?? "order",
+    accountKey: "n-key",
+    accountAssignment: "N",
+    symbol: "V",
+    optionType: "call",
+    strike: 335,
+    expiry: "2026-11-20",
+    isExitCandidate: true,
+    missingFields: [],
+    fetchedAt: "2026-06-29T00:00:00.000Z",
+    ...overrides,
   };
 }
 
 function createSimulationWithLeg(leg: OptionLeg): TradeSimulation {
   return {
     id: `simulation-${leg.id}`,
-    name: "Anonymous option",
-    ticker: "ABC",
+    name: "Visa option",
+    ticker: "V",
     strategyType: leg.side === "buy" ? "long_call" : "short_put",
     accountEnvironment: "PROD_N_USD_SETTLEMENT",
     accountCode: "N",
@@ -59,13 +55,36 @@ function createSimulationWithLeg(leg: OptionLeg): TradeSimulation {
     entryDate: "2026-06-01",
     expiryDate: leg.expiryDate,
     dte: 140,
-    currentPriceUSD: 100,
+    currentPriceUSD: 360,
     fxRateJPY: 155,
-    brokerCommissionUSD: 2.24,
+    brokerCommissionUSD: 2.25,
     denominatorMode: "broker_margin_only",
     nisaExpectedAnnualReturnPct: 5,
     optionLegs: [leg],
   } as TradeSimulation;
+}
+
+function createAccountInputs(): AccountInputs {
+  return {
+    P: {
+      accountCode: "P",
+      accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+      currency: "JPY",
+      cashBalance: 200_224,
+      marginAvailable: 0,
+      marginUsagePercent: 0,
+      updatedAt: "2026-07-05",
+    },
+    N: {
+      accountCode: "N",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      currency: "USD",
+      cashBalance: 10_000,
+      marginAvailable: 0,
+      marginUsagePercent: 0,
+      updatedAt: "2026-07-05",
+    },
+  };
 }
 
 describe("at-a-glance option price comparison", () => {
@@ -101,7 +120,7 @@ describe("at-a-glance option price comparison", () => {
       expiryDate: "2026-08-21",
       putIntent: "avoid_assignment",
     });
-    render(createElement(CloseDecisionCard, { simulation, onChange: vi.fn(), defaultOpen: true }));
+    render(React.createElement(CloseDecisionCard, { simulation, onChange: vi.fn(), defaultOpen: true }));
 
     const comparison = screen.getByRole("region", { name: "オプション価格比較" });
     expect(comparison).toHaveTextContent("建玉時");
@@ -112,80 +131,82 @@ describe("at-a-glance option price comparison", () => {
     expect(screen.getByText("今閉じた場合の概算損益（手数料後）")).toBeInTheDocument();
   });
 
-  it("keeps a confirmed-closed composite leg read-only and leaves only the remaining leg editable", () => {
-    const call = { id: "closed-call", type: "call" as const, side: "buy" as const, strikeUSD: 100, premiumUSD: 2, closeCostUSD: 3, quantity: 1, expiryDate: "2026-12-18" };
-    const put = { id: "open-put", type: "put" as const, side: "sell" as const, strikeUSD: 100, premiumUSD: 2, quantity: 1, expiryDate: "2026-12-18", putIntent: "avoid_assignment" as const };
-    const simulation = { ...createSimulationWithLeg(call), strategyType: "synthetic_forward" as const, optionLegs: [call, put], optionCloseExecutions: [{ id: "call-close", legId: "closed-call", closeKind: "buyback" as const, confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "USD" as const, source: "manual" as const }] };
-    render(createElement(CloseDecisionCard, { simulation, onChange: vi.fn(), defaultOpen: true }));
+  it("keeps candidate retrieval inside the leg and omits the standalone API and exit-order cards", () => {
+    const simulation = createSimulationWithLeg({
+      id: "long-compact-candidate",
+      type: "call",
+      side: "buy",
+      strikeUSD: 340,
+      premiumUSD: 3.3,
+      closeCostUSD: 2.31,
+      quantity: 1,
+      expiryDate: "2026-11-20",
+      closePlan: { enabled: true, commissionUSD: 2.24 },
+    });
+    render(React.createElement(CloseDecisionCard, { simulation, onChange: vi.fn(), defaultOpen: true }));
+
+    expect(screen.getByRole("button", { name: "候補価格を取得" })).toBeInTheDocument();
+    expect(screen.queryByText("API候補価格")).toBeNull();
+    expect(screen.queryByText("Saxo側出口注文")).toBeNull();
+    expect(screen.getByText("判断の詳細・計算内訳")).toBeInTheDocument();
+    expect(screen.getByText(/価格推移・計算履歴/)).toBeInTheDocument();
+  });
+
+  it("renders a fully closed composite leg as read-only while keeping the remaining leg actionable", () => {
+    const call = { id: "closed-call", type: "call" as const, side: "buy" as const, strikeUSD: 340, premiumUSD: 3, closeCostUSD: 4, quantity: 1, expiryDate: "2026-12-18" };
+    const put = { id: "open-put", type: "put" as const, side: "sell" as const, strikeUSD: 340, premiumUSD: 3, quantity: 1, expiryDate: "2026-12-18", putIntent: "avoid_assignment" as const };
+    const simulation = {
+      ...createSimulationWithLeg(call), strategyType: "synthetic_forward" as const, optionLegs: [call, put],
+      optionCloseExecutions: [{ id: "call-close", legId: call.id, closeKind: "buyback" as const, confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "USD" as const, source: "manual" as const }],
+    };
+    render(React.createElement(CloseDecisionCard, { simulation, onChange: vi.fn(), defaultOpen: true }));
     const closed = document.getElementById("close-decision-call-closed-call")!;
     expect(closed).toHaveTextContent("決済済み");
     expect(closed.querySelector("input")).toBeNull();
     expect(document.getElementById("close-decision-put-open-put")?.querySelector("input")).not.toBeNull();
   });
-});
 
-function createLongCallSimulation(overrides: Partial<TradeSimulation> = {}): TradeSimulation {
-  return {
-    id: "long-call",
-    name: "V C340 long call",
-    ticker: "V",
-    strategyType: "long_call",
-    status: "open",
-    accountEnvironment: "PROD_P_JPY_SETTLEMENT",
-    entryDate: "2026-06-30",
-    expiryDate: "2026-11-20",
-    dte: 143,
-    currentPriceUSD: 360,
-    fxRateJPY: 164.23105,
-    referenceFxRateJPY: 164.23105,
-    brokerCommissionUSD: 2.25,
-    brokerCommissionJPY: 0,
-    exchangeFeesJPY: 0,
-    fxConversionCostJPY: 0,
-    carryingCostJPY: 0,
-    brokerMarginJPY: 0,
-    marginBufferMultiplier: 1,
-    availableCashJPY: 0,
-    denominatorMode: "custom",
-    stockPosition: null,
-    optionLegs: [
-      {
-        id: "long-call-leg",
-        type: "call",
-        side: "buy",
-        strikeUSD: 340,
-        premiumUSD: 24.1,
-        quantity: 1,
-        expiryDate: "2026-11-20",
-        closeCostUSD: 36.4,
-        closePlan: {
-          enabled: true,
-          closePriceUSD: 36.4,
-          profitTargetPriceUSD: 33,
-          stopLossPriceUSD: 11,
-          commissionUSD: 2.25,
+  it("uses a confirmed Saxo OCO link for the decision rules instead of the app reference percentage", () => {
+    const leg = {
+      id: "confirmed-oco-put",
+      type: "put" as const,
+      side: "sell" as const,
+      strikeUSD: 400,
+      premiumUSD: 7.9,
+      closeCostUSD: 2.31,
+      quantity: 1,
+      expiryDate: "2026-10-16",
+      putIntent: "avoid_assignment" as const,
+      closePlan: { enabled: true, commissionUSD: 2.24 },
+    };
+    const simulation = {
+      ...createSimulationWithLeg(leg),
+      exitOrderPlans: [{
+        scope: "leg" as const,
+        legId: leg.id,
+        mode: "after_entry_closing_order" as const,
+        brokerOrderType: "oco" as const,
+        profitTakeEnabled: true,
+        profitTakePremiumKeepPercent: 60,
+        stopLossEnabled: true,
+        stopLossType: "buyback_price" as const,
+        brokerOrderLink: {
+          source: "saxo_orders" as const,
+          status: "confirmed" as const,
+          takeProfitPriceUSD: 1.9,
+          upperExitPriceUSD: 6.2,
         },
-      },
-    ],
-    ...overrides,
-  } as TradeSimulation;
-}
+      }],
+    };
 
-function createOrder(overrides: Partial<SaxoApiOrderSnapshot>): SaxoApiOrderSnapshot {
-  return {
-    id: overrides.id ?? "order",
-    accountKey: "n-key",
-    accountAssignment: "N",
-    symbol: "V",
-    optionType: "call",
-    strike: 335,
-    expiry: "2026-11-20",
-    isExitCandidate: true,
-    missingFields: [],
-    fetchedAt: "2026-06-29T00:00:00.000Z",
-    ...overrides,
-  };
-}
+    render(React.createElement(CloseDecisionCard, { simulation, onChange: vi.fn(), defaultOpen: true }));
+
+    expect(screen.getByText("Saxo OCO・利確側").parentElement).toHaveTextContent("$1.90");
+    expect(screen.getByText("Saxo OCO・利確側").parentElement).toHaveTextContent("約75.9%");
+    expect(screen.getByText("Saxo OCO・撤退側").parentElement).toHaveTextContent("$6.20");
+    expect(screen.queryByText(/決済指値目安 \$3\.16/)).not.toBeInTheDocument();
+  });
+});
 
 describe("long option exit order line candidates", () => {
   it("uses Saxo closing limit and stop prices as long call profit and stop lines", () => {
@@ -248,6 +269,140 @@ describe("Saxo option premium candidate input", () => {
       positionId: "7655451244",
       instrumentCode: "V/20X26C340:XCBF",
     });
+  });
+});
+
+describe("exit price source boundaries", () => {
+  it("does not render moomoo exit-price controls while retaining the Saxo candidate path", () => {
+    render(React.createElement(CloseDecisionCard, {
+      simulation: createSimulationWithLeg({
+        id: "long-call",
+        type: "call",
+        side: "buy",
+        strikeUSD: 340,
+        premiumUSD: 24.1,
+        quantity: 1,
+        expiryDate: "2026-11-20",
+      }),
+      onChange: vi.fn(),
+      defaultOpen: true,
+    }));
+
+    expect(screen.queryByText("moomoo参考価格")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /moomoo価格候補/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "候補価格を取得" })).toBeInTheDocument();
+  });
+});
+
+describe("long option exit proceeds preview", () => {
+  it("uses the P/JPY dashboard resolver instead of requiring a USD opening fee", () => {
+    const leg = {
+      id: "p-jpy-call",
+      type: "call" as const,
+      side: "buy" as const,
+      strikeUSD: 220,
+      premiumUSD: 17.6,
+      quantity: 1,
+      expiryDate: "2027-01-15",
+      closeCostUSD: 11.6,
+      closePlan: { enabled: true, closePriceUSD: 11.6, commissionUSD: 2.24, commissionSource: "manual" as const },
+    };
+    const simulation = {
+      ...createSimulationWithLeg(leg),
+      id: "p-jpy-long-call",
+      accountEnvironment: "PROD_P_JPY_SETTLEMENT" as const,
+      accountCode: "P" as const,
+      accountCurrency: "JPY" as const,
+      entryDate: "2026-08-01",
+      optionEntryExecutions: [{
+        id: "entry-p-jpy",
+        legId: leg.id,
+        tradeDate: "2026-08-01",
+        contracts: 1,
+        fillPriceUSD: 17.6,
+        settlementCurrency: "JPY" as const,
+        brokerBookedAmountJPY: -282_000,
+        source: "saxo_api_estimate" as const,
+        confirmed: true,
+      }],
+    };
+
+    render(React.createElement(CloseDecisionCard, {
+      simulation,
+      onChange: vi.fn(),
+      defaultOpen: true,
+      currentEstimateFxQuote: { pair: "USDJPY", rate: 150, date: "2026-08-15", fetchedAt: "2026-08-15T00:00:00.000Z", source: "local_proxy" },
+    }));
+
+    const profitRow = screen.getByText("今閉じた場合の概算損益（手数料後）").parentElement;
+    expect(profitRow?.textContent).not.toContain("未計算");
+    expect(screen.getByText(/現在換算為替 150 JPY\/USD/)).toBeTruthy();
+  });
+
+  it("shows P account JPY exit proceeds and projected P cash after close", () => {
+    const simulation = {
+      ...createSimulationWithLeg({
+        id: "long-call",
+        type: "call",
+        side: "buy",
+        strikeUSD: 340,
+        premiumUSD: 24.1,
+        quantity: 1,
+        expiryDate: "2026-11-20",
+        closeCostUSD: 36.4,
+        closePlan: {
+          enabled: true,
+          closePriceUSD: 36.4,
+          commissionUSD: 2.25,
+        },
+      }),
+      accountEnvironment: "PROD_P_JPY_SETTLEMENT" as const,
+      accountCode: "P" as const,
+      accountCurrency: "JPY" as const,
+      fxRateJPY: 164.23105,
+      referenceFxRateJPY: 164.23105,
+    };
+
+    render(React.createElement(CloseDecisionCard, {
+      simulation,
+      onChange: vi.fn(),
+      defaultOpen: true,
+      accountInputs: createAccountInputs(),
+    }));
+
+    expect(screen.getAllByText("反対売買時の参考受取額").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/手数料後 597,432円 \/ \$3,637.75/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("P口座現金残高").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/現在 200,224円 \/ 決済後見込み 797,656円/).length).toBeGreaterThan(0);
+  });
+
+  it("does not mix P account cash into an N account long option", () => {
+    const simulation = createSimulationWithLeg({
+      id: "long-call-n",
+      type: "call",
+      side: "buy",
+      strikeUSD: 340,
+      premiumUSD: 24.1,
+      quantity: 1,
+      expiryDate: "2026-11-20",
+      closeCostUSD: 36.4,
+      closePlan: {
+        enabled: true,
+        closePriceUSD: 36.4,
+        commissionUSD: 2.25,
+      },
+    });
+
+    render(React.createElement(CloseDecisionCard, {
+      simulation,
+      onChange: vi.fn(),
+      defaultOpen: true,
+      accountInputs: createAccountInputs(),
+    }));
+
+    expect(screen.queryByText("P口座現金残高")).toBeNull();
+    expect(screen.getAllByText("N口座USD現金残高").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/現在 \$10,000.00 \/ 決済後見込み \$13,637.75/).length).toBeGreaterThan(0);
   });
 });
 
@@ -343,42 +498,6 @@ describe("long option close annualized return", () => {
       entryCost: 0,
       elapsedDays: 5,
     })).toBeNull();
-  });
-});
-
-describe("long option exit proceeds preview", () => {
-  it("shows P account JPY exit proceeds and projected P cash after close", () => {
-    render(
-      createElement(CloseDecisionCard, {
-        simulation: createLongCallSimulation(),
-        onChange: () => undefined,
-        defaultOpen: true,
-        accountInputs: createAccountInputs(),
-      }),
-    );
-
-    expect(screen.getAllByText("反対売買時の参考受取額").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/手数料後 597,432円 \/ \$3,637.75/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("P口座現金残高").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/現在 200,224円 \/ 決済後見込み 797,656円/).length).toBeGreaterThan(0);
-  });
-
-  it("does not mix P account cash into an N account long option", () => {
-    render(
-      createElement(CloseDecisionCard, {
-        simulation: createLongCallSimulation({
-          id: "long-call-n",
-          accountEnvironment: "PROD_N_USD_SETTLEMENT",
-        }),
-        onChange: () => undefined,
-        defaultOpen: true,
-        accountInputs: createAccountInputs(),
-      }),
-    );
-
-    expect(screen.queryByText("P口座現金残高")).toBeNull();
-    expect(screen.getAllByText("N口座USD現金残高").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/現在 \$10,000.00 \/ 決済後見込み \$13,637.75/).length).toBeGreaterThan(0);
   });
 });
 
@@ -533,9 +652,10 @@ describe("long call time value decay snapshots", () => {
 
   it("confirms a close-fee candidate without creating a close execution or changing status", () => {
     const leg: OptionLeg = { id: "fee-leg", type: "put", side: "sell", strikeUSD: 100, premiumUSD: 2, quantity: 2, expiryDate: "2026-11-20", closeCostUSD: 1 };
-    const simulation = createLongCallSimulation({ accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", optionLegs: [leg] });
+    const simulation = createSimulationWithLeg(leg);
     const onChange = vi.fn();
-    render(createElement(CloseDecisionCard, { simulation, onChange, defaultOpen: true }));
+    render(React.createElement(CloseDecisionCard, { simulation, onChange, defaultOpen: true }));
+    expect(screen.getByText("現在決済見込みを完成")).toBeTruthy();
     expect(screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.includes("Saxo決済チケット確認済み標準 / 2契約 / 2026-08-14確認") === true)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /この標準手数料で見込み計算/ })).toBeNull();
     expect(onChange).not.toHaveBeenCalled();

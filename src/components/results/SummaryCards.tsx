@@ -9,7 +9,8 @@ import {
   calculateUsedMarginJPY,
   calculateUsedMarginUSD,
 } from "@/domain/calculations";
-import { calculateDashboardPremiumDisplay, type LongOptionOrderDisplay } from "@/domain/dashboardDisplay";
+import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
+import { formatCurrentPriceStrikeDifference, formatCurrentPriceStrikePercent, getCurrentPriceStrikeDisplay } from "@/domain/currentPriceStrikeDisplay";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 function formatReferenceJPY(value: number | undefined): string {
@@ -22,52 +23,43 @@ function formatSignedUSD(value: number): string {
   return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
 }
 
-function buildLongOptionExitProceedsValue(simulation: TradeSimulation, longOptionDisplay: LongOptionOrderDisplay): string {
+function buildLongOptionExitProceedsValue(simulation: TradeSimulation, longOptionDisplay: NonNullable<ReturnType<typeof calculateDashboardPremiumDisplay>["longOptionOrderDisplay"]>): string {
   const preview = longOptionDisplay.exitProceedsPreview;
-  if (!preview) return "現在価格未入力";
+  if (!preview) return "未計算";
   if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
     return `手数料後 ${formatUSD(preview.netUSD)}`;
   }
-  return preview.netJPY !== undefined ? `手数料後 ${formatJPY(preview.netJPY)}` : "手数料後 参考JPY未計算";
+  return preview.netJPY !== undefined
+    ? `手数料後 ${formatJPY(preview.netJPY)}`
+    : "手数料後 参考JPY未計算";
 }
 
-function buildLongOptionExitProceedsNote(simulation: TradeSimulation, longOptionDisplay: LongOptionOrderDisplay): string {
+function buildLongOptionExitProceedsNote(simulation: TradeSimulation, longOptionDisplay: NonNullable<ReturnType<typeof calculateDashboardPremiumDisplay>["longOptionOrderDisplay"]>): string {
   const preview = longOptionDisplay.exitProceedsPreview;
-  if (!preview) return "現在オプション価格を入れると、反対売買時の参考受取額を表示します。";
+  if (!preview) return "現在オプション価格を入れると、売却した場合に戻る概算資金を表示します。利益額ではありません。";
   const grossJpy = preview.grossJPY !== undefined ? formatJPY(preview.grossJPY) : "参考JPY未計算";
   const netJpy = preview.netJPY !== undefined ? formatJPY(preview.netJPY) : "参考JPY未計算";
   if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
-    return `手数料前 ${formatUSD(preview.grossUSD)} / 手数料後 ${formatUSD(preview.netUSD)}。参考 ${netJpy}。`;
+    return `手数料前 ${formatUSD(preview.grossUSD)} / 手数料後 ${formatUSD(preview.netUSD)}。参考JPY 手数料後 ${netJpy}。`;
   }
-  return `手数料前 ${grossJpy} / ${formatUSD(preview.grossUSD)}。手数料後 ${netJpy} / ${formatUSD(preview.netUSD)}。`;
+  return `手数料前 ${grossJpy} / ${formatUSD(preview.grossUSD)}。手数料後 ${netJpy} / ${formatUSD(preview.netUSD)}。決済前プレビューです。`;
 }
 
-function buildLongOptionExitCashValue(
-  simulation: TradeSimulation,
-  accountInputs: AccountInputs | undefined,
-  longOptionDisplay: LongOptionOrderDisplay,
-): string {
+function buildLongOptionExitCashValue(simulation: TradeSimulation, accountInputs: AccountInputs | undefined, longOptionDisplay: NonNullable<ReturnType<typeof calculateDashboardPremiumDisplay>["longOptionOrderDisplay"]>): string {
   const preview = longOptionDisplay.exitProceedsPreview;
+  if (!preview) return "未計算";
   const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
   const account = accountInputs?.[isN ? "N" : "P"];
   if (!account) return isN ? "N口座USD現金 未取得" : "P口座現金残高 未取得";
-  if (!preview) {
-    return isN ? `現在 ${formatUSD(account.cashBalance)}` : `現在 ${formatJPY(account.cashBalance)}`;
-  }
-  if (isN) {
-    return `現在 ${formatUSD(account.cashBalance)} / 決済後見込み ${formatUSD(account.cashBalance + preview.netUSD)}`;
-  }
-  if (preview.netJPY === undefined) {
-    return `現在 ${formatJPY(account.cashBalance)} / 決済後見込み 参考JPY未計算`;
-  }
+  if (isN) return `現在 ${formatUSD(account.cashBalance)} / 決済後見込み ${formatUSD(account.cashBalance + preview.netUSD)}`;
+  if (preview.netJPY === undefined) return `現在 ${formatJPY(account.cashBalance)} / 決済後見込み 参考JPY未計算`;
   return `現在 ${formatJPY(account.cashBalance)} / 決済後見込み ${formatJPY(account.cashBalance + preview.netJPY)}`;
 }
 
 function buildLongOptionExitCashNote(simulation: TradeSimulation): string {
-  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
-    return "決済前プレビューです。正式なUSD現金残高は決済実績保存後に更新します。";
-  }
-  return "決済前プレビューです。正式なP口座JPY現金残高は決済実績保存後に更新します。N口座USD残高とは混ぜません。";
+  return simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+    ? "N口座USD残高だけを使う決済前プレビューです。正式な現金残高更新は決済実績保存後に行います。"
+    : "P口座JPY現金だけを使う決済前プレビューです。正式な現金残高更新は決済実績保存後に行います。";
 }
 
 type FundingSource = {
@@ -280,8 +272,24 @@ export function SummaryCards({
       ? historyAnnualFormula
       : `税前 / 税引後。${simulation.dte}日換算。`;
   const assignmentEstimate = usePremiumDisplay ? premiumDisplay.coveredCallAssignmentEstimate : undefined;
+  const currentPriceStrikeDisplay = getCurrentPriceStrikeDisplay(simulation);
+  const currentPriceStrikeNote = currentPriceStrikeDisplay.currentPriceUSD === undefined
+    ? "上部の「価格を一括更新」で取得"
+    : currentPriceStrikeDisplay.legs.map((leg) => {
+      if (leg.strikeUSD === undefined) return `${leg.label} 権利行使価格 未取得`;
+      const difference = formatCurrentPriceStrikeDifference(leg.differenceUSD);
+      const pct = formatCurrentPriceStrikePercent(leg.differencePct);
+      return `${leg.label} ${formatUSD(leg.strikeUSD)}${difference && pct ? ` / ${difference} / ${pct}` : ""}`;
+    }).join(" / ") || "権利行使価格 未取得";
 
   const cards = [
+    {
+      title: "現在株価 / 権利行使価格",
+      value: currentPriceStrikeDisplay.currentPriceUSD === undefined
+        ? "現在株価 未取得"
+        : `現在株価 ${formatUSD(currentPriceStrikeDisplay.currentPriceUSD)}`,
+      note: currentPriceStrikeNote,
+    },
     {
       title: longOptionDisplay
         ? "反対売買損益分岐価格"

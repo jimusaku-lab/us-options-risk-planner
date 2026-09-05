@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { createElement } from "react";
+import { afterEach, describe, expect, it } from "vitest";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import type { TradeSimulation } from "@/types/domain";
-import { buildPutAssignmentFundingNote } from "./SummaryCards";
+import { buildPutAssignmentFundingNote, SummaryCards } from "./SummaryCards";
+
+afterEach(() => cleanup());
 
 function createShortPutSimulation(overrides: Partial<TradeSimulation> = {}): TradeSimulation {
   return {
@@ -131,5 +135,48 @@ describe("buildPutAssignmentFundingNote", () => {
 
     expect(note).toContain("資金確認: 充足");
     expect(note).toContain("P口座JPY現金 3,500,000円 / 余裕 380,000円");
+  });
+});
+
+describe("SummaryCards current price and strike comparison", () => {
+  const primaryDenominator = {
+    mode: "cash_secured" as const,
+    label: "証拠金",
+    currency: "USD" as const,
+    amountJPY: 16_000,
+    amountUSD: 100,
+    annualReturnPct: 10,
+    isPrimary: true,
+    explanation: "fixture",
+    components: [],
+  };
+  const taxResult = {
+    grossProfitJPY: 0,
+    feeAdjustedProfitJPY: 0,
+    taxableProfitJPY: 0,
+    taxJPY: 0,
+    netProfitJPY: 0,
+    grossAnnualReturnPct: 0,
+    netAnnualReturnPct: 0,
+    netMonthlyReturnPct: 0,
+    requiresUserConfirmation: false,
+  };
+
+  it("uses the same stored current price and strike comparison for a selected position", () => {
+    const simulation = createShortPutSimulation({ currentPriceUSD: 200 });
+    render(createElement(SummaryCards, { simulation, primaryDenominator, taxResult, blockingCount: 0 }));
+
+    expect(screen.getByText("現在株価 / 権利行使価格")).toBeTruthy();
+    expect(screen.getByText("現在株価 $200.00")).toBeTruthy();
+    expect(screen.getByText("P $195.00 / +$5.00 / +2.6%")).toBeTruthy();
+  });
+
+  it("keeps a missing current price explicit in the selected-position summary", () => {
+    const simulation = createShortPutSimulation({ currentPriceUSD: 0 });
+    render(createElement(SummaryCards, { simulation, primaryDenominator, taxResult, blockingCount: 0 }));
+
+    expect(screen.getByText("現在株価 未取得")).toBeTruthy();
+    expect(screen.getByText("上部の「価格を一括更新」で取得")).toBeTruthy();
+    expect(screen.queryByText("現在株価 $0.00")).toBeNull();
   });
 });
