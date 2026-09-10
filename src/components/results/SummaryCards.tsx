@@ -10,7 +10,7 @@ import {
   calculateUsedMarginUSD,
 } from "@/domain/calculations";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
-import { formatCurrentPriceStrikeDifference, formatCurrentPriceStrikePercent, getCurrentPriceStrikeDisplay } from "@/domain/currentPriceStrikeDisplay";
+import type { CurrentPositionEstimate } from "@/domain/currentPositionEstimate";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 function formatReferenceJPY(value: number | undefined): string {
@@ -60,6 +60,60 @@ function buildLongOptionExitCashNote(simulation: TradeSimulation): string {
   return simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
     ? "N口座USD残高だけを使う決済前プレビューです。正式な現金残高更新は決済実績保存後に行います。"
     : "P口座JPY現金だけを使う決済前プレビューです。正式な現金残高更新は決済実績保存後に行います。";
+}
+
+function PaymentFirstLongOptionSummary({
+  simulation,
+  display,
+  currentEstimate,
+  primaryWarning,
+  onWarningAction,
+}: {
+  simulation: TradeSimulation;
+  display: NonNullable<ReturnType<typeof calculateDashboardPremiumDisplay>["longOptionOrderDisplay"]>;
+  currentEstimate?: CurrentPositionEstimate;
+  primaryWarning?: RiskWarning;
+  onWarningAction?: (warning: RiskWarning) => void;
+}) {
+  const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const entryDate = (simulation.optionEntryExecutions ?? []).find((execution) => execution.confirmed)?.tradeDate ?? simulation.entryDate;
+  const amount = (usd: number, jpy: number) => isN ? formatUSD(usd) : formatJPY(jpy);
+  const currentEstimateAvailable = currentEstimate?.kind === "available";
+  const estimatedProfit = currentEstimateAvailable
+    ? currentEstimate.currency === "JPY" ? formatJPY(currentEstimate.profitJPY, { signed: true }) : formatSignedUSD(currentEstimate.profitUSD)
+    : display.estimatedProfitUSD === undefined ? "未計算" : formatSignedUSD(display.estimatedProfitUSD);
+  const estimatedProfitNote = currentEstimateAvailable
+    ? `損益率 ${currentEstimate.profitPct >= 0 ? "+" : ""}${formatPct(currentEstimate.profitPct)} / 年率 ${currentEstimate.annualizedReturnPct >= 0 ? "+" : ""}${formatPct(currentEstimate.annualizedReturnPct)}`
+    : currentEstimate?.kind === "missing" ? currentEstimate.reason : "現在価格または決済想定手数料を確認してください。";
+  const saleProceeds = currentEstimateAvailable && currentEstimate.currency === "JPY"
+    ? formatJPY(currentEstimate.profitJPY + Math.abs((simulation.optionEntryExecutions ?? []).find((execution) => execution.confirmed)?.brokerBookedAmountJPY ?? 0))
+    : display.exitProceedsPreview
+      ? amount(display.exitProceedsPreview.netUSD, display.exitProceedsPreview.netJPY ?? 0)
+      : "未計算";
+  const saleNote = display.closePriceUSD === undefined
+    ? "現在売却価格 未取得"
+    : display.closeCommissionUSD === undefined
+      ? "決済想定手数料 未確認"
+      : `現在オプション価格 ${formatUSD(display.closePriceUSD)} / 株・決済想定手数料 ${formatUSD(display.closeCommissionUSD)}`;
+  const openCloseDecision = () => document.getElementById("close-decision")?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  return <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" aria-label="この建玉のお金">
+    <div className="flex flex-wrap items-baseline justify-between gap-2">
+      <div><h3 className="text-base font-bold text-slate-950">この建玉のお金</h3><p className="mt-1 text-xs text-slate-600">開始実績と現在の反対売買見込みを分けて表示します。</p></div>
+      <button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800" onClick={openCloseDecision}>決済を検討する</button>
+    </div>
+    {primaryWarning ? <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950"><span>{primaryWarning.message}</span>{primaryWarning.actionAnchorId ? <button type="button" className="font-bold underline" onClick={() => onWarningAction?.(primaryWarning)}>{primaryWarning.actionLabel ?? "確認する"}</button> : null}</div> : null}
+    <div className="mt-3 grid gap-3 md:grid-cols-3">
+      <div className="rounded-md border border-slate-200 p-3"><div className="text-xs font-bold text-slate-500">購入時</div><div className="mt-1 text-lg font-bold text-slate-950">支払プレミアム {amount(display.paidPremiumUSD, display.paidPremiumJPY)}</div><p className="mt-2 text-xs leading-5 text-slate-600">購入時手数料 {amount(display.feeUSD, display.feeJPY)} / 支払総額 {amount(display.totalCostUSD, display.totalCostJPY)} / 取引日 {entryDate} / {display.quantity}枚</p></div>
+      <div className="rounded-md border border-slate-200 p-3"><div className="text-xs font-bold text-slate-500">今売った場合</div><div className="mt-1 text-lg font-bold text-slate-950">売却受取見込み {saleProceeds}</div><p className="mt-2 text-xs leading-5 text-slate-600">{saleNote}</p></div>
+      <div className="rounded-md border border-slate-200 p-3"><div className="text-xs font-bold text-slate-500">購入時との差</div><div className="mt-1 text-lg font-bold text-slate-950">概算損益 {estimatedProfit}</div><p className="mt-2 text-xs leading-5 text-slate-600">{estimatedProfitNote}</p></div>
+    </div>
+    <div className="mt-3 grid gap-2 md:grid-cols-3">
+      <details className="rounded border border-slate-200 bg-slate-50 p-2 text-xs"><summary className="cursor-pointer font-bold">価格・出口ルール</summary><p className="mt-2">損益分岐 {display.exitBreakevenPriceUSD === undefined ? "未計算" : `${formatUSD(display.exitBreakevenPriceUSD)} / 株`} / 利確・撤退 {formatUSD(display.profitTargetPriceUSD)} / {formatUSD(display.stopLossPriceUSD)}</p></details>
+      <details className="rounded border border-slate-200 bg-slate-50 p-2 text-xs"><summary className="cursor-pointer font-bold">資金・リスク</summary><p className="mt-2">支払総額 {amount(display.totalCostUSD, display.totalCostJPY)}。満期まで放置した場合の上限を示す参考で、現在決済損益には重ねません。</p></details>
+      <details className="rounded border border-slate-200 bg-slate-50 p-2 text-xs"><summary className="cursor-pointer font-bold">計算内訳・約定記録</summary><p className="mt-2">数量 {display.quantity}枚 / 開始費用と決済想定費用は別計上です。確定した開始実績だけを表示に使います。</p></details>
+    </div>
+  </section>;
 }
 
 type FundingSource = {
@@ -138,6 +192,7 @@ type SummaryCardsProps = {
   okStatusValue?: string;
   okStatusNote?: string;
   accountInputs?: AccountInputs;
+  currentEstimate?: CurrentPositionEstimate;
 };
 
 export function SummaryCards({
@@ -157,11 +212,21 @@ export function SummaryCards({
   okStatusValue,
   okStatusNote,
   accountInputs,
+  currentEstimate,
 }: SummaryCardsProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
   const usePremiumDisplay = !historyMode && premiumDisplay.basis !== "history";
   const isSyntheticAnnualRateNotApplicable = premiumDisplay.annualReturnApplicability === "not_applicable_synthetic";
   const longOptionDisplay = usePremiumDisplay ? premiumDisplay.longOptionOrderDisplay : undefined;
+  if (!historyMode && longOptionDisplay) {
+    return <PaymentFirstLongOptionSummary
+      simulation={simulation}
+      display={longOptionDisplay}
+      currentEstimate={currentEstimate}
+      primaryWarning={primaryWarning}
+      onWarningAction={onWarningAction}
+    />;
+  }
   const premiumJPY = usePremiumDisplay ? premiumDisplay.premiumJPY : calculateNetInitialPremiumJPY(simulation);
   const premiumUSD = usePremiumDisplay ? premiumDisplay.premiumUSD : calculateNetInitialPremiumUSD(simulation);
   const putAssignmentJPY = calculatePutAssignmentCapitalTotalJPY(simulation);
@@ -272,24 +337,8 @@ export function SummaryCards({
       ? historyAnnualFormula
       : `税前 / 税引後。${simulation.dte}日換算。`;
   const assignmentEstimate = usePremiumDisplay ? premiumDisplay.coveredCallAssignmentEstimate : undefined;
-  const currentPriceStrikeDisplay = getCurrentPriceStrikeDisplay(simulation);
-  const currentPriceStrikeNote = currentPriceStrikeDisplay.currentPriceUSD === undefined
-    ? "上部の「価格を一括更新」で取得"
-    : currentPriceStrikeDisplay.legs.map((leg) => {
-      if (leg.strikeUSD === undefined) return `${leg.label} 権利行使価格 未取得`;
-      const difference = formatCurrentPriceStrikeDifference(leg.differenceUSD);
-      const pct = formatCurrentPriceStrikePercent(leg.differencePct);
-      return `${leg.label} ${formatUSD(leg.strikeUSD)}${difference && pct ? ` / ${difference} / ${pct}` : ""}`;
-    }).join(" / ") || "権利行使価格 未取得";
 
   const cards = [
-    {
-      title: "現在株価 / 権利行使価格",
-      value: currentPriceStrikeDisplay.currentPriceUSD === undefined
-        ? "現在株価 未取得"
-        : `現在株価 ${formatUSD(currentPriceStrikeDisplay.currentPriceUSD)}`,
-      note: currentPriceStrikeNote,
-    },
     {
       title: longOptionDisplay
         ? "反対売買損益分岐価格"

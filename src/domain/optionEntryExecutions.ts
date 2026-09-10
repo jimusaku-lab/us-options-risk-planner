@@ -129,6 +129,24 @@ export function getOptionEntryExecutions(simulation: TradeSimulation): OptionEnt
   return simulation.optionEntryExecutions ?? [];
 }
 
+/** Removes only source-linked duplicate confirmations of the same economic fill. */
+export function getCanonicalOptionEntryExecutions(simulation: TradeSimulation): OptionEntryExecution[] {
+  const seen = new Set<string>();
+  return getOptionEntryExecutions(simulation).filter((execution) => {
+    if (!execution.confirmed) return true;
+    const brokerIdentity = execution.saxoTicketId ?? execution.saxoOrderId;
+    if (!brokerIdentity) return true;
+    const key = JSON.stringify([
+      execution.legId, brokerIdentity, execution.tradeDate, execution.settlementCurrency,
+      execution.contracts, execution.fillPriceUSD, execution.commissionUSD,
+      execution.brokerBookedAmountJPY, execution.brokerPremiumJPY, execution.brokerTransactionCostJPY,
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function hasUnconfirmedOptionEntryExecutions(simulation: TradeSimulation): boolean {
   if (simulation.status !== "open" && simulation.status !== "entry_confirmation") return false;
   return needsOptionEntryConfirmation(simulation);
@@ -195,7 +213,7 @@ function getEntryExecutionEconomicTransactionCostJPY(execution: OptionEntryExecu
 }
 
 export function calculateOptionEntryExecutionSummary(simulation: TradeSimulation): OptionEntryExecutionSummary | null {
-  const executions = getOptionEntryExecutions(simulation);
+  const executions = getCanonicalOptionEntryExecutions(simulation);
   if (executions.length === 0) return null;
   const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
   const hasPBrokerValues =

@@ -6,6 +6,7 @@ import {
   calculateOptionEntryExecutionSummary,
   createOptionEntryExecutionDraft,
   ensureNOptionEntryStandardCommission,
+  getCanonicalOptionEntryExecutions,
   migrateNOptionEntryStandardCommissions,
   needsOptionEntryConfirmation,
   updateStandardEntryCommissionForContracts,
@@ -25,6 +26,15 @@ function buildNOptionSimulation(quantity = 1): TradeSimulation {
 }
 
 describe("N-account option entry commission sources", () => {
+  it("uses one source-linked economic fill across display and current-estimate paths", () => {
+    const simulation = buildNOptionSimulation();
+    simulation.optionEntryExecutions = [
+      { id: "entry-a", legId: "n-put", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 7.9, settlementCurrency: "USD", commissionUSD: 2.24, source: "saxo_api_estimate", saxoOrderId: "fixture-order", confirmed: true },
+      { id: "entry-b", legId: "n-put", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 7.9, settlementCurrency: "USD", commissionUSD: 2.24, source: "saxo_api_estimate", saxoOrderId: "fixture-order", confirmed: true },
+    ];
+    expect(getCanonicalOptionEntryExecutions(simulation)).toHaveLength(1);
+    expect(calculateOptionEntryExecutionSummary(simulation)?.commissionUSD).toBe(2.24);
+  });
   it("prefills the configurable standard USD fee per contract", () => {
     const simulation = buildNOptionSimulation(2);
     const draft = createOptionEntryExecutionDraft({

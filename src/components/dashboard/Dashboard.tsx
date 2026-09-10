@@ -298,7 +298,7 @@ export function Dashboard({
               <th className="py-2 pr-3">戦略</th>
               <th className="py-2 pr-3 text-right">現在株価 / 権利行使価格</th>
               <th className="py-2 pr-3">満期</th>
-              <th className="py-2 pr-3 text-right">プレミアム</th>
+              <th className="py-2 pr-3 text-right">建玉時の受払</th>
               <th className="py-2 pr-3 text-right">使用分母 / 実績分母</th>
               <th className="py-2 pr-3 text-right">年率</th>
               <th className="py-2 pr-3 text-right">警告</th>
@@ -538,6 +538,12 @@ export function Dashboard({
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {!premiumDisplay.hasPremiumInput && !isHistoryRow ? (
                       <span className="font-bold text-slate-500">未入力</span>
+                    ) : longOptionDisplay && !isHistoryRow ? (
+                      <>
+                        <span className="block text-[11px] font-bold text-slate-500">支払プレミアム</span>
+                        <span className="block">{formatUSD(longOptionDisplay.paidPremiumUSD)}</span>
+                        <span className="block text-xs text-slate-500">手数料込 {formatUSD(longOptionDisplay.totalCostUSD)}</span>
+                      </>
                     ) : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
                       <>
                         <span className="block text-[11px] font-bold text-slate-500">{isHistoryRow ? "実現損益" : premiumDisplay.label}</span>
@@ -567,13 +573,7 @@ export function Dashboard({
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {longOptionDisplay ? (
                       <>
-                        <span className="mb-1 block text-[11px] font-bold text-slate-500">建玉時支払額</span>
-                        <span className="block text-slate-950">{formatUSD(longOptionDisplay.totalCostUSD)}</span>
-                        <span className="block text-xs text-slate-500">
-                          {hasEffectiveFx && Math.abs(longOptionDisplay.totalCostJPY) > 0.5
-                            ? `参考 ${formatJPY(longOptionDisplay.totalCostJPY)}`
-                            : "参考JPY未計算"}
-                        </span>
+                        <span className="block text-xs text-slate-500">支払総額は左列に表示</span>
                       </>
                     ) : primary.currency === "USD" ? (
                       <>

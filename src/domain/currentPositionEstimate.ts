@@ -3,6 +3,7 @@ import { calculatePutAssignmentCapitalTotalUSD } from "./calculations";
 import { resolveCloseCommissionUSD } from "./closeCommissionStandard";
 import { resolveCurrentEstimateFx, type ResolvedCurrentEstimateFx } from "./currentEstimateFx";
 import { getOptionCloseCompletion, getRemainingOptionLegs } from "./optionCloseExecutions";
+import { getCanonicalOptionEntryExecutions } from "./optionEntryExecutions";
 import type { FxQuote } from "@/lib/marketData";
 
 export type PutAssignmentPolicy = "accept" | "avoid" | "unknown";
@@ -18,12 +19,12 @@ function currentExitPrice(leg: OptionLeg): number | undefined { return isPositiv
 function isExplicitFee(value: number | undefined): value is number { return value !== undefined && Number.isFinite(value) && value >= 0; }
 function missing(reason: string, missingRequirements: CurrentPositionEstimateRequirement[]): CurrentPositionEstimate { return { kind: "missing", primaryLabel: "現在決済年率", reason, missingRequirements }; }
 /** USD current estimates require confirmed USD entry executions; P/JPY report values are never converted here. */
-function getConfirmedEntryNetCashflowUSD(simulation: TradeSimulation, legs: OptionLeg[]): number | undefined { const executions=simulation.optionEntryExecutions??[]; let net=0; for (const leg of legs) { const entry=executions.find((item)=>item.legId===leg.id&&item.confirmed); if (!entry || entry.settlementCurrency!=="USD" || !Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD<=0 || !Number.isFinite(entry.contracts) || entry.contracts<=0 || !isExplicitFee(entry.commissionUSD)) return undefined; const premium=entry.fillPriceUSD*entry.contracts*100; net+=(leg.side==="sell"?premium:-premium)-entry.commissionUSD; } return net; }
+function getConfirmedEntryNetCashflowUSD(simulation: TradeSimulation, legs: OptionLeg[]): number | undefined { const executions=getCanonicalOptionEntryExecutions(simulation); let net=0; for (const leg of legs) { const entry=executions.find((item)=>item.legId===leg.id&&item.confirmed); if (!entry || entry.settlementCurrency!=="USD" || !Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD<=0 || !Number.isFinite(entry.contracts) || entry.contracts<=0 || !isExplicitFee(entry.commissionUSD)) return undefined; const premium=entry.fillPriceUSD*entry.contracts*100; net+=(leg.side==="sell"?premium:-premium)-entry.commissionUSD; } return net; }
 
 function calculateRemainingLegEstimate(simulation: TradeSimulation, leg: OptionLeg, remaining: number, elapsedDays: number): CurrentPositionEstimate {
   const exit=currentExitPrice(leg); const label=leg.type === "call" ? "C買い" : "P売り";
   if (!exit) return missing(leg.side === "buy" ? "現在売却価格 未取得" : "買戻し価格 未取得", [{ legId: leg.id, field: "exit_price" }]);
-  const entry=(simulation.optionEntryExecutions??[]).find((item)=>item.legId===leg.id&&item.confirmed);
+  const entry=getCanonicalOptionEntryExecutions(simulation).find((item)=>item.legId===leg.id&&item.confirmed);
   if (!entry || entry.settlementCurrency!=="USD" || !Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD<=0 || !Number.isFinite(entry.contracts) || entry.contracts<=0 || entry.contracts<remaining || !isExplicitFee(entry.commissionUSD)) return missing("建玉時実績 未確認", [{ legId: leg.id, field: "entry_execution" }]);
   const close=resolveCloseCommissionUSD(simulation,leg); if (close.kind==="missing") return missing("決済想定手数料 未確認", [{ legId: leg.id, field: "close_fee" }]);
   const ratio=remaining/entry.contracts; const entryCashflow=(leg.side === "sell" ? entry.fillPriceUSD * remaining * 100 : -entry.fillPriceUSD * remaining * 100) - entry.commissionUSD * ratio;
@@ -73,7 +74,7 @@ export function calculateCurrentPositionEstimate(simulation: TradeSimulation, no
   if (!exit) return missing(long ? "現在売却価格 未取得" : "買戻し価格 未取得", [{ legId: leg.id, field: "exit_price" }]);
   if (isPJPY) {
     if (!long) return { kind: "not_applicable" };
-    const entry=(simulation.optionEntryExecutions??[]).find((item)=>item.legId===leg.id&&item.confirmed&&item.settlementCurrency==="JPY");
+    const entry=getCanonicalOptionEntryExecutions(simulation).find((item)=>item.legId===leg.id&&item.confirmed&&item.settlementCurrency==="JPY");
     if (!entry || entry.brokerBookedAmountJPY===undefined || !Number.isFinite(entry.brokerBookedAmountJPY)) return missing("建玉時実績 未確認", [{ legId: leg.id, field: "entry_execution" }]);
     const close=resolveCloseCommissionUSD(simulation,leg);
     if (close.kind==="missing") return missing("決済想定手数料 未確認", [{ legId: leg.id, field: "close_fee" }]);

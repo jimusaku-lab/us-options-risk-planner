@@ -2573,6 +2573,7 @@ export default function App() {
                       : undefined
                   }
                   accountInputs={accountInputs}
+                  currentEstimate={currentPositionEstimate}
                 />
               </CollapsibleSection>
             ) : null}

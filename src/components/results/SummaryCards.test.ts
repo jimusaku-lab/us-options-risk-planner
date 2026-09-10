@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import type { TradeSimulation } from "@/types/domain";
+import { calculateCurrentPositionEstimate } from "@/domain/currentPositionEstimate";
 import { buildPutAssignmentFundingNote, SummaryCards } from "./SummaryCards";
 
 afterEach(() => cleanup());
@@ -69,6 +70,23 @@ function createAccountInputs(overrides: Partial<AccountInputs> = {}): AccountInp
       marginUsagePercent: 0,
       updatedAt: "2026-07-02",
     },
+    ...overrides,
+  };
+}
+
+function createLongCallSimulation(overrides: Partial<TradeSimulation> = {}): TradeSimulation {
+  return {
+    ...createShortPutSimulation({
+      id: "long-call",
+      name: "ABC C100",
+      ticker: "ABC",
+      strategyType: "long_call",
+      entryDate: "2026-08-01",
+      expiryDate: "2026-12-18",
+      dte: 139,
+      optionLegs: [{ id: "call-leg", type: "call", side: "buy", strikeUSD: 100, premiumUSD: 7.9, quantity: 1, expiryDate: "2026-12-18", closeCostUSD: 7.7, closePlan: { enabled: true, commissionUSD: 2.24, commissionSource: "manual" } }],
+      optionEntryExecutions: [{ id: "entry-call", legId: "call-leg", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 7.9, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }],
+    }),
     ...overrides,
   };
 }
@@ -162,21 +180,35 @@ describe("SummaryCards current price and strike comparison", () => {
     requiresUserConfirmation: false,
   };
 
-  it("uses the same stored current price and strike comparison for a selected position", () => {
+  it("does not duplicate the focused row price and strike comparison in the summary", () => {
     const simulation = createShortPutSimulation({ currentPriceUSD: 200 });
     render(createElement(SummaryCards, { simulation, primaryDenominator, taxResult, blockingCount: 0 }));
 
-    expect(screen.getByText("現在株価 / 権利行使価格")).toBeTruthy();
-    expect(screen.getByText("現在株価 $200.00")).toBeTruthy();
-    expect(screen.getByText("P $195.00 / +$5.00 / +2.6%")).toBeTruthy();
+    expect(screen.queryByText("現在株価 / 権利行使価格")).toBeNull();
   });
 
-  it("keeps a missing current price explicit in the selected-position summary", () => {
+  it("does not add a second missing-price prompt to the summary", () => {
     const simulation = createShortPutSimulation({ currentPriceUSD: 0 });
     render(createElement(SummaryCards, { simulation, primaryDenominator, taxResult, blockingCount: 0 }));
 
-    expect(screen.getByText("現在株価 未取得")).toBeTruthy();
-    expect(screen.getByText("上部の「価格を一括更新」で取得")).toBeTruthy();
+    expect(screen.queryByText("現在株価 未取得")).toBeNull();
     expect(screen.queryByText("現在株価 $0.00")).toBeNull();
+  });
+});
+
+describe("SummaryCards payment-first long option summary", () => {
+  const primaryDenominator = { mode: "cash_secured" as const, label: "証拠金", currency: "USD" as const, amountJPY: 16_000, amountUSD: 100, annualReturnPct: 10, isPrimary: true, explanation: "fixture", components: [] };
+  const taxResult = { grossProfitJPY: 0, feeAdjustedProfitJPY: 0, taxableProfitJPY: 0, taxJPY: 0, netProfitJPY: 0, grossAnnualReturnPct: 0, netAnnualReturnPct: 0, netMonthlyReturnPct: 0, requiresUserConfirmation: false };
+
+  it("places the entry payment, current sale proceeds, and difference side by side", () => {
+    const simulation = createLongCallSimulation();
+    const estimate = calculateCurrentPositionEstimate(simulation, new Date("2026-08-11T00:00:00Z"));
+    render(createElement(SummaryCards, { simulation, primaryDenominator, taxResult, blockingCount: 0, currentEstimate: estimate }));
+    expect(screen.getByRole("region", { name: "この建玉のお金" })).toBeTruthy();
+    expect(screen.getByText("支払プレミアム $790.00")).toBeTruthy();
+    expect(screen.getByText(/購入時手数料 \$2.24 \/ 支払総額 \$792.24/)).toBeTruthy();
+    expect(screen.getByText("売却受取見込み $767.76")).toBeTruthy();
+    expect(screen.getByText("概算損益 $-24.48")).toBeTruthy();
+    expect(screen.getByText("価格・出口ルール")).toBeTruthy();
   });
 });
