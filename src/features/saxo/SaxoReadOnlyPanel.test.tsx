@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
-import { createEffectiveHistoryEndpoints, createHistoryReflectionStates, createReflectionSummary, getDisplayPositionMissingFields, HistoryDiscoveryPreview, isActionRequiredRegularPositionRow, ReflectionPendingSummary, sanitizePersistedSaxoHistoryKeys, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
+import { createEffectiveHistoryEndpoints, createHistoryReflectionStates, createReflectionSummary, getDisplayPositionMissingFields, HistoryDiscoveryPreview, isActionRequiredRegularPositionRow, ReflectionPendingSummary, sanitizePersistedSaxoHistoryKeys, SaxoPanelCloseButton, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
 import type { ReflectionSummary } from "./SaxoReadOnlyPanel";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import type { TradeSimulation } from "@/types/domain";
@@ -9,6 +9,16 @@ import { getSaxoHistoryStableKey } from "./saxoAccountSync";
 import type { SaxoApiOrderSnapshot, SaxoHistoryDiscoveryItem, SaxoSyntheticForwardHold, SaxoSyntheticForwardPair } from "./saxoAccountSync";
 
 afterEach(cleanup);
+
+it("uses the same safe close callback from the API header and footer", () => {
+  const onRequestClose = vi.fn();
+  render(<><SaxoPanelCloseButton onRequestClose={onRequestClose} placement="header" /><SaxoPanelCloseButton onRequestClose={onRequestClose} placement="footer" /></>);
+
+  fireEvent.click(screen.getByRole("button", { name: "Saxo API詳細を閉じる" }));
+  fireEvent.click(screen.getByRole("button", { name: "Saxo API詳細を下部から閉じる" }));
+
+  expect(onRequestClose).toHaveBeenCalledTimes(2);
+});
 
 const callPosition = {
   id: "call", accountKey: "account", accountAssignment: "N" as const, kind: "option" as const, side: "long" as const,

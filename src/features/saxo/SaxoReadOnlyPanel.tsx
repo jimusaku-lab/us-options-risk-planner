@@ -1112,7 +1112,10 @@ export function SaxoReadOnlyPanel({
             </span>
           ) : null}
         </span>
-        <span className="text-sm font-semibold text-slate-600">接続・同期</span>
+        <span className="flex shrink-0 items-center gap-2 text-sm font-semibold text-slate-600">
+          <span>接続・同期</span>
+          {onRequestClose ? <SaxoPanelCloseButton onRequestClose={onRequestClose} placement="header" /> : null}
+        </span>
       </div>
 
         <div className="border-t border-slate-200 p-4">
@@ -1665,13 +1668,7 @@ export function SaxoReadOnlyPanel({
                 onShowEndedHistory={onShowEndedHistory}
               />
               <div className="flex justify-end">
-                <button
-                  type="button"
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-bold text-slate-800"
-                  onClick={onRequestClose}
-                >
-                  閉じる
-                </button>
+                {onRequestClose ? <SaxoPanelCloseButton onRequestClose={onRequestClose} placement="footer" /> : null}
               </div>
           </div>
           {workspace === "demo" ? (
@@ -1685,6 +1682,26 @@ export function SaxoReadOnlyPanel({
           ) : null}
         </div>
     </section>
+  );
+}
+
+/**
+ * The API panel is purely a view. Both close controls deliberately call the
+ * same parent callback so closing never reconnects, fetches, or mutates Saxo
+ * reflection state.
+ */
+export function SaxoPanelCloseButton({ onRequestClose, placement }: { onRequestClose: () => void; placement: "header" | "footer" }) {
+  return (
+    <button
+      type="button"
+      aria-label={placement === "header" ? "Saxo API詳細を閉じる" : "Saxo API詳細を下部から閉じる"}
+      className={placement === "header"
+        ? "rounded-md border border-slate-300 bg-white px-2.5 py-1 text-sm font-bold text-slate-800 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"
+        : "rounded-md border border-slate-300 px-3 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"}
+      onClick={onRequestClose}
+    >
+      閉じる
+    </button>
   );
 }
 
