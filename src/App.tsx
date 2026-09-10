@@ -2574,6 +2574,7 @@ export default function App() {
                   }
                   accountInputs={accountInputs}
                   currentEstimate={currentPositionEstimate}
+                  onOpenConfirmedCloseExecution={(executionId) => openConfirmedCloseExecution(selected.id, executionId)}
                 />
               </CollapsibleSection>
             ) : null}

@@ -5,7 +5,7 @@ import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
 import { calculateCurrentPositionEstimate, getSyntheticPutAssignmentPolicy } from "@/domain/currentPositionEstimate";
-import { getCompositeAssignmentFunding, getCompositeOptionLifecycle, getSyntheticForwardMarginCheck, isCompositeOptionStrategy } from "@/domain/compositeOptionPosition";
+import { getCompositeOptionLifecycle, isCompositeOptionStrategy } from "@/domain/compositeOptionPosition";
 import { resolveEffectiveCoveredCallSimulation } from "@/domain/coveredCallCoverage";
 import { getJournalStatusLabel, getJournalStatusTone } from "@/domain/entryRationaleJournal";
 import { calculateHistoryPerformance } from "@/domain/historyPerformance";
@@ -321,8 +321,6 @@ export function Dashboard({
               );
               const isHistoryRow = endedStatuses.has(simulation.status);
               const compositeLifecycle = getCompositeOptionLifecycle(simulation);
-              const compositeFunding = getCompositeAssignmentFunding(simulation, accountInputs[simulation.accountCode]);
-              const syntheticMarginCheck = getSyntheticForwardMarginCheck(simulation);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
               const currentEstimate = !isHistoryRow ? calculateCurrentPositionEstimate(simulationWithAccount, new Date(), currentEstimateFxQuote) : { kind: "not_applicable" } as const;
@@ -509,11 +507,10 @@ export function Dashboard({
                       <div className="mt-1 text-xs text-indigo-700">
                         <div>ネット約定 {simulation.syntheticForwardTicket?.netFillPriceUSD === undefined ? "未入力" : `${formatUSD(simulation.syntheticForwardTicket.netFillPriceUSD)} / 株`}</div>
                         <div>実績総手数料 {simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.actualTotalCommissionUSD)} / 建玉時支払額 {simulation.syntheticForwardTicket?.entryCostUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.entryCostUSD)}</div>
-                        <div>注文時証拠金 {syntheticMarginCheck?.status === "sufficient" ? "充足" : syntheticMarginCheck?.status === "insufficient" ? "不足" : "要確認"}</div>
-                        <div>{getSyntheticPutAssignmentPolicy(simulation) === "accept" ? "方針: 株取得可" : getSyntheticPutAssignmentPolicy(simulation) === "avoid" ? "方針: 株取得しない" : "方針未確認"}</div>
+                        <div>{getSyntheticPutAssignmentPolicy(simulation) === "accept" ? "方針: 株を取得できる" : getSyntheticPutAssignmentPolicy(simulation) === "avoid" ? "方針: 株を取得しない・反対売買で閉じる" : "方針未確認"}</div>
+                        {simulation.status === "planned" ? <div>注文時証拠金 {simulation.syntheticForwardTicket?.requiredMarginUSD === undefined ? "未確認" : formatUSD(simulation.syntheticForwardTicket.requiredMarginUSD)}</div> : <details className="mt-1 text-[11px] text-slate-600"><summary className="cursor-pointer">建玉開始時の証拠金記録（任意）</summary><div className="mt-1">{simulation.syntheticForwardTicket?.requiredMarginUSD === undefined ? "未記録" : formatUSD(simulation.syntheticForwardTicket.requiredMarginUSD)}。現在の残存P売りの必要証拠金には使いません。</div></details>}
                       </div>
                     ) : null}
-                    {compositeFunding ? <div className={`mt-1 text-xs ${compositeFunding.status === "sufficient" ? "text-emerald-700" : "text-amber-700"}`}>P割当資金 {formatUSD(compositeFunding.requiredUSD)}: {compositeFunding.status === "sufficient" ? "充足" : compositeFunding.status === "insufficient" ? "不足" : "未確認"}</div> : null}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">
                     {currentPriceStrikeDisplay.currentPriceUSD === undefined ? (

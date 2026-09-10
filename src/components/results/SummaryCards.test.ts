@@ -212,3 +212,30 @@ describe("SummaryCards payment-first long option summary", () => {
     expect(screen.getByText("価格・出口ルール")).toBeTruthy();
   });
 });
+
+describe("SummaryCards partial synthetic payment-first summary", () => {
+  const primaryDenominator = { mode: "cash_secured" as const, label: "証拠金", currency: "USD" as const, amountJPY: 16_000, amountUSD: 100, annualReturnPct: 10, isPrimary: true, explanation: "fixture", components: [] };
+  const taxResult = { grossProfitJPY: 0, feeAdjustedProfitJPY: 0, taxableProfitJPY: 0, taxJPY: 0, netProfitJPY: 0, grossAnnualReturnPct: 0, netAnnualReturnPct: 0, netMonthlyReturnPct: 0, requiresUserConfirmation: false };
+  it("uses the surviving put's confirmed evidence without treating the parent ticket as its cost", () => {
+    const simulation = createShortPutSimulation({
+      id: "partial-synthetic", strategyType: "synthetic_forward", entryDate: "2026-08-01",
+      optionLegs: [
+        { id: "call", type: "call", side: "buy", strikeUSD: 100, premiumUSD: 5, quantity: 1, expiryDate: "2026-12-18", closeCostUSD: 3, closePlan: { enabled: true, commissionUSD: 2.24, commissionSource: "manual" } },
+        { id: "put", type: "put", side: "sell", strikeUSD: 100, premiumUSD: 4, quantity: 1, expiryDate: "2026-12-18", closeCostUSD: 2, closePlan: { enabled: true, commissionUSD: 2.24, commissionSource: "manual" }, assignmentPolicy: "avoid" },
+      ],
+      optionEntryExecutions: [
+        { id: "entry-call", legId: "call", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 5, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
+        { id: "entry-put", legId: "put", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 4, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
+      ],
+      optionCloseExecutions: [{ id: "close-call", legId: "call", confirmed: true, closeDate: "2026-08-10", contracts: 1, closePriceUSD: 3, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: -204.48, source: "manual" }],
+      syntheticForwardTicket: { entryCostUSD: 999 },
+    });
+    const estimate = calculateCurrentPositionEstimate(simulation, new Date("2026-08-11T00:00:00Z"));
+    render(createElement(SummaryCards, { simulation, primaryDenominator, taxResult, blockingCount: 0, currentEstimate: estimate }));
+    expect(screen.getByText("評価対象: 残っているP売り1枚。決済済みC買いの実現損益とは混ぜません。")).toBeTruthy();
+    expect(screen.getByText("受取プレミアム $400.00")).toBeTruthy();
+    expect(screen.getByText("支払見込み $202.24")).toBeTruthy();
+    expect(screen.getByText(/C買いは決済済み・実現損益 \$-204.48/)).toBeTruthy();
+    expect(screen.queryByText("適用外")).toBeNull();
+  });
+});

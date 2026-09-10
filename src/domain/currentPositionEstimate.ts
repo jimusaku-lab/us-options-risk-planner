@@ -14,6 +14,20 @@ export type CurrentPositionEstimate =
   | { kind: "available"; primaryLabel: "現在決済年率"; annualizedReturnPct: number; profitUSD: number; profitPct: number; currency?: "USD"; evaluationScope?: "synthetic_combined" | "remaining_leg"; evaluatedLegId?: string; evaluatedLegLabel?: "C買い" | "P売り" }
   | { kind: "available"; primaryLabel: "現在決済年率"; annualizedReturnPct: number; profitJPY: number; profitPct: number; currency: "JPY"; fx: ResolvedCurrentEstimateFx; evaluationScope?: "synthetic_combined" | "remaining_leg"; evaluatedLegId?: string; evaluatedLegLabel?: "C買い" | "P売り" };
 
+/** Display-only, leg-scoped evidence for a partial synthetic.  The parent
+ * ticket's net debit/credit must never become the surviving leg's entry cost. */
+export type SyntheticRemainingLegMoneySummary = {
+  leg: OptionLeg;
+  remainingContracts: number;
+  entryPremiumUSD?: number;
+  entryFeeUSD?: number;
+  entryNetCashflowUSD?: number;
+  exitPriceUSD?: number;
+  closeFeeUSD?: number;
+  closeCashflowUSD?: number;
+  closedExecutions: TradeSimulation["optionCloseExecutions"];
+};
+
 function isPositiveFinite(value: number | undefined): value is number { return value !== undefined && Number.isFinite(value) && value > 0; }
 function currentExitPrice(leg: OptionLeg): number | undefined { return isPositiveFinite(leg.closeCostUSD) ? leg.closeCostUSD : undefined; }
 function isExplicitFee(value: number | undefined): value is number { return value !== undefined && Number.isFinite(value) && value >= 0; }
@@ -32,6 +46,25 @@ function calculateRemainingLegEstimate(simulation: TradeSimulation, leg: OptionL
   const denominatorUSD=leg.side === "buy" ? Math.max(0,-entryCashflow) : leg.strikeUSD*100*remaining;
   if (!isPositiveFinite(denominatorUSD)) return missing("正本分母 未確認", [{field:"denominator"}]);
   return {kind:"available",primaryLabel:"現在決済年率",annualizedReturnPct:(profitUSD/denominatorUSD)*(365/elapsedDays)*100,profitUSD,profitPct:(profitUSD/denominatorUSD)*100,evaluationScope:"remaining_leg",evaluatedLegId:leg.id,evaluatedLegLabel:label};
+}
+
+export function getSyntheticRemainingLegMoneySummary(simulation: TradeSimulation): SyntheticRemainingLegMoneySummary | undefined {
+  if (simulation.strategyType !== "synthetic_forward" || simulation.status !== "open") return undefined;
+  const completion=getOptionCloseCompletion(simulation); const remaining=getRemainingOptionLegs(simulation);
+  if (completion.state !== "partial" || remaining.length !== 1) return undefined;
+  const {leg,progress}=remaining[0]; const remainingContracts=progress.remainingContracts;
+  if (typeof remainingContracts!=="number" || !Number.isFinite(remainingContracts) || remainingContracts<=0) return undefined;
+  const entry=getCanonicalOptionEntryExecutions(simulation).find((item)=>item.legId===leg.id&&item.confirmed);
+  const usable=entry!==undefined && entry.settlementCurrency==="USD" && typeof entry.fillPriceUSD==="number" && Number.isFinite(entry.fillPriceUSD) && entry.fillPriceUSD>0 && typeof entry.contracts==="number" && Number.isFinite(entry.contracts) && entry.contracts>=remainingContracts && isExplicitFee(entry.commissionUSD);
+  const ratio=usable&&entry ? remainingContracts/entry.contracts : undefined;
+  const entryPremiumUSD=usable&&entry ? entry.fillPriceUSD*remainingContracts*100 : undefined;
+  const entryFeeUSD=usable&&entry&&ratio!==undefined&&entry.commissionUSD!==undefined ? entry.commissionUSD*ratio : undefined;
+  const entryNetCashflowUSD=entryPremiumUSD!==undefined && entryFeeUSD!==undefined ? (leg.side==="sell" ? entryPremiumUSD : -entryPremiumUSD)-entryFeeUSD : undefined;
+  const exitPriceUSD=currentExitPrice(leg); const close=resolveCloseCommissionUSD(simulation,leg);
+  const closeFeeUSD=close.kind==="resolved" ? close.amountUSD*(remainingContracts/leg.quantity) : undefined;
+  const closeCashflowUSD=exitPriceUSD!==undefined && closeFeeUSD!==undefined ? (leg.side==="sell" ? -1 : 1)*exitPriceUSD*remainingContracts*100-closeFeeUSD : undefined;
+  const closedExecutions=(simulation.optionCloseExecutions??[]).filter((execution)=>execution.confirmed&&execution.legId!==leg.id);
+  return {leg,remainingContracts,entryPremiumUSD,entryFeeUSD,entryNetCashflowUSD,exitPriceUSD,closeFeeUSD,closeCashflowUSD,closedExecutions};
 }
 
 export function getSyntheticPutAssignmentPolicy(simulation: TradeSimulation): PutAssignmentPolicy {

@@ -10,7 +10,7 @@ import {
   calculateUsedMarginUSD,
 } from "@/domain/calculations";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
-import type { CurrentPositionEstimate } from "@/domain/currentPositionEstimate";
+import { getSyntheticPutAssignmentPolicy, getSyntheticRemainingLegMoneySummary, type CurrentPositionEstimate } from "@/domain/currentPositionEstimate";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 
 function formatReferenceJPY(value: number | undefined): string {
@@ -116,6 +116,20 @@ function PaymentFirstLongOptionSummary({
   </section>;
 }
 
+function PaymentFirstSyntheticRemainingLegSummary({ simulation, currentEstimate, onOpenConfirmedCloseExecution }: { simulation: TradeSimulation; currentEstimate?: CurrentPositionEstimate; onOpenConfirmedCloseExecution?: (executionId: string) => void }) {
+  const summary=getSyntheticRemainingLegMoneySummary(simulation); if (!summary) return null;
+  const isShort=summary.leg.side==="sell"; const legLabel=`${summary.leg.type==="put" ? "P売り" : "C買い"}${summary.remainingContracts}枚`;
+  const estimate=currentEstimate?.kind==="available"&&currentEstimate.evaluationScope==="remaining_leg" ? currentEstimate : undefined;
+  const estimateValue=estimate&&"profitUSD" in estimate ? formatSignedUSD(estimate.profitUSD) : "未計算";
+  const estimateNote=estimate ? `損益率 ${estimate.profitPct>=0?"+":""}${formatPct(estimate.profitPct)} / 現在決済年率 ${estimate.annualizedReturnPct>=0?"+":""}${formatPct(estimate.annualizedReturnPct)}` : currentEstimate?.kind==="missing" ? currentEstimate.reason : "残存脚の現在評価は未計算です。";
+  const entryValue=summary.entryPremiumUSD===undefined ? "建玉時実績 未確認" : `${isShort?"受取プレミアム":"支払プレミアム"} ${formatUSD(summary.entryPremiumUSD)}`;
+  const entryNote=summary.entryFeeUSD===undefined||summary.entryNetCashflowUSD===undefined ? "開始手数料を含む確認済みの脚別実績が必要です。" : isShort ? `開始手数料 ${formatUSD(summary.entryFeeUSD)} / 手数料後受取 ${formatUSD(summary.entryNetCashflowUSD)}。` : `開始手数料 ${formatUSD(summary.entryFeeUSD)} / 支払総額 ${formatUSD(Math.abs(summary.entryNetCashflowUSD))}。`;
+  const closeTitle=isShort?"今買い戻す場合":"今売却する場合"; const closeValue=summary.closeCashflowUSD===undefined ? "未計算" : isShort ? `支払見込み ${formatUSD(Math.abs(summary.closeCashflowUSD))}` : `受取見込み ${formatUSD(summary.closeCashflowUSD)}`;
+  const closeNote=summary.exitPriceUSD===undefined ? isShort?"買戻し価格 未取得":"現在売却価格 未取得" : summary.closeFeeUSD===undefined ? "決済想定手数料 未確認" : `現在オプション価格 ${formatUSD(summary.exitPriceUSD)} / 株・決済想定手数料 ${formatUSD(summary.closeFeeUSD)}。`;
+  const closedLegName=summary.leg.type==="put" ? "C買い" : "P売り"; const policy=getSyntheticPutAssignmentPolicy(simulation); const assignmentCapital=calculatePutAssignmentCapitalTotalUSD(simulation); const historicalMargin=simulation.syntheticForwardTicket?.requiredMarginUSD;
+  return <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" aria-label="この建玉のお金"><div className="flex flex-wrap items-baseline justify-between gap-2"><div><h3 className="text-base font-bold text-slate-950">この建玉のお金</h3><p className="mt-1 text-xs text-slate-600">評価対象: 残っている{legLabel}。決済済み{closedLegName}の実現損益とは混ぜません。</p></div><button type="button" className="rounded-md bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800" onClick={()=>document.getElementById("close-decision")?.scrollIntoView({behavior:"smooth",block:"start"})}>残存脚の決済を検討する</button></div><div className="mt-3 grid gap-3 md:grid-cols-3"><div className="rounded-md border border-slate-200 p-3"><div className="text-xs font-bold text-slate-500">開始時</div><div className="mt-1 text-lg font-bold text-slate-950">{entryValue}</div><p className="mt-2 text-xs leading-5 text-slate-600">{entryNote} {legLabel}</p></div><div className="rounded-md border border-slate-200 p-3"><div className="text-xs font-bold text-slate-500">{closeTitle}</div><div className="mt-1 text-lg font-bold text-slate-950">{closeValue}</div><p className="mt-2 text-xs leading-5 text-slate-600">{closeNote}</p></div><div className="rounded-md border border-slate-200 p-3"><div className="text-xs font-bold text-slate-500">開始時との差</div><div className="mt-1 text-lg font-bold text-slate-950">{legLabel}の概算損益 {estimateValue}</div><p className="mt-2 text-xs leading-5 text-slate-600">{estimateNote}</p></div></div>{summary.closedExecutions?.length ? <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">{summary.closedExecutions.map((execution)=><div key={execution.id} className="flex flex-wrap items-center justify-between gap-2"><span>{closedLegName}は決済済み・実現損益 {execution.realizedPnlUSD!==undefined&&Number.isFinite(execution.realizedPnlUSD)?formatSignedUSD(execution.realizedPnlUSD):"未確認"}</span>{onOpenConfirmedCloseExecution?<button type="button" className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-bold text-slate-700" onClick={()=>onOpenConfirmedCloseExecution(execution.id)}>{closedLegName}の決済実績を見る</button>:null}</div>)}</div>:null}<div className="mt-3 grid gap-2 md:grid-cols-2"><details className="rounded border border-slate-200 bg-slate-50 p-2 text-xs"><summary className="cursor-pointer font-bold">資金・リスク</summary><p className="mt-2">{policy==="avoid"?"方針: 株を取得しない・反対売買で閉じる。":policy==="accept"?"方針: 株を取得できる。":"方針未確認。"} 権利割当時の参考必要額 {assignmentCapital>0?formatUSD(assignmentCapital):"未確認"}。残存P売りの現在決済分母へは使いません。</p></details><details className="rounded border border-slate-200 bg-slate-50 p-2 text-xs"><summary className="cursor-pointer font-bold">計算内訳・約定記録</summary><p className="mt-2">親チケットの開始ネット受払は二脚全体の過去記録で、残存脚の開始受払には使いません。建玉開始時の証拠金記録は {historicalMargin!==undefined&&Number.isFinite(historicalMargin)?formatUSD(historicalMargin):"未記録"}。</p></details></div></section>;
+}
+
 type FundingSource = {
   amount: number;
   label: string;
@@ -193,6 +207,7 @@ type SummaryCardsProps = {
   okStatusNote?: string;
   accountInputs?: AccountInputs;
   currentEstimate?: CurrentPositionEstimate;
+  onOpenConfirmedCloseExecution?: (executionId: string) => void;
 };
 
 export function SummaryCards({
@@ -213,11 +228,14 @@ export function SummaryCards({
   okStatusNote,
   accountInputs,
   currentEstimate,
+  onOpenConfirmedCloseExecution,
 }: SummaryCardsProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
   const usePremiumDisplay = !historyMode && premiumDisplay.basis !== "history";
   const isSyntheticAnnualRateNotApplicable = premiumDisplay.annualReturnApplicability === "not_applicable_synthetic";
   const longOptionDisplay = usePremiumDisplay ? premiumDisplay.longOptionOrderDisplay : undefined;
+  const syntheticPartialSummary = !historyMode ? getSyntheticRemainingLegMoneySummary(simulation) : undefined;
+  if (syntheticPartialSummary) return <PaymentFirstSyntheticRemainingLegSummary simulation={simulation} currentEstimate={currentEstimate} onOpenConfirmedCloseExecution={onOpenConfirmedCloseExecution} />;
   if (!historyMode && longOptionDisplay) {
     return <PaymentFirstLongOptionSummary
       simulation={simulation}
