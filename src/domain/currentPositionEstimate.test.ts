@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySyntheticPutAssignmentPolicy, calculateCurrentPositionEstimate, getSyntheticPutAssignmentPolicy } from "./currentPositionEstimate";
+import { applySyntheticPutAssignmentPolicy, calculateCurrentPositionEstimate, getSyntheticPutAssignmentPolicy, getSyntheticRemainingLegMoneySummary } from "./currentPositionEstimate";
 import type { TradeSimulation } from "@/types/domain";
 
 function synthetic(): TradeSimulation {
@@ -103,5 +103,15 @@ describe("current position estimate", () => {
   it("reports the remaining leg's missing price instead of synthetic non-applicability", () => {
     const value = synthetic(); value.optionCloseExecutions = [{ id: "closed-call", legId: "call", closeKind: "buyback", confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "USD", source: "manual" }]; value.optionLegs[1].closeCostUSD = undefined;
     expect(calculateCurrentPositionEstimate(value)).toMatchObject({ kind: "missing", reason: "買戻し価格 未取得", missingRequirements: [{ legId: "put", field: "exit_price" }] });
+  });
+  it("derives partial money only for the remaining leg, not the parent ticket or a complete/open combo", () => {
+    const bothOpen = synthetic();
+    expect(getSyntheticRemainingLegMoneySummary(bothOpen)).toBeUndefined();
+    const partial = synthetic();
+    partial.syntheticForwardTicket!.entryCostUSD = 9_999;
+    partial.optionCloseExecutions = [{ id: "closed-call", legId: "call", closeKind: "buyback", confirmed: true, closeDate: "2026-08-10", contracts: 1, settlementCurrency: "USD", source: "manual" }];
+    expect(getSyntheticRemainingLegMoneySummary(partial)).toMatchObject({ leg: { id: "put" }, remainingContracts: 1, entryPremiumUSD: 400, entryFeeUSD: 1, entryNetCashflowUSD: 399, closeCashflowUSD: -301 });
+    partial.optionCloseExecutions = [...partial.optionCloseExecutions, { id: "closed-put", legId: "put", closeKind: "buyback", confirmed: true, closeDate: "2026-08-10", contracts: 1, settlementCurrency: "USD", source: "manual" }];
+    expect(getSyntheticRemainingLegMoneySummary(partial)).toBeUndefined();
   });
 });
