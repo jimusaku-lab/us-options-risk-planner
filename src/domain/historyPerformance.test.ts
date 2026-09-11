@@ -209,6 +209,28 @@ describe("history performance", () => {
     expect(result.optionCloseExecutionResults[0].annualReturnPct).toBeUndefined();
   });
 
+  it("distinguishes missing dates, duplicate evidence, and unmatched multi-date partial closes", () => {
+    const base = shortPutSimulation({
+      id: "long-history-entry-issue", strategyType: "long_put", status: "closed", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCode: "N", accountCurrency: "USD",
+      optionLegs: [{ ...shortPutSimulation().optionLegs[0], id: "put", type: "put", side: "buy", quantity: 1 }],
+      optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 45.52, source: "manual", confirmed: true }],
+    });
+    expect(calculateHistoryPerformance({ ...base, optionEntryExecutions: [{ id: "entry", legId: "put", tradeDate: "", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }] }).historicalAnnualReturnMissingReason).toBe("購入時約定日");
+    expect(calculateHistoryPerformance({ ...base, optionEntryExecutions: [
+      { id: "entry-a", legId: "put", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true },
+      { id: "entry-b", legId: "put", tradeDate: "2026-08-02", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "broker_statement", confirmed: true },
+    ] }).historicalAnnualReturnMissingReason).toBe("開始約定の重複または競合");
+
+    const multiLot = { ...base, optionLegs: [{ ...base.optionLegs[0], id: "call", type: "call" as const, side: "buy" as const, quantity: 2 }], optionEntryExecutions: [
+      { id: "entry-one", legId: "call", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD" as const, source: "manual" as const, confirmed: true },
+      { id: "entry-two", legId: "call", tradeDate: "2026-08-03", contracts: 1, fillPriceUSD: 2, commissionUSD: 2.24, settlementCurrency: "USD" as const, source: "manual" as const, confirmed: true },
+    ], optionCloseExecutions: [{ ...base.optionCloseExecutions![0], legId: "call", contracts: 2, realizedPnlUSD: 90 }] };
+    const complete = calculateHistoryPerformance(multiLot);
+    expect(complete.historicalAnnualReturnMissingReason).toBeUndefined();
+    expect(complete.primaryDenominator.annualReturnPct).toBeCloseTo((90 / (102.24 * 4 + 202.24 * 2)) * 365 * 100, 8);
+    expect(calculateHistoryPerformance({ ...multiLot, optionCloseExecutions: [{ ...multiLot.optionCloseExecutions![0], contracts: 1 }] }).historicalAnnualReturnMissingReason).toBe("決済ロットの対応");
+  });
+
   it("uses the one-day convention only for a same-day confirmed long-option close", () => {
     const simulation = shortPutSimulation({
       id: "long-history-same-day", strategyType: "long_call", status: "closed", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCode: "N", accountCurrency: "USD",

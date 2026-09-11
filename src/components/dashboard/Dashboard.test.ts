@@ -514,4 +514,21 @@ describe("Dashboard close decision actions", () => {
     );
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it("offers a direct 3-A review for a historical long-option entry conflict", () => {
+    const onHistoryEntryAction = vi.fn();
+    const simulation = createSimulation({
+      status: "closed", ticker: "ABC", strategyType: "long_put",
+      optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", type: "put", side: "buy", quantity: 1 }],
+      optionEntryExecutions: [
+        { id: "entry-a", legId: "put", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true },
+        { id: "entry-b", legId: "put", tradeDate: "2026-08-02", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "broker_statement", confirmed: true },
+      ],
+      optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 45.52, source: "manual", confirmed: true }],
+    });
+    render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn(), onHistoryEntryAction }));
+    expect(screen.getByText("未確認: 開始約定の重複または競合")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "購入時約定を確認" }));
+    expect(onHistoryEntryAction).toHaveBeenCalledWith(simulation.id);
+  });
 });

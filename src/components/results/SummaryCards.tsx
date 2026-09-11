@@ -344,7 +344,7 @@ export function SummaryCards({
         }`
       : historyMode && historyAnnualReturnMissingReason
       ? `未確認：${historyAnnualReturnMissingReason}`
-      : `${formatPct(primaryDenominator.annualReturnPct)} / ${taxResult.netAnnualReturnPct !== undefined ? formatPct(taxResult.netAnnualReturnPct) : "税後未確定"}`;
+      : `${formatPct(primaryDenominator.annualReturnPct)} / ${taxResult.netAnnualReturnPct !== undefined ? formatPct(taxResult.netAnnualReturnPct) : historyMode && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "税後参考未確定" : "税後未確定"}`;
   const annualCardNote = longOptionDisplay
     ? [
         `${longOptionDisplay.currentPriceUSD !== undefined ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)}` : "現在株価未取得"} / 権利行使価格 ${formatUSD(longOptionDisplay.strikeUSD)}。`,
@@ -356,9 +356,9 @@ export function SummaryCards({
     : usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
     ? `プレミアム年率。${premiumDisplay.dte}日換算。権利行使時想定は別カードで確認します。`
     : historyMode && historyAnnualReturnMissingReason
-      ? `実現損益は保持し、年率だけ未確認です。${historyAnnualReturnMissingReason}を決済実績で確認してください。`
+      ? `実現損益は保持し、年率だけ未確認です。${historyAnnualReturnMissingReason}を 3-A の購入時約定記録で確認してください。`
     : historyMode
-      ? historyAnnualFormula
+      ? `${historyAnnualFormula}${simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" && taxResult.netAnnualReturnPct === undefined ? " N口座USD実績の税後年率は、JPY税額と年間通算の確定前のため入力では解消しません。" : ""}`
       : `税前 / 税引後。${simulation.dte}日換算。`;
   const assignmentEstimate = usePremiumDisplay ? premiumDisplay.coveredCallAssignmentEstimate : undefined;
 

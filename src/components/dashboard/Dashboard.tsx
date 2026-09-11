@@ -126,6 +126,7 @@ export function Dashboard({
   onWarningAction,
   onWorkflowTaskAction,
   onHistoryLegAction,
+  onHistoryEntryAction,
   onJournalAction,
   onCurrentEstimateAction,
   journalFocusSimulationId,
@@ -162,6 +163,7 @@ export function Dashboard({
   onWarningAction?: (simulationId: string, warning: RiskWarning) => void;
   onWorkflowTaskAction?: (simulationId: string, task: WorkflowTask) => void;
   onHistoryLegAction?: (simulationId: string, executionId: string) => void;
+  onHistoryEntryAction?: (simulationId: string) => void;
   onJournalAction?: (simulationId: string) => void;
   onCurrentEstimateAction?: (simulationId: string, legId?: string, field?: string) => void;
   journalFocusSimulationId?: string | null;
@@ -413,7 +415,11 @@ export function Dashboard({
                   : isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason
                   ? `未確認: ${historyPerformance.historicalAnnualReturnMissingReason}`
                   : isHistoryRow && primary.annualReturnPct !== undefined
-                  ? `${formatPct(primary.annualReturnPct)} / ${primary.netAnnualReturnPct !== undefined ? formatPct(primary.netAnnualReturnPct) : "税後未確定"}`
+                  ? `${formatPct(primary.annualReturnPct)} / ${primary.netAnnualReturnPct !== undefined
+                      ? formatPct(primary.netAnnualReturnPct)
+                      : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+                        ? "税後参考未確定"
+                        : "税後未確定"}`
                   : premiumDisplay.annualReturnPct !== undefined
                     ? `${premiumDisplay.basis === "planned" ? "予定 " : premiumDisplay.basis === "open_unconfirmed" ? "約定未確認 " : ""}${formatPct(premiumDisplay.annualReturnPct)}${
                         premiumDisplay.netAnnualReturnPct !== undefined ? ` / 手数料後 ${formatPct(premiumDisplay.netAnnualReturnPct)}` : ""
@@ -639,6 +645,17 @@ export function Dashboard({
                     ) : (
                       <>
                         {annualReturnLabel}
+                        {isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason ? (
+                          <button type="button" className="mt-1 block rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => {
+                            event.stopPropagation();
+                            onHistoryEntryAction?.(simulation.id);
+                          }}>
+                            購入時約定を確認
+                          </button>
+                        ) : null}
+                        {isHistoryRow && primary.annualReturnPct !== undefined && primary.netAnnualReturnPct === undefined && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
+                          <span className="mt-1 block text-left text-[10px] font-medium leading-4 text-slate-500">税後参考未確定: N口座USD実績はJPY税額・年間通算の確定前です</span>
+                        ) : null}
                         {showsShortPutCurrentPnl && currentEstimate.kind === "available" && currentEstimate.currency !== "JPY" ? (
                           <span className={`mt-1 block text-[11px] ${currentEstimate.profitUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>
                             現在買戻し概算損益 {formatSignedUSD(currentEstimate.profitUSD)} / {currentEstimate.profitPct >= 0 ? "+" : ""}{formatPct(currentEstimate.profitPct)}

@@ -1334,9 +1334,14 @@ export default function App() {
     return true;
   };
   const selectAndOpenEditor = (id: string) => {
+    const targetSimulation = simulations.find((simulation) => simulation.id === id);
     setJournalFocusSimulationId(null);
     selectSimulation(id);
     setIsEditorOpen(true);
+    if (targetSimulation && ["closed", "assigned", "expired"].includes(targetSimulation.status)) {
+      setPositionFocusSimulationId(null);
+      setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() + Math.random() });
+    }
   };
   const openSimulationEditorAt = (id: string, anchorId = "simulation-editor", options?: { journalFocus?: boolean }) => {
     const targetSimulation = simulations.find((simulation) => simulation.id === id);
@@ -2079,6 +2084,7 @@ export default function App() {
                 onWarningAction={goToWarningAction}
                 onWorkflowTaskAction={goToWorkflowTask}
                 onHistoryLegAction={openConfirmedCloseExecution}
+                onHistoryEntryAction={(id) => openSimulationEditorAt(id, "option-entry-executions")}
                 onJournalAction={openEntryRationaleJournal}
                 onCurrentEstimateAction={goToCurrentEstimateInput}
                 currentEstimateFxQuote={sameDayUsdJpyQuote}
@@ -2358,6 +2364,7 @@ export default function App() {
               onWarningAction={goToWarningAction}
               onWorkflowTaskAction={goToWorkflowTask}
               onHistoryLegAction={openConfirmedCloseExecution}
+              onHistoryEntryAction={(id) => openSimulationEditorAt(id, "option-entry-executions")}
               onJournalAction={openEntryRationaleJournal}
               onCurrentEstimateAction={goToCurrentEstimateInput}
               currentEstimateFxQuote={sameDayUsdJpyQuote}

@@ -315,23 +315,32 @@ function resolveHistoricalLongOptionBasis(params: { simulation: TradeSimulation;
   const entries = getCanonicalOptionEntryExecutions(simulation).filter((entry) => entry.confirmed && entry.legId === leg.id && Number.isFinite(entry.contracts) && entry.contracts > 0);
   const totalContracts = entries.reduce((sum, entry) => sum + entry.contracts, 0);
   if (entries.length === 0 || totalContracts + 0.0001 < execution.contracts) return { available: false, reason: "購入時支払額" };
-  const dates = Array.from(new Set(entries.map(getHistoricalEntryDate).filter((date): date is string => Boolean(date))));
-  if (dates.length !== 1) return { available: false, reason: "購入時約定日の数量配賦" };
-  const entryTime = new Date(`${dates[0]}T00:00:00Z`).getTime();
-  const closeTime = new Date(`${execution.closeDate}T00:00:00Z`).getTime();
-  if (!Number.isFinite(entryTime) || !Number.isFinite(closeTime)) return { available: false, reason: "建玉日または決済日" };
-  if (closeTime < entryTime) return { available: false, reason: "建玉日と決済日の順序" };
-  const holdingDays = Math.max(1, Math.ceil((closeTime - entryTime) / 86_400_000));
+  if (Number.isFinite(leg.quantity) && totalContracts > leg.quantity + 0.0001) return { available: false, reason: "開始約定の重複または競合" };
+  const datedEntries = entries.map((entry) => ({ entry, date: getHistoricalEntryDate(entry) }));
+  if (datedEntries.some(({ date }) => !date)) return { available: false, reason: "購入時約定日" };
+  const closeDate = normalizeHistoricalCalendarDate(execution.closeDate);
+  if (!closeDate) return { available: false, reason: "決済日" };
+  const closeTime = new Date(`${closeDate}T00:00:00Z`).getTime();
+  const entryTimes = datedEntries.map(({ date }) => new Date(`${date!}T00:00:00Z`).getTime());
+  if (!Number.isFinite(closeTime) || entryTimes.some((time) => !Number.isFinite(time))) return { available: false, reason: "建玉日または決済日" };
+  if (entryTimes.some((time) => closeTime < time)) return { available: false, reason: "建玉日と決済日の順序" };
+  const dates = Array.from(new Set(datedEntries.map(({ date }) => date!)));
+  if (dates.length > 1 && Math.abs(totalContracts - execution.contracts) > 0.0001) return { available: false, reason: "決済ロットの対応" };
   const proportion = execution.contracts / totalContracts;
+  const holdingDaysForEntry = (date: string) => Math.max(1, Math.ceil((closeTime - new Date(`${date}T00:00:00Z`).getTime()) / 86_400_000));
   if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
     if (entries.some((entry) => !Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD <= 0 || entry.commissionUSD === undefined || !Number.isFinite(entry.commissionUSD))) return { available: false, reason: "購入時支払額" };
-    const denominatorUSD = entries.reduce((sum, entry) => sum + entry.fillPriceUSD * CONTRACT_SIZE * entry.contracts + Math.abs(entry.commissionUSD ?? 0), 0) * proportion;
+    const entryCosts = datedEntries.map(({ entry, date }) => ({ amount: entry.fillPriceUSD * CONTRACT_SIZE * entry.contracts + Math.abs(entry.commissionUSD ?? 0), holdingDays: holdingDaysForEntry(date!) }));
+    const denominatorUSD = entryCosts.reduce((sum, item) => sum + item.amount, 0) * proportion;
     if (!(denominatorUSD > 0)) return { available: false, reason: "購入時支払額" };
+    const holdingDays = entryCosts.reduce((sum, item) => sum + item.amount * item.holdingDays, 0) * proportion / denominatorUSD;
     return { available: true, denominatorUSD, denominatorJPY: 0, holdingDays, annualReturnPct: calculateAnnualReturnPercentByCurrency({ netProfit: params.realizedPnlUSD, denominator: denominatorUSD, dte: holdingDays }) };
   }
   if (entries.some((entry) => entry.brokerBookedAmountJPY === undefined || !Number.isFinite(entry.brokerBookedAmountJPY))) return { available: false, reason: "購入時支払額" };
-  const denominatorJPY = entries.reduce((sum, entry) => sum + Math.abs(entry.brokerBookedAmountJPY ?? 0), 0) * proportion;
+  const entryCosts = datedEntries.map(({ entry, date }) => ({ amount: Math.abs(entry.brokerBookedAmountJPY ?? 0), holdingDays: holdingDaysForEntry(date!) }));
+  const denominatorJPY = entryCosts.reduce((sum, item) => sum + item.amount, 0) * proportion;
   if (!(denominatorJPY > 0)) return { available: false, reason: "購入時支払額" };
+  const holdingDays = entryCosts.reduce((sum, item) => sum + item.amount * item.holdingDays, 0) * proportion / denominatorJPY;
   return { available: true, denominatorJPY, holdingDays, annualReturnPct: calculateAnnualReturnPercentByCurrency({ netProfit: params.realizedPnlJPY, denominator: denominatorJPY, dte: holdingDays }) };
 }
 

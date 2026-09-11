@@ -9837,3 +9837,9 @@ USDプレミアム 845.00 USD
 - 累積premium、entry/close/stock fees、option/stock realized P/Lは正しいlinked canonical evidenceから再計算する。open premiumを実現利益へ重ねず、UIは`累積実現損益`と明示する。
 - phase、badge、stepper、next action、event tableは同じreconciled view modelを使い、選択建玉やsingleton推定で上書きしない。
 - 匿名fixtureでclosed/expired/partial/unconfirmed/assignment、別銘柄singleton、blank ticker、synthetic、migration冪等性、aggregate再計算を検証する。公開版へ実ticker、損益、localStorage、raw、OAuth、backupを移さない。
+## 2026-09-11 Follow-up: historical entry evidence and 3-A review navigation
+
+- Historical long-option return states distinguish a missing entry date, duplicate/conflicting confirmed entry evidence, and an unmatched partial-close lot. They never become a zero return or a user-invented allocation.
+- Multi-date entry lots are annualised only when a close consumes the complete confirmed lot set, using cost-days. Partial lots without a direct broker lot link remain unresolved.
+- A historical review opens the existing 3-A entry record and focuses it; it does not create a new simulation, unconfirm evidence, or overwrite user data.
+- For N/USD history, after-tax annualisation remains a reference-unavailable state until JPY tax and annual netting evidence exists; pre-tax must not be copied as after-tax.
