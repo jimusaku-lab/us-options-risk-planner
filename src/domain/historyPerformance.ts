@@ -21,7 +21,8 @@ export type HistoryPerformanceResult = {
   premiumJPY: number;
   realizedOptionProfitJPY: number;
   realizedOptionProfitUSD: number;
-  realizedOptionDays: number;
+  realizedOptionDays?: number;
+  historicalAnnualReturnMissingReason?: string;
   taxGrossProfitJPY: number;
   grossDenominators: DenominatorResult[];
   denominators: DenominatorResult[];
@@ -32,6 +33,21 @@ export type HistoryPerformanceResult = {
 };
 
 const endedStatuses = new Set<TradeSimulation["status"]>(["closed", "assigned", "expired"]);
+
+function isLongOptionHistory(simulation: TradeSimulation, results: OptionCloseExecutionResult[], requiresExecutionRecord: boolean): boolean {
+  return requiresExecutionRecord && results.length > 0 && simulation.optionLegs.length > 0 && simulation.optionLegs.every((leg) => leg.side === "buy");
+}
+
+function applyLongOptionHistoryDenominator(params: { rows: DenominatorResult[]; results: OptionCloseExecutionResult[]; isN: boolean; realizedPnl: number; netProfit?: number }): { rows: DenominatorResult[]; missingReason?: string } {
+  const missingReason = params.results.find((result) => result.annualReturnMissingReason)?.annualReturnMissingReason;
+  if (missingReason || params.results.some((result) => result.annualReturnPct === undefined || result.holdingDays === undefined)) return { rows: params.rows, missingReason: missingReason ?? "購入時支払額または保有日数" };
+  const denominator = params.results.reduce((sum, result) => sum + (params.isN ? result.denominatorUSD ?? 0 : result.denominatorJPY), 0);
+  const exposure = params.results.reduce((sum, result) => sum + (params.isN ? result.denominatorUSD ?? 0 : result.denominatorJPY) * (result.holdingDays ?? 0), 0);
+  if (!(denominator > 0) || !(exposure > 0)) return { rows: params.rows, missingReason: "購入時支払額または保有日数" };
+  const annualReturnPct = params.realizedPnl / exposure * 365 * 100;
+  const netAnnualReturnPct = params.netProfit === undefined ? undefined : params.netProfit / exposure * 365 * 100;
+  return { rows: params.rows.map((row) => row.isPrimary ? { ...row, label: "購入時支払総額", amountUSD: params.isN ? denominator : row.amountUSD, amountJPY: params.isN ? row.amountJPY : denominator, annualReturnPct, netAnnualReturnPct, explanation: "確認済みの買いオプション開始約定の支払額を使用。決済時手数料は実現損益に一度だけ含めます。", components: [{ label: "確認済み購入時支払額", amountJPY: params.isN ? row.amountJPY : denominator, amountUSD: params.isN ? denominator : undefined }] } : row) };
+}
 
 export function calculateHistoryPerformance(simulation: TradeSimulation): HistoryPerformanceResult {
   const sanitized = sanitizeSaxoHistoryCloseExecutions(simulation);
@@ -71,15 +87,10 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
   const requiresExecutionRecord = sanitized.status === "closed" || sanitized.status === "expired";
   const realizedOptionProfitJPY = optionCloseExecutionResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
   const realizedOptionProfitUSD = optionCloseExecutionResults.reduce((sum, result) => sum + result.realizedPnlUSD, 0);
-  const realizedOptionDays = hasCloseExecutionResults
-    ? Math.max(
-        1,
-        Math.round(
-          optionCloseExecutionResults.reduce((sum, result) => sum + result.holdingDays, 0) /
-            optionCloseExecutionResults.length,
-        ),
-      )
-    : sanitized.dte;
+  const resolvedHoldingDays = optionCloseExecutionResults.map((result) => result.holdingDays).filter((days): days is number => days !== undefined);
+  const realizedOptionDays = hasCloseExecutionResults && resolvedHoldingDays.length === optionCloseExecutionResults.length
+    ? Math.max(1, Math.round(resolvedHoldingDays.reduce((sum, days) => sum + days, 0) / resolvedHoldingDays.length))
+    : undefined;
   const taxGrossProfitJPY = requiresExecutionRecord
     ? hasCloseExecutionResults
       ? realizedOptionProfitJPY
@@ -87,7 +98,7 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
     : premiumJPY;
   const taxSimulation = {
     ...optionPerformanceSimulation,
-    dte: requiresExecutionRecord ? realizedOptionDays : sanitized.dte,
+    dte: requiresExecutionRecord ? (realizedOptionDays ?? sanitized.dte) : sanitized.dte,
     ...(requiresExecutionRecord
       ? {
           brokerCommissionUSD: 0,
@@ -117,7 +128,10 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
           };
         })
       : rows;
-  const grossDenominators = applyUsdHistoryReturns(calculateDenominators(taxSimulation, taxGrossProfitJPY));
+  const longOptionHistory = isLongOptionHistory(sanitized, optionCloseExecutionResults, requiresExecutionRecord);
+  const calculatedGrossDenominators = applyUsdHistoryReturns(calculateDenominators(taxSimulation, taxGrossProfitJPY));
+  const grossLongReturn = longOptionHistory ? applyLongOptionHistoryDenominator({ rows: calculatedGrossDenominators, results: optionCloseExecutionResults, isN: sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT", realizedPnl: sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? realizedOptionProfitUSD : realizedOptionProfitJPY }) : { rows: calculatedGrossDenominators };
+  const grossDenominators = grossLongReturn.rows;
   const primaryGrossDenominator = getPrimaryDenominator(grossDenominators);
   const taxProfile = taxProfiles[sanitized.taxProfileId];
   const taxResult = calculateTaxResult({
@@ -126,7 +140,9 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
     denominatorJPY: primaryGrossDenominator.amountJPY,
     taxProfile,
   });
-  const denominators = applyUsdHistoryReturns(calculateDenominators(taxSimulation, taxGrossProfitJPY, taxResult.netProfitJPY));
+  const calculatedDenominators = applyUsdHistoryReturns(calculateDenominators(taxSimulation, taxGrossProfitJPY, taxResult.netProfitJPY));
+  const longReturn = longOptionHistory ? applyLongOptionHistoryDenominator({ rows: calculatedDenominators, results: optionCloseExecutionResults, isN: sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT", realizedPnl: sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? realizedOptionProfitUSD : realizedOptionProfitJPY, netProfit: sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? undefined : taxResult.netProfitJPY }) : { rows: calculatedDenominators };
+  const denominators = longReturn.rows;
   const primaryDenominator = getPrimaryDenominator(denominators);
 
   return {
@@ -142,6 +158,7 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
     realizedOptionProfitJPY,
     realizedOptionProfitUSD,
     realizedOptionDays,
+    historicalAnnualReturnMissingReason: longReturn.missingReason ?? grossLongReturn.missingReason,
     taxGrossProfitJPY,
     grossDenominators,
     denominators,

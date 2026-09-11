@@ -183,4 +183,41 @@ describe("history performance", () => {
     expect(result.primaryDenominator.currency).toBe("USD");
     expect(result.primaryDenominator.annualReturnPct).not.toBe(0);
   });
+
+  it("uses the confirmed long-option purchase total rather than a margin denominator", () => {
+    const simulation = shortPutSimulation({
+      id: "long-history-usd", strategyType: "long_call", status: "closed", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCode: "N", accountCurrency: "USD", entryDate: "2026-08-01",
+      optionLegs: [{ ...shortPutSimulation().optionLegs[0], id: "call", type: "call", side: "buy", premiumUSD: 1, quantity: 1 }],
+      optionEntryExecutions: [{ id: "entry", legId: "call", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close", legId: "call", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 45.52, source: "manual", confirmed: true }],
+    });
+    const result = calculateHistoryPerformance(simulation);
+    expect(result.primaryDenominator.label).toBe("購入時支払総額");
+    expect(result.primaryDenominator.amountUSD).toBeCloseTo(102.24, 8);
+    expect(result.primaryDenominator.annualReturnPct).toBeCloseTo((45.52 / 102.24 / 4) * 365 * 100, 8);
+    expect(result.primaryDenominator.netAnnualReturnPct).toBeUndefined();
+  });
+
+  it("does not render an unknown long-option purchase basis as a 0% historical return", () => {
+    const simulation = shortPutSimulation({
+      id: "long-history-missing-entry", strategyType: "long_put", status: "closed", accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+      optionLegs: [{ ...shortPutSimulation().optionLegs[0], id: "put", type: "put", side: "buy", quantity: 1 }], optionEntryExecutions: [],
+      optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, settlementCurrency: "JPY", brokerRealizedPnlJPY: 3_000, source: "manual", confirmed: true }],
+    });
+    const result = calculateHistoryPerformance(simulation);
+    expect(result.historicalAnnualReturnMissingReason).toBe("購入時支払額");
+    expect(result.optionCloseExecutionResults[0].annualReturnPct).toBeUndefined();
+  });
+
+  it("uses the one-day convention only for a same-day confirmed long-option close", () => {
+    const simulation = shortPutSimulation({
+      id: "long-history-same-day", strategyType: "long_call", status: "closed", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCode: "N", accountCurrency: "USD",
+      optionLegs: [{ ...shortPutSimulation().optionLegs[0], id: "call", type: "call", side: "buy", quantity: 1 }],
+      optionEntryExecutions: [{ id: "entry", legId: "call", tradeDate: "2026-08-05", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close", legId: "call", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 45.52, source: "manual", confirmed: true }],
+    });
+    expect(calculateHistoryPerformance(simulation).optionCloseExecutionResults[0].holdingDays).toBe(1);
+    const reversed = { ...simulation, optionCloseExecutions: [{ ...simulation.optionCloseExecutions![0], closeDate: "2026-08-04" }] };
+    expect(calculateHistoryPerformance(reversed).historicalAnnualReturnMissingReason).toBe("建玉日と決済日の順序");
+  });
 });

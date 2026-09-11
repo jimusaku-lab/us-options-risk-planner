@@ -65,9 +65,9 @@ function ClosedLegHistoryRows({ items, onOpen }: { items: ClosedSyntheticLegHist
           {primaryComplete ? <><span className="block">{isN ? formatSignedUSD(totalPrimary) : formatJPY(totalPrimary)}</span><span className="block text-[11px] text-slate-500">建玉時/決済時 {firstResult ? `${formatUSD(firstResult.entryPremiumUSD / (100 * Math.max(1, item.executions[0].contracts)))} / ${item.executions[0].closeKind === "expired" ? "満期" : item.executions[0].closePriceUSD === undefined ? "未確認" : formatUSD(item.executions[0].closePriceUSD)}` : "未確認"}</span></> : <span>実現損益 未確認</span>}
           {isN ? <span className="block text-[11px] text-slate-500">{referenceComplete ? `参考 ${formatJPY(item.closeResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0))}` : "参考JPY未確認"}</span> : null}
         </td>
-        <td className="numeric-input py-3 pr-3 text-right">{firstResult ? (isN ? formatUSD(firstResult.denominatorUSD ?? 0) : formatJPY(firstResult.denominatorJPY)) : "未確認"}</td>
-        <td className="numeric-input py-3 pr-3 text-right">{primaryComplete && firstResult ? formatPct(firstResult.annualReturnPct) : "未確認"}</td>
-        <td className="py-3 pr-3 text-right text-xs font-bold text-emerald-700">{primaryComplete ? "警告なし" : `${isN ? "USD" : "JPY"}実現損益 未確認`}</td>
+        <td className="numeric-input py-3 pr-3 text-right">{firstResult && firstResult.annualReturnPct !== undefined ? (isN ? formatUSD(firstResult.denominatorUSD ?? 0) : formatJPY(firstResult.denominatorJPY)) : "未確認"}</td>
+        <td className="numeric-input py-3 pr-3 text-right">{primaryComplete && firstResult?.annualReturnPct !== undefined ? formatPct(firstResult.annualReturnPct) : "未計算"}</td>
+        <td className="py-3 pr-3 text-right text-xs font-bold text-emerald-700">{primaryComplete && firstResult?.annualReturnPct !== undefined ? "警告なし" : firstResult?.annualReturnMissingReason ? `未確認: ${firstResult.annualReturnMissingReason}` : `${isN ? "USD" : "JPY"}実現損益 未確認`}</td>
         <td className="py-3 pr-3 text-xs">親戦略は継続中（{item.leg.type === "call" ? "P売り" : "C買い"}{parentRemaining}枚残存）<span className="block text-slate-500">決済日 {item.closeDate}</span></td>
         <td className="py-3 pr-3 text-right"><button type="button" className="rounded-md border border-teal-300 bg-white px-2 py-1 text-xs font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => { event.stopPropagation(); action(); }}>決済実績を確認</button></td>
       </tr>;
@@ -410,8 +410,10 @@ export function Dashboard({
                     ? longOptionDisplay.currentCloseAnnualizedReturnPct !== undefined
                       ? `現在決済 ${longOptionDisplay.currentCloseAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.currentCloseAnnualizedReturnPct)}`
                       : "現在決済 未計算"
-                  : isHistoryRow && primary.netAnnualReturnPct !== undefined
-                  ? `${formatPct(primary.annualReturnPct)} / ${formatPct(primary.netAnnualReturnPct)}`
+                  : isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason
+                  ? `未確認: ${historyPerformance.historicalAnnualReturnMissingReason}`
+                  : isHistoryRow && primary.annualReturnPct !== undefined
+                  ? `${formatPct(primary.annualReturnPct)} / ${primary.netAnnualReturnPct !== undefined ? formatPct(primary.netAnnualReturnPct) : "税後未確定"}`
                   : premiumDisplay.annualReturnPct !== undefined
                     ? `${premiumDisplay.basis === "planned" ? "予定 " : premiumDisplay.basis === "open_unconfirmed" ? "約定未確認 " : ""}${formatPct(premiumDisplay.annualReturnPct)}${
                         premiumDisplay.netAnnualReturnPct !== undefined ? ` / 手数料後 ${formatPct(premiumDisplay.netAnnualReturnPct)}` : ""

@@ -208,6 +208,7 @@ type SummaryCardsProps = {
   accountInputs?: AccountInputs;
   currentEstimate?: CurrentPositionEstimate;
   onOpenConfirmedCloseExecution?: (executionId: string) => void;
+  historyAnnualReturnMissingReason?: string;
 };
 
 export function SummaryCards({
@@ -229,6 +230,7 @@ export function SummaryCards({
   accountInputs,
   currentEstimate,
   onOpenConfirmedCloseExecution,
+  historyAnnualReturnMissingReason,
 }: SummaryCardsProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
   const usePremiumDisplay = !historyMode && premiumDisplay.basis !== "history";
@@ -340,7 +342,9 @@ export function SummaryCards({
       ? `予定 ${formatPct(premiumDisplay.annualReturnPct)}${
           premiumDisplay.netAnnualReturnPct !== undefined ? ` / 手数料後 ${formatPct(premiumDisplay.netAnnualReturnPct)}` : ""
         }`
-      : `${formatPct(primaryDenominator.annualReturnPct)} / ${formatPct(taxResult.netAnnualReturnPct)}`;
+      : historyMode && historyAnnualReturnMissingReason
+      ? `未確認：${historyAnnualReturnMissingReason}`
+      : `${formatPct(primaryDenominator.annualReturnPct)} / ${taxResult.netAnnualReturnPct !== undefined ? formatPct(taxResult.netAnnualReturnPct) : "税後未確定"}`;
   const annualCardNote = longOptionDisplay
     ? [
         `${longOptionDisplay.currentPriceUSD !== undefined ? `現在株価 ${formatUSD(longOptionDisplay.currentPriceUSD)}` : "現在株価未取得"} / 権利行使価格 ${formatUSD(longOptionDisplay.strikeUSD)}。`,
@@ -351,6 +355,8 @@ export function SummaryCards({
     ? "シンセティックは建玉時ネット支払額をプレミアム年率として評価しません。現在損益ではありません。"
     : usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
     ? `プレミアム年率。${premiumDisplay.dte}日換算。権利行使時想定は別カードで確認します。`
+    : historyMode && historyAnnualReturnMissingReason
+      ? `実現損益は保持し、年率だけ未確認です。${historyAnnualReturnMissingReason}を決済実績で確認してください。`
     : historyMode
       ? historyAnnualFormula
       : `税前 / 税引後。${simulation.dte}日換算。`;

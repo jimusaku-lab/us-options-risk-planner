@@ -48,7 +48,9 @@ export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBu
                   taxProfile: taxProfiles[simulation.taxProfileId],
                 });
         const closeRealizedPnlJPY = closeExecutionResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
-        const closeCapitalDaysJPY = closeExecutionResults.reduce((sum, result) => sum + result.denominatorJPY * result.holdingDays / 365, 0);
+        const closeCapitalDaysJPY = closeExecutionResults.reduce((sum, result) =>
+          result.holdingDays === undefined ? sum : sum + result.denominatorJPY * result.holdingDays / 365,
+        0);
         const optionCapitalDaysJPY =
           hasCloseExecutions
             ? closeCapitalDaysJPY

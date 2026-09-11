@@ -2,7 +2,7 @@ import type { Currency, OptionCloseExecution, OptionLeg, TradeSimulation } from 
 import { formatLocalDate } from "@/lib/date";
 import { calculateAnnualReturnPercentByCurrency } from "./calculations";
 import { calculateDenominators, getPrimaryDenominator } from "./denominators";
-import { getEntryExecutionCostForLegJPY, getEntryExecutionCostForLegUSD } from "./optionEntryExecutions";
+import { getCanonicalOptionEntryExecutions, getEntryExecutionCostForLegJPY, getEntryExecutionCostForLegUSD } from "./optionEntryExecutions";
 import {
   calculateConfirmedSaxoCloseCommissionUSD,
   SAXO_CLOSE_COMMISSION_CONFIRMED_AT,
@@ -23,8 +23,9 @@ export type OptionCloseExecutionResult = {
   closeCommissionJPY: number;
   realizedPnlUSD: number;
   realizedPnlJPY: number;
-  holdingDays: number;
-  annualReturnPct: number;
+  holdingDays?: number;
+  annualReturnPct?: number;
+  annualReturnMissingReason?: string;
   denominatorUSD?: number;
   denominatorJPY: number;
   currency: Currency;
@@ -287,6 +288,53 @@ export function calculateHoldingDays(entryDate: string, closeDate: string): numb
   return Math.max(1, Math.ceil((close.getTime() - entry.getTime()) / 86_400_000));
 }
 
+type HistoricalLongOptionBasis =
+  | { available: true; denominatorUSD?: number; denominatorJPY: number; holdingDays: number; annualReturnPct: number }
+  | { available: false; reason: string };
+
+function normalizeHistoricalCalendarDate(value: string | undefined): string | undefined {
+  const direct = value?.trim();
+  if (!direct) return undefined;
+  const dateOnly = direct.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+  if (dateOnly) return `${dateOnly[1]}-${dateOnly[2].padStart(2, "0")}-${dateOnly[3].padStart(2, "0")}`;
+  const time = new Date(direct);
+  if (Number.isNaN(time.getTime())) return undefined;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(time);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value;
+  const year = part("year"); const month = part("month"); const day = part("day");
+  return year && month && day ? `${year}-${month}-${day}` : undefined;
+}
+
+function getHistoricalEntryDate(entry: ReturnType<typeof getCanonicalOptionEntryExecutions>[number]): string | undefined {
+  return normalizeHistoricalCalendarDate(entry.tradeDate) ?? normalizeHistoricalCalendarDate(entry.canonicalTradeDate) ?? normalizeHistoricalCalendarDate(entry.executionTimeUtc) ?? normalizeHistoricalCalendarDate(entry.sourceTradeDate);
+}
+
+/** Historical long-option performance uses only confirmed entry purchase evidence. */
+function resolveHistoricalLongOptionBasis(params: { simulation: TradeSimulation; leg: OptionLeg; execution: OptionCloseExecution; realizedPnlUSD: number; realizedPnlJPY: number }): HistoricalLongOptionBasis {
+  const { simulation, leg, execution } = params;
+  const entries = getCanonicalOptionEntryExecutions(simulation).filter((entry) => entry.confirmed && entry.legId === leg.id && Number.isFinite(entry.contracts) && entry.contracts > 0);
+  const totalContracts = entries.reduce((sum, entry) => sum + entry.contracts, 0);
+  if (entries.length === 0 || totalContracts + 0.0001 < execution.contracts) return { available: false, reason: "購入時支払額" };
+  const dates = Array.from(new Set(entries.map(getHistoricalEntryDate).filter((date): date is string => Boolean(date))));
+  if (dates.length !== 1) return { available: false, reason: "購入時約定日の数量配賦" };
+  const entryTime = new Date(`${dates[0]}T00:00:00Z`).getTime();
+  const closeTime = new Date(`${execution.closeDate}T00:00:00Z`).getTime();
+  if (!Number.isFinite(entryTime) || !Number.isFinite(closeTime)) return { available: false, reason: "建玉日または決済日" };
+  if (closeTime < entryTime) return { available: false, reason: "建玉日と決済日の順序" };
+  const holdingDays = Math.max(1, Math.ceil((closeTime - entryTime) / 86_400_000));
+  const proportion = execution.contracts / totalContracts;
+  if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
+    if (entries.some((entry) => !Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD <= 0 || entry.commissionUSD === undefined || !Number.isFinite(entry.commissionUSD))) return { available: false, reason: "購入時支払額" };
+    const denominatorUSD = entries.reduce((sum, entry) => sum + entry.fillPriceUSD * CONTRACT_SIZE * entry.contracts + Math.abs(entry.commissionUSD ?? 0), 0) * proportion;
+    if (!(denominatorUSD > 0)) return { available: false, reason: "購入時支払額" };
+    return { available: true, denominatorUSD, denominatorJPY: 0, holdingDays, annualReturnPct: calculateAnnualReturnPercentByCurrency({ netProfit: params.realizedPnlUSD, denominator: denominatorUSD, dte: holdingDays }) };
+  }
+  if (entries.some((entry) => entry.brokerBookedAmountJPY === undefined || !Number.isFinite(entry.brokerBookedAmountJPY))) return { available: false, reason: "購入時支払額" };
+  const denominatorJPY = entries.reduce((sum, entry) => sum + Math.abs(entry.brokerBookedAmountJPY ?? 0), 0) * proportion;
+  if (!(denominatorJPY > 0)) return { available: false, reason: "購入時支払額" };
+  return { available: true, denominatorJPY, holdingDays, annualReturnPct: calculateAnnualReturnPercentByCurrency({ netProfit: params.realizedPnlJPY, denominator: denominatorJPY, dte: holdingDays }) };
+}
+
 export function createOptionCloseExecutionDraft(params: {
   simulation: TradeSimulation;
   leg: OptionLeg;
@@ -494,13 +542,17 @@ export function calculateOptionCloseExecutionResult(
     !isN && (execution.brokerRealizedPnlJPY !== undefined || cashflowRealizedPnlJPY !== undefined)
       ? "saxo_broker_statement"
       : "estimated";
-  const holdingDays = calculateHoldingDays(simulation.entryDate, execution.closeDate);
+  const defaultHoldingDays = calculateHoldingDays(simulation.entryDate, execution.closeDate);
   const primary = getPrimaryDenominator(calculateDenominators(simulation, realizedPnlJPY));
-  const annualReturnPct = calculateAnnualReturnPercentByCurrency({
+  const defaultAnnualReturnPct = calculateAnnualReturnPercentByCurrency({
     netProfit: isN ? realizedPnlUSD : realizedPnlJPY,
     denominator: isN ? primary.amountUSD ?? 0 : primary.amountJPY,
-    dte: holdingDays,
+    dte: defaultHoldingDays,
   });
+  const longHistoryBasis = leg.side === "buy" ? resolveHistoricalLongOptionBasis({ simulation, leg, execution, realizedPnlUSD, realizedPnlJPY }) : undefined;
+  const holdingDays = longHistoryBasis?.available ? longHistoryBasis.holdingDays : longHistoryBasis ? undefined : defaultHoldingDays;
+  const annualReturnPct = longHistoryBasis?.available ? longHistoryBasis.annualReturnPct : longHistoryBasis ? undefined : defaultAnnualReturnPct;
+  const annualReturnMissingReason = longHistoryBasis && !longHistoryBasis.available ? longHistoryBasis.reason : undefined;
   return {
     execution,
     leg,
@@ -514,10 +566,11 @@ export function calculateOptionCloseExecutionResult(
     realizedPnlJPY,
     holdingDays,
     annualReturnPct,
-    denominatorUSD: primary.amountUSD,
-    denominatorJPY: primary.amountJPY,
+    denominatorUSD: longHistoryBasis?.available ? longHistoryBasis.denominatorUSD : primary.amountUSD,
+    denominatorJPY: longHistoryBasis?.available ? longHistoryBasis.denominatorJPY : primary.amountJPY,
     currency: isN ? "USD" : "JPY",
     basis,
+    annualReturnMissingReason,
   };
 }
 

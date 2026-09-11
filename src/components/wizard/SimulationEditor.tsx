@@ -2934,7 +2934,9 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       </div>
                       <div>
                         <div className="text-xs font-semibold">実績年率</div>
-                        <div className="numeric-input font-bold">{formatPct(visibleResult.annualReturnPct)}（{visibleResult.holdingDays}日）</div>
+                        <div className="numeric-input font-bold">{visibleResult.annualReturnPct === undefined || visibleResult.holdingDays === undefined
+                          ? `未計算：${visibleResult.annualReturnMissingReason ?? "購入時支払額または保有日数"}`
+                          : `${formatPct(visibleResult.annualReturnPct)}（${visibleResult.holdingDays}日）`}</div>
                       </div>
                       <div>
                         <div className="text-xs font-semibold">計算内訳</div>
