@@ -35,6 +35,17 @@ function formatSignedUSD(value: number): string {
   return `${value > 0 ? "+" : ""}${formatUSD(value)}`;
 }
 
+function formatRealizedUSD(value: number): string {
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+  return `${sign}${formatUSD(Math.abs(value))}`;
+}
+
+const historyRiskWarningIds = new Set<RiskWarning["id"]>([
+  "option-entry-unconfirmed", "option-close-execution-unconfirmed", "closed-without-option-close-execution",
+  "expired-without-option-expiry-record", "assigned-put-without-stock-acquisition", "assigned-call-without-stock-settlement",
+  "assigned-uncovered-call", "invalid-dte",
+]);
+
 /** Rows for confirmed legs of a still-open synthetic parent.  These are history
  * rows, deliberately rendered in the normal history tbody rather than as a
  * second dashboard card. */
@@ -72,11 +83,11 @@ function ClosedLegHistoryRows({ items, onOpen }: { items: ClosedSyntheticLegHist
         <td className="numeric-input py-3 pr-3 text-right">{item.leg.type === "call" ? "C" : "P"} {formatUSD(item.leg.strikeUSD)}</td>
         <td className="py-3 pr-3">{item.leg.expiryDate}</td>
         <td className="numeric-input py-3 pr-3 text-right">
-          {primaryComplete ? <><span className="block">{isN ? formatSignedUSD(totalPrimary) : formatJPY(totalPrimary)}</span><span className="block text-[11px] text-slate-500">建玉時/決済時 {firstResult ? `${formatUSD(firstResult.entryPremiumUSD / (100 * Math.max(1, item.executions[0].contracts)))} / ${item.executions[0].closeKind === "expired" ? "満期" : item.executions[0].closePriceUSD === undefined ? "未確認" : formatUSD(item.executions[0].closePriceUSD)}` : "未確認"}</span></> : <span>実現損益 未確認</span>}
+          {primaryComplete ? <><span className="block text-[10px] font-bold text-slate-500">{totalPrimary >= 0 ? "実現利益" : "実現損失"}</span><span className={`block text-base font-extrabold ${totalPrimary >= 0 ? "text-emerald-700" : "text-red-700"}`}>{isN ? formatRealizedUSD(totalPrimary) : formatJPY(totalPrimary, { signed: true })}</span><span className="block text-[11px] text-slate-500">建玉時/決済時 {firstResult ? `${formatUSD(firstResult.entryPremiumUSD / (100 * Math.max(1, item.executions[0].contracts)))} / ${item.executions[0].closeKind === "expired" ? "満期" : item.executions[0].closePriceUSD === undefined ? "未確認" : formatUSD(item.executions[0].closePriceUSD)}` : "未確認"}</span></> : <span>実現損益 未確認</span>}
           {isN ? <span className="block text-[11px] text-slate-500">{referenceComplete ? `参考 ${formatJPY(item.closeResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0))}` : "参考JPY未確認"}</span> : null}
         </td>
-        <td className="numeric-input py-3 pr-3 text-right">{denominatorTotal !== undefined ? <><span className="block text-[10px] text-slate-500">{item.leg.side === "buy" ? "購入総額" : "選択資金基準"}</span>{isN ? formatUSD(denominatorTotal) : formatJPY(denominatorTotal)}</> : "未確認"}</td>
-        <td className="numeric-input py-3 pr-3 text-right">{isN ? <>{periodReturnPct !== undefined ? <><span className="block text-[10px] font-bold text-slate-500">損益率（保有期間）</span><span className="block font-bold text-slate-900">{formatPct(periodReturnPct)}</span></> : <span>損益率 未計算</span>}{annualReturnPct !== undefined ? <span className="block text-[10px] text-slate-500">年率換算（参考） {formatPct(annualReturnPct)}{displayedHoldingDays !== undefined ? ` / 保有${displayedHoldingDays}日` : ""}</span> : null}</> : primaryComplete && firstResult?.annualReturnPct !== undefined ? formatPct(firstResult.annualReturnPct) : "未計算"}</td>
+        <td className="numeric-input py-3 pr-3 text-right">{isN ? <>{periodReturnPct !== undefined ? <><span className="block text-[10px] font-bold text-slate-500">損益率（保有期間）</span><span className={`block text-base font-extrabold ${periodReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{periodReturnPct >= 0 ? "+" : ""}{formatPct(periodReturnPct)}</span></> : <span>損益率 未計算</span>}<span className="block text-[10px] text-slate-500">{item.leg.side === "buy" ? "購入総額" : "選択資金基準"} {denominatorTotal === undefined ? "未確認" : formatUSD(denominatorTotal)}</span></> : denominatorTotal !== undefined ? <><span className="block text-[10px] text-slate-500">{item.leg.side === "buy" ? "購入総額" : "選択資金基準"}</span>{formatJPY(denominatorTotal)}</> : "未確認"}</td>
+        <td className="numeric-input py-3 pr-3 text-right">{isN ? <><span className="block text-[10px] font-bold text-slate-500">年率換算（参考）</span><span className="block font-semibold text-slate-700">{annualReturnPct === undefined ? "未計算" : `${annualReturnPct >= 0 ? "+" : ""}${formatPct(annualReturnPct)}`}</span>{displayedHoldingDays !== undefined ? <span className="block text-[10px] text-slate-500">保有{displayedHoldingDays}日</span> : null}</> : primaryComplete && firstResult?.annualReturnPct !== undefined ? formatPct(firstResult.annualReturnPct) : "未計算"}</td>
         <td className="py-3 pr-3 text-right text-xs font-bold text-emerald-700">{primaryComplete && periodReturnPct !== undefined ? "警告なし" : firstResult?.annualReturnMissingReason ? `未確認: ${firstResult.annualReturnMissingReason}` : `${isN ? "USD" : "JPY"}実現損益 未確認`}</td>
         <td className="py-3 pr-3 text-xs">親戦略は継続中（{item.leg.type === "call" ? "P売り" : "C買い"}{parentRemaining}枚残存）<span className="block text-slate-500">決済日 {item.closeDate}</span></td>
         <td className="py-3 pr-3 text-right"><button type="button" className="rounded-md border border-teal-300 bg-white px-2 py-1 text-xs font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => { event.stopPropagation(); action(); }}>決済実績を確認</button></td>
@@ -301,7 +312,7 @@ export function Dashboard({
         </div>
       ) : null}
       {showHistory && historySimulations.some((simulation) => simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") ? (
-        <p className="mt-3 text-xs text-slate-500">N口座は米ドル建て・税引前の成績を表示します。円換算は取得済み為替がある場合だけ参考表示します。</p>
+        <p className="mt-3 text-xs text-slate-500">N口座の実現損益は米ドル建て・手数料控除後・税引前です。円換算は取得済み為替がある場合だけ参考表示します。</p>
       ) : null}
       {visibleSimulations.length > 0 ? <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[980px] text-sm">
@@ -311,11 +322,11 @@ export function Dashboard({
               <th className="py-2 pr-3">状態</th>
               <th className="py-2 pr-3">口座</th>
               <th className="py-2 pr-3">戦略</th>
-              <th className="py-2 pr-3 text-right">現在株価 / 権利行使価格</th>
+              <th className="py-2 pr-3 text-right">契約 / 現在株価</th>
               <th className="py-2 pr-3">満期</th>
               <th className="py-2 pr-3 text-right">建玉時の受払</th>
-              <th className="py-2 pr-3 text-right">使用分母 / 実績分母</th>
-              <th className="py-2 pr-3 text-right">損益率 / 年率</th>
+              <th className="py-2 pr-3 text-right">実績分母 / 保有期間損益率</th>
+              <th className="py-2 pr-3 text-right">年率</th>
               <th className="py-2 pr-3 text-right">警告</th>
               <th className="py-2 pr-3">次にやること</th>
               <th className="py-2 pr-3 text-right">操作</th>
@@ -337,6 +348,8 @@ export function Dashboard({
               const isHistoryRow = endedStatuses.has(simulation.status);
               const compositeLifecycle = getCompositeOptionLifecycle(simulation);
               const historyPerformance = isHistoryRow ? calculateHistoryPerformance(simulationWithAccount) : null;
+              const holdingPeriodReturnPct = historyPerformance?.holdingPeriodReturnPct;
+              const realizedOptionDays = historyPerformance?.realizedOptionDays;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
               const currentEstimate = !isHistoryRow ? calculateCurrentPositionEstimate(simulationWithAccount, new Date(), currentEstimateFxQuote) : { kind: "not_applicable" } as const;
               const currentEstimateIsRemainingLeg = currentEstimate.kind === "available" && currentEstimate.evaluationScope === "remaining_leg";
@@ -377,7 +390,7 @@ export function Dashboard({
                     })
                     .join(" / ")
                 : null;
-              const countableWarnings = warnings.filter((warning) => warning.severity !== "info");
+              const countableWarnings = warnings.filter((warning) => warning.severity !== "info" && (!isHistoryRow || historyRiskWarningIds.has(warning.id)));
               const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
               const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
               const currentPriceStrikeDisplay = getCurrentPriceStrikeDisplay(simulation);
@@ -534,7 +547,16 @@ export function Dashboard({
                     ) : null}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">
-                    {currentPriceStrikeDisplay.currentPriceUSD === undefined ? (
+                    {isHistoryRow ? (
+                      <>
+                        <span className="block text-[10px] font-bold text-slate-500">契約</span>
+                        {currentPriceStrikeDisplay.legs.map((leg) => (
+                          <span key={leg.id} className="block text-xs font-semibold text-slate-700">
+                            {leg.strikeUSD === undefined ? `${leg.label} 権利行使価格 未取得` : `${leg.label} ${formatUSD(leg.strikeUSD)}`}
+                          </span>
+                        ))}
+                      </>
+                    ) : currentPriceStrikeDisplay.currentPriceUSD === undefined ? (
                       <>
                         <span className="block text-amber-800">現在株価 未取得</span>
                         <span className="block text-[11px] font-normal text-slate-500">上部の「価格を一括更新」で取得</span>
@@ -564,8 +586,8 @@ export function Dashboard({
                       </>
                     ) : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
                       <>
-                        <span className="block text-[11px] font-bold text-slate-500">{isHistoryRow ? "実現損益（USD・手数料控除後／税引前）" : premiumDisplay.label}</span>
-                        <span className="block">{formatUSD(premiumDisplayUSD)}</span>
+                        <span className="block text-[11px] font-bold text-slate-500">{isHistoryRow ? (premiumDisplayUSD >= 0 ? "実現利益" : "実現損失") : premiumDisplay.label}</span>
+                        <span className={`block ${isHistoryRow ? `text-base font-extrabold ${premiumDisplayUSD >= 0 ? "text-emerald-700" : "text-red-700"}` : ""}`}>{isHistoryRow ? formatRealizedUSD(premiumDisplayUSD) : formatUSD(premiumDisplayUSD)}</span>
                         {hasHistoryCloseResults && isNAccountRow ? (
                           <span className="block text-xs text-slate-500">
                             建玉時 {formatUSD(historyCloseResults[0].leg.side === "buy" ? historyCloseResults[0].entryPremiumUSD + historyCloseResults[0].openCommissionUSD : historyCloseResults[0].entryPremiumUSD - historyCloseResults[0].openCommissionUSD)} / 決済支払 -{formatUSD(historyCloseResults[0].closeCostUSD + historyCloseResults[0].closeCommissionUSD)}
@@ -580,8 +602,8 @@ export function Dashboard({
                       </>
                     ) : (
                       <>
-                        <span className="block text-[11px] font-bold text-slate-500">{isHistoryRow ? "実現損益" : premiumDisplay.label}</span>
-                        <span className="block">{formatJPY(displayPremiumJPY)}</span>
+                        <span className="block text-[11px] font-bold text-slate-500">{isHistoryRow ? (displayPremiumJPY >= 0 ? "実現利益" : "実現損失") : premiumDisplay.label}</span>
+                        <span className={`block ${isHistoryRow ? `text-base font-extrabold ${displayPremiumJPY >= 0 ? "text-emerald-700" : "text-red-700"}` : ""}`}>{isHistoryRow ? formatJPY(displayPremiumJPY, { signed: true }) : formatJPY(displayPremiumJPY)}</span>
                         {!isHistoryRow && premiumDisplay.netAfterFeesJPY !== undefined && Math.abs(premiumDisplay.netAfterFeesJPY - premiumDisplay.premiumJPY) > 0.5 ? (
                           <span className="block text-xs text-slate-500">手数料後 {formatJPY(premiumDisplay.netAfterFeesJPY)}</span>
                         ) : null}
@@ -598,6 +620,18 @@ export function Dashboard({
                         <span className="mb-1 block text-[11px] font-bold text-slate-500">実績分母</span>
                         <span className="block text-slate-500">未確認</span>
                         <span className="block text-[10px] text-slate-500">{historyPerformance.historicalAnnualReturnMissingReason}</span>
+                      </>
+                    ) : isHistoryRow && isNAccountRow ? (
+                      <>
+                        {holdingPeriodReturnPct === undefined ? (
+                          <span className="block text-slate-500">損益率 未計算</span>
+                        ) : (
+                          <>
+                            <span className="block text-[11px] font-bold text-slate-500">損益率（保有期間）</span>
+                            <span className={`block text-base font-extrabold ${holdingPeriodReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{holdingPeriodReturnPct >= 0 ? "+" : ""}{formatPct(holdingPeriodReturnPct)}</span>
+                          </>
+                        )}
+                        <span className="block text-[10px] text-slate-500">実績分母（{primary.label}） {primary.amountUSD === undefined ? "未確認" : formatUSD(primary.amountUSD)}</span>
                       </>
                     ) : primary.currency === "USD" ? (
                       <>
@@ -662,17 +696,17 @@ export function Dashboard({
                         ) : null}
                       </>
                     ) : isHistoryRow && isNAccountRow ? (
-                      historyPerformance?.historicalAnnualReturnMissingReason || historyPerformance?.holdingPeriodReturnPct === undefined ? (
+                      historyPerformance?.historicalAnnualReturnMissingReason || primary.annualReturnPct === undefined ? (
                         <>
-                          <span className="block text-[11px] font-bold text-slate-500">損益率（保有期間）</span>
+                          <span className="block text-[11px] font-bold text-slate-500">年率換算（参考）</span>
                           <span className="block text-slate-500">未計算</span>
                           <span className="block text-[10px] text-slate-500">{historyPerformance?.historicalAnnualReturnMissingReason ?? "実績分母"}</span>
                         </>
                       ) : (
                         <>
-                          <span className="block text-[11px] font-bold text-slate-500">損益率（保有期間）</span>
-                          <span className={`block ${historyPerformance.holdingPeriodReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{historyPerformance.holdingPeriodReturnPct >= 0 ? "+" : ""}{formatPct(historyPerformance.holdingPeriodReturnPct)}</span>
-                          <span className="block text-[10px] font-normal text-slate-500">年率換算（参考） {primary.annualReturnPct !== undefined ? `${primary.annualReturnPct >= 0 ? "+" : ""}${formatPct(primary.annualReturnPct)}` : "未計算"}{historyPerformance.realizedOptionDays !== undefined ? ` / 保有${historyPerformance.realizedOptionDays}日` : ""}</span>
+                          <span className="block text-[11px] font-bold text-slate-500">年率換算（参考）</span>
+                          <span className="block font-semibold text-slate-700">{primary.annualReturnPct >= 0 ? "+" : ""}{formatPct(primary.annualReturnPct)}</span>
+                          {realizedOptionDays !== undefined ? <span className="block text-[10px] font-normal text-slate-500">保有{realizedOptionDays}日</span> : null}
                         </>
                       )
                     ) : (

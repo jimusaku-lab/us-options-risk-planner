@@ -93,6 +93,8 @@ describe("synthetic leg history", () => {
     expect(row?.textContent).toContain("Synthetic Forward内 C買い");
     expect(row?.textContent).toContain("損益率（保有期間）");
     expect(row?.textContent).toContain("年率換算（参考）");
+    expect(row?.textContent).toContain("実現利益+$95.52");
+    expect(row?.textContent).not.toContain("現在株価");
     expect(row?.querySelectorAll("td")).toHaveLength(12);
     expect(container.querySelector('section[aria-label="継続中戦略の決済済み脚"]')).toBeNull();
     const open = screen.getByRole("button", { name: "決済実績を確認" });
@@ -108,23 +110,62 @@ describe("synthetic leg history", () => {
       status: "closed",
       ticker: "XYZ",
       strategyType: "long_put",
+      currentPriceUSD: 250,
       entryDate: "2025-03-10",
       expiryDate: "2025-12-19",
       optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", side: "buy", premiumUSD: 7.9, quantity: 1 }],
       optionEntryExecutions: [{ id: "entry", legId: "put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 7.9, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
       optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2025-03-23", contracts: 1, closePriceUSD: 23, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 1_505.52, source: "manual", confirmed: true }],
     });
-    const { container } = render(createElement(Dashboard, {
+    const { container, rerender } = render(createElement(Dashboard, {
       simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs,
       historyOpen: true, onHistoryOpenChange: vi.fn(),
     }));
     const row = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("XYZ"));
-    expect(row?.textContent).toContain("実現損益（USD・手数料控除後／税引前）");
+    expect(row?.textContent).toContain("実現利益+$1,505.52");
     expect(row?.textContent).toContain("購入時支払総額");
     expect(row?.textContent).toContain("+190.0%");
-    expect(row?.textContent).toContain("年率換算（参考） +5,335.6% / 保有13日");
+    expect(row?.textContent).toContain("年率換算（参考）+5,335.6%保有13日");
+    expect(row?.textContent).toContain("契約P $195.00");
+    expect(row?.textContent).not.toContain("現在株価");
     expect(row?.textContent).not.toContain("税後参考未確定");
-    expect(screen.getAllByText(/N口座は米ドル建て・税引前の成績を表示/)).toHaveLength(1);
+    expect(screen.getAllByText(/N口座の実現損益は米ドル建て・手数料控除後・税引前/)).toHaveLength(1);
+    rerender(createElement(Dashboard, {
+      simulations: [{ ...simulation, currentPriceUSD: 999 }], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs,
+      historyOpen: true, onHistoryOpenChange: vi.fn(), currentEstimateFxQuote: { pair: "USDJPY", rate: 180, date: "2026-09-11", fetchedAt: "2026-09-11T00:00:00Z", source: "frankfurter" },
+    }));
+    const rerenderedRow = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("XYZ"));
+    ["実現利益+$1,505.52", "+190.0%", "年率換算（参考）+5,335.6%保有13日"].forEach((text) => expect(rerenderedRow?.textContent).toContain(text));
+    expect(rerenderedRow?.textContent).not.toContain("現在株価");
+  });
+
+  it("keeps signed losses and P/JPY history while hiding active market comparisons", () => {
+    const loss = createSimulation({
+      status: "closed", ticker: "LOSS", strategyType: "long_put",
+      optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", side: "buy", premiumUSD: 1, quantity: 1, assignmentPolicy: "avoid" }],
+      optionEntryExecutions: [{ id: "entry", legId: "put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2025-03-23", contracts: 1, closePriceUSD: 0.3, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: -74.48, source: "manual", confirmed: true }],
+    });
+    const { container } = render(createElement(Dashboard, { simulations: [loss], selectedId: loss.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn() }));
+    const lossRow = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("LOSS"));
+    expect(lossRow?.textContent).toContain("実現損失-$74.48");
+    expect(lossRow?.textContent).not.toContain("現在株価");
+    expect(lossRow?.textContent).not.toContain("出口ルール");
+  });
+
+  it("keeps P/JPY realized history primary without current stock price", () => {
+    const simulation = createSimulation({
+      status: "closed", ticker: "JPYC", strategyType: "long_call", accountCode: "P",
+      accountEnvironment: "PROD_P_JPY_SETTLEMENT", accountCurrency: "JPY", currentPriceUSD: 300,
+      optionLegs: [{ ...createSimulation().optionLegs[0], id: "call", type: "call", side: "buy", strikeUSD: 220, premiumUSD: 2, quantity: 1 }],
+      optionEntryExecutions: [{ id: "entry", legId: "call", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 2, settlementCurrency: "JPY", brokerBookedAmountJPY: -32_000, source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close", legId: "call", closeKind: "buyback", closeDate: "2025-03-23", contracts: 1, closePriceUSD: 3, settlementCurrency: "JPY", brokerRealizedPnlJPY: 12_345, source: "manual", confirmed: true }],
+    });
+    const { container } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn() }));
+    const row = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("JPYC"));
+    expect(row?.textContent).toContain("実現利益+12,345円");
+    expect(row?.textContent).toContain("契約C $220.00");
+    expect(row?.textContent).not.toContain("現在株価");
   });
 });
 
@@ -178,7 +219,7 @@ describe("current price and strike display", () => {
     });
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn() }));
 
-    expect(screen.getByText("現在株価 / 権利行使価格")).toBeTruthy();
+    expect(screen.getByText("契約 / 現在株価")).toBeTruthy();
     expect(screen.getByText("現在株価 $219.39")).toBeTruthy();
     expect(screen.getByText("C $220.00 / -$0.61 / -0.3%")).toBeTruthy();
   });

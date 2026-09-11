@@ -9852,3 +9852,11 @@ USDプレミアム 845.00 USD
 - A bought leg uses its confirmed total purchase cost as denominator. A sold leg uses its selected funding basis. The UI shows the denominator name and USD amount. Missing denominator or holding days remain uncalculated and are never replaced with zero.
 - The repeated row-level after-tax-unconfirmed label is removed. One short history-level note explains that N-account results are USD and pre-tax. Pre-tax values are never copied into an after-tax field and an unknown value is never rendered as zero.
 - JPY conversion remains a subordinate reference only when confirmed FX evidence exists. Missing JPY reference must not suppress the USD result or holding-period return. P/JPY keeps its existing JPY-primary contract.
+
+## 2026-09-11 UI follow-up: make realized P/L primary and remove current-value noise from history
+
+- Ended parent rows and confirmed closed-leg rows display realized P/L at the strongest visual level. Positive USD is `実現利益 +$…`; negative USD is `実現損失 -$…`. P/JPY uses the confirmed JPY result with the same hierarchy.
+- The N-account currency, fee, and tax basis is stated once above the history. Each row keeps realized amount next to holding-period return, with annualization as secondary reference.
+- Ended rows do not show current underlying price or current-to-strike distance/percent. They retain C/P, strike, and expiry. Current/open rows retain their current-price display.
+- Historical P/L, denominator, holding-period return, and annualization use confirmed entry/close evidence and do not change with current price or current FX refreshes. JPY reference remains separate evidence.
+- Active-position warnings are filtered out of ended rows. Only historical data-integrity warnings remain. Missing denominators render as unconfirmed, never as zero. This presentation change does not mutate saved positions or performance data.
