@@ -311,7 +311,7 @@ export function Dashboard({
           現在の注文前・約定確認待ち・建玉中の建玉はありません。過去の結果は「履歴を表示」から確認できます。
         </div>
       ) : null}
-      {showHistory && historySimulations.some((simulation) => simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") ? (
+      {showHistory && (historySimulations.some((simulation) => simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") || closedLegHistoryItems.some((item) => item.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT")) ? (
         <p className="mt-3 text-xs text-slate-500">N口座の実現損益は米ドル建て・手数料控除後・税引前です。円換算は取得済み為替がある場合だけ参考表示します。</p>
       ) : null}
       {visibleSimulations.length > 0 ? <div className="mt-4 overflow-x-auto">

@@ -95,6 +95,7 @@ describe("synthetic leg history", () => {
     expect(row?.textContent).toContain("年率換算（参考）");
     expect(row?.textContent).toContain("実現利益+$95.52");
     expect(row?.textContent).not.toContain("現在株価");
+    expect(screen.getByText(/N口座の実現損益は米ドル建て・手数料控除後・税引前/)).toBeTruthy();
     expect(row?.querySelectorAll("td")).toHaveLength(12);
     expect(container.querySelector('section[aria-label="継続中戦略の決済済み脚"]')).toBeNull();
     const open = screen.getByRole("button", { name: "決済実績を確認" });
