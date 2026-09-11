@@ -2583,6 +2583,9 @@ export default function App() {
                   currentEstimate={currentPositionEstimate}
                   onOpenConfirmedCloseExecution={(executionId) => openConfirmedCloseExecution(selected.id, executionId)}
                   historyAnnualReturnMissingReason={historyPerformance.historicalAnnualReturnMissingReason}
+                  historyHoldingPeriodReturnPct={historyPerformance.holdingPeriodReturnPct}
+                  historyHoldingDays={historyPerformance.realizedOptionDays}
+                  historyRealizedProfitUSD={historyPerformance.realizedOptionProfitUSD}
                 />
               </CollapsibleSection>
             ) : null}

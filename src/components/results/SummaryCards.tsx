@@ -209,6 +209,9 @@ type SummaryCardsProps = {
   currentEstimate?: CurrentPositionEstimate;
   onOpenConfirmedCloseExecution?: (executionId: string) => void;
   historyAnnualReturnMissingReason?: string;
+  historyHoldingPeriodReturnPct?: number;
+  historyHoldingDays?: number;
+  historyRealizedProfitUSD?: number;
 };
 
 export function SummaryCards({
@@ -231,6 +234,9 @@ export function SummaryCards({
   currentEstimate,
   onOpenConfirmedCloseExecution,
   historyAnnualReturnMissingReason,
+  historyHoldingPeriodReturnPct,
+  historyHoldingDays,
+  historyRealizedProfitUSD,
 }: SummaryCardsProps) {
   const premiumDisplay = calculateDashboardPremiumDisplay(simulation);
   const usePremiumDisplay = !historyMode && premiumDisplay.basis !== "history";
@@ -257,6 +263,7 @@ export function SummaryCards({
   });
   const usedMarginUSD = calculateUsedMarginUSD(simulation);
   const isN = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
+  const isNHistory = historyMode && isN;
   const isTransferredToN = Boolean(stockTransfer);
   const statusCardValue = stockHoldingMode
     ? isTransferredToN
@@ -349,6 +356,10 @@ export function SummaryCards({
       ? `予定 ${formatPct(premiumDisplay.annualReturnPct)}${
           premiumDisplay.netAnnualReturnPct !== undefined ? ` / 手数料後 ${formatPct(premiumDisplay.netAnnualReturnPct)}` : ""
         }`
+      : isNHistory && historyAnnualReturnMissingReason
+      ? `未確認：${historyAnnualReturnMissingReason}`
+      : isNHistory
+      ? historyHoldingPeriodReturnPct === undefined ? "未計算" : `${historyHoldingPeriodReturnPct >= 0 ? "+" : ""}${formatPct(historyHoldingPeriodReturnPct)}`
       : historyMode && historyAnnualReturnMissingReason
       ? `未確認：${historyAnnualReturnMissingReason}`
       : `${formatPct(primaryDenominator.annualReturnPct)} / ${taxResult.netAnnualReturnPct !== undefined ? formatPct(taxResult.netAnnualReturnPct) : historyMode && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "税後参考未確定" : "税後未確定"}`;
@@ -362,6 +373,10 @@ export function SummaryCards({
     ? "シンセティックは建玉時ネット支払額をプレミアム年率として評価しません。現在損益ではありません。"
     : usePremiumDisplay && premiumDisplay.annualReturnPct !== undefined
     ? `プレミアム年率。${premiumDisplay.dte}日換算。権利行使時想定は別カードで確認します。`
+    : isNHistory && historyAnnualReturnMissingReason
+      ? `実現損益は保持し、年率だけ未確認です。${historyAnnualReturnMissingReason}を 3-A の購入時約定記録で確認してください。`
+    : isNHistory
+      ? `米ドル建て・手数料控除後・税引前。年率換算（参考） ${primaryDenominator.annualReturnPct === undefined ? "未計算" : `${primaryDenominator.annualReturnPct >= 0 ? "+" : ""}${formatPct(primaryDenominator.annualReturnPct)}`}${historyHoldingDays === undefined ? "" : ` / 保有${historyHoldingDays}日`}。確定税額を示す値ではありません。`
     : historyMode && historyAnnualReturnMissingReason
       ? `実現損益は保持し、年率だけ未確認です。${historyAnnualReturnMissingReason}を 3-A の購入時約定記録で確認してください。`
     : historyMode
@@ -373,10 +388,10 @@ export function SummaryCards({
     {
       title: longOptionDisplay
         ? "反対売買損益分岐価格"
-        : isSyntheticAnnualRateNotApplicable ? premiumDisplay.label : historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
+        : isSyntheticAnnualRateNotApplicable ? premiumDisplay.label : isNHistory ? "実現損益（USD・手数料控除後／税引前）" : historyMode ? "この履歴の確定オプション収入" : "受取プレミアム",
       value: longOptionDisplay
         ? longOptionDisplay.exitBreakevenPriceUSD === undefined ? "未計算（決済想定手数料 未確認）" : `${formatUSD(longOptionDisplay.exitBreakevenPriceUSD)} / 株`
-        : isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
+        : isNHistory && historyRealizedProfitUSD !== undefined ? formatSignedUSD(historyRealizedProfitUSD) : isN ? formatUSD(premiumUSD) : formatJPY(premiumJPY),
       note: longOptionDisplay
         ? longOptionDisplay.closeCommissionUSD === undefined ? "決済想定手数料が未確認のため、損益分岐価格は計算しません。" : `この価格以上で売却できれば、建玉時支払額と想定決済手数料を回収できます。建玉時支払額 ${formatUSD(longOptionDisplay.totalCostUSD)} / 想定決済手数料 ${formatUSD(longOptionDisplay.closeCommissionUSD)}。`
         : premiumCardNote,
@@ -446,7 +461,7 @@ export function SummaryCards({
     {
       title: longOptionDisplay
         ? "満期損益分岐点（参考）"
-        : isSyntheticAnnualRateNotApplicable ? "年率" : historyMode ? "この履歴のオプション年率" : "年率",
+        : isSyntheticAnnualRateNotApplicable ? "年率" : isNHistory ? "この履歴の損益率（保有期間）" : historyMode ? "この履歴のオプション年率" : "年率",
       value: annualCardValue,
       note: annualCardNote,
     },

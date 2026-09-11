@@ -22,6 +22,8 @@ export type HistoryPerformanceResult = {
   realizedOptionProfitJPY: number;
   realizedOptionProfitUSD: number;
   realizedOptionDays?: number;
+  holdingPeriodReturnPct?: number;
+  holdingPeriodReturnCurrency?: "USD" | "JPY";
   historicalAnnualReturnMissingReason?: string;
   taxGrossProfitJPY: number;
   grossDenominators: DenominatorResult[];
@@ -114,16 +116,16 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
     requiresExecutionRecord &&
     hasCloseExecutionResults &&
     Math.abs(realizedOptionProfitUSD) > 0.0001;
-  const applyUsdHistoryReturns = (rows: DenominatorResult[]) =>
+  const applyUsdHistoryReturns = (rows: DenominatorResult[]): DenominatorResult[] =>
     useUsdHistoryReturns
       ? rows.map((row) => {
-          const denominatorUSD = row.amountUSD ?? 0;
-          const annualReturnPct = denominatorUSD > 0 && taxSimulation.dte > 0
+          const denominatorUSD = row.amountUSD;
+          const annualReturnPct = denominatorUSD !== undefined && denominatorUSD > 0 && taxSimulation.dte > 0
             ? (realizedOptionProfitUSD / denominatorUSD / taxSimulation.dte) * 365 * 100
-            : 0;
+            : undefined;
           return {
             ...row,
-            annualReturnPct,
+            ...(annualReturnPct === undefined ? {} : { annualReturnPct }),
             // USD broker P/L alone is not evidence for JPY-tax annual netting.
             netAnnualReturnPct: undefined,
           };
@@ -152,6 +154,9 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
     (primaryHistoricalAmount === undefined || primaryHistoricalAmount <= 0 || taxSimulation.dte <= 0 || primaryDenominator.annualReturnPct === undefined)
       ? "実績分母または保有日数"
       : undefined;
+  const holdingPeriodReturnPct = historyResultMode && hasCloseExecutionResults && primaryHistoricalAmount !== undefined && primaryHistoricalAmount > 0
+    ? ((sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? realizedOptionProfitUSD : realizedOptionProfitJPY) / primaryHistoricalAmount) * 100
+    : undefined;
 
   return {
     simulation: sanitized,
@@ -166,6 +171,10 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
     realizedOptionProfitJPY,
     realizedOptionProfitUSD,
     realizedOptionDays,
+    holdingPeriodReturnPct,
+    holdingPeriodReturnCurrency: holdingPeriodReturnPct === undefined
+      ? undefined
+      : sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "USD" : "JPY",
     historicalAnnualReturnMissingReason: longReturn.missingReason ?? grossLongReturn.missingReason ?? genericHistoricalAnnualReturnMissingReason,
     taxGrossProfitJPY,
     grossDenominators,

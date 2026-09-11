@@ -85,12 +85,14 @@ describe("synthetic leg history", () => {
         { id: "entry-call", legId: "call", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 5, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
         { id: "entry-put", legId: "put", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 4, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
       ],
-      optionCloseExecutions: [{ id: "close-call", legId: "call", closeKind: "buyback", closePriceUSD: 6, closeDate: "2026-06-10", contracts: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close-call", legId: "call", closeKind: "buyback", closePriceUSD: 6, closeDate: "2026-06-10", contracts: 1, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 95.52, source: "manual", confirmed: true }],
     });
     const { container } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn(), onHistoryLegAction: action }));
     const row = container.querySelector('tr[data-history-kind="closed_leg"]');
     expect(row?.textContent).toContain("ABC");
     expect(row?.textContent).toContain("Synthetic Forward内 C買い");
+    expect(row?.textContent).toContain("損益率（保有期間）");
+    expect(row?.textContent).toContain("年率換算（参考）");
     expect(row?.querySelectorAll("td")).toHaveLength(12);
     expect(container.querySelector('section[aria-label="継続中戦略の決済済み脚"]')).toBeNull();
     const open = screen.getByRole("button", { name: "決済実績を確認" });
@@ -99,6 +101,30 @@ describe("synthetic leg history", () => {
     cleanup();
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn() }));
     expect(screen.getByRole("button", { name: /継続中戦略の決済済み脚1件/ })).toBeTruthy();
+  });
+
+  it("shows N/USD holding-period return as the primary result and annualisation as reference", () => {
+    const simulation = createSimulation({
+      status: "closed",
+      ticker: "XYZ",
+      strategyType: "long_put",
+      entryDate: "2025-03-10",
+      expiryDate: "2025-12-19",
+      optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", side: "buy", premiumUSD: 7.9, quantity: 1 }],
+      optionEntryExecutions: [{ id: "entry", legId: "put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 7.9, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2025-03-23", contracts: 1, closePriceUSD: 23, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 1_505.52, source: "manual", confirmed: true }],
+    });
+    const { container } = render(createElement(Dashboard, {
+      simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs,
+      historyOpen: true, onHistoryOpenChange: vi.fn(),
+    }));
+    const row = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("XYZ"));
+    expect(row?.textContent).toContain("実現損益（USD・手数料控除後／税引前）");
+    expect(row?.textContent).toContain("購入時支払総額");
+    expect(row?.textContent).toContain("+190.0%");
+    expect(row?.textContent).toContain("年率換算（参考） +5,335.6% / 保有13日");
+    expect(row?.textContent).not.toContain("税後参考未確定");
+    expect(screen.getAllByText(/N口座は米ドル建て・税引前の成績を表示/)).toHaveLength(1);
   });
 });
 
@@ -527,7 +553,7 @@ describe("Dashboard close decision actions", () => {
       optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 45.52, source: "manual", confirmed: true }],
     });
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn(), onHistoryEntryAction }));
-    expect(screen.getByText("未確認: 開始約定の数量超過（証跡未照合）")).toBeTruthy();
+    expect(screen.getAllByText("開始約定の数量超過（証跡未照合）").length).toBeGreaterThan(0);
     expect(screen.queryByText("完了（追加操作なし）")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "購入時約定を確認" }));
     expect(onHistoryEntryAction).toHaveBeenCalledWith(simulation.id);

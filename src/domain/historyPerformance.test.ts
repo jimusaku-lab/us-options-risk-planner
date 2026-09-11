@@ -194,6 +194,8 @@ describe("history performance", () => {
     const result = calculateHistoryPerformance(simulation);
     expect(result.primaryDenominator.label).toBe("購入時支払総額");
     expect(result.primaryDenominator.amountUSD).toBeCloseTo(102.24, 8);
+    expect(result.holdingPeriodReturnPct).toBeCloseTo((45.52 / 102.24) * 100, 8);
+    expect(result.holdingPeriodReturnCurrency).toBe("USD");
     expect(result.primaryDenominator.annualReturnPct).toBeCloseTo((45.52 / 102.24 / 4) * 365 * 100, 8);
     expect(result.primaryDenominator.netAnnualReturnPct).toBeUndefined();
   });
