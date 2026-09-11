@@ -6,9 +6,11 @@ import {
   calculateOptionEntryExecutionSummary,
   createOptionEntryExecutionDraft,
   ensureNOptionEntryStandardCommission,
+  getApprovedLegacyOpeningDuplicateRepairKey,
   getCanonicalOptionEntryExecutions,
   migrateNOptionEntryStandardCommissions,
   needsOptionEntryConfirmation,
+  reconcileLegacyConfirmedOpeningDuplicates,
   updateStandardEntryCommissionForContracts,
 } from "./optionEntryExecutions";
 
@@ -34,6 +36,28 @@ describe("N-account option entry commission sources", () => {
     ];
     expect(getCanonicalOptionEntryExecutions(simulation)).toHaveLength(1);
     expect(calculateOptionEntryExecutionSummary(simulation)?.commissionUSD).toBe(2.24);
+  });
+  it("reconciles only the evidence-free manual duplicate of a history-backed fill", () => {
+    const simulation = buildNOptionSimulation();
+    simulation.optionEntryExecutions = [
+      { id: "history", legId: "n-put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 4.2, settlementCurrency: "USD", commissionUSD: 2.24, source: "saxo_api_estimate", historyCandidateIds: ["fixture-history"], confirmed: true },
+      { id: "manual", legId: "n-put", tradeDate: "2025-03-11", contracts: 1, fillPriceUSD: 4.2, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", memo: "", confirmed: true },
+    ];
+    const approved = new Set([getApprovedLegacyOpeningDuplicateRepairKey(simulation.id, "history", "manual")]);
+    const reconciled = reconcileLegacyConfirmedOpeningDuplicates(simulation, approved);
+    expect(reconciled.optionEntryExecutions).toHaveLength(1);
+    expect(reconcileLegacyConfirmedOpeningDuplicates(reconciled, approved)).toBe(reconciled);
+    const userEvidenced = { ...simulation, optionEntryExecutions: [simulation.optionEntryExecutions[0], { ...simulation.optionEntryExecutions[1], memo: "user statement" }] };
+    expect(reconcileLegacyConfirmedOpeningDuplicates(userEvidenced, approved)).toBe(userEvidenced);
+  });
+
+  it("does not reconcile a matching duplicate without explicit target approval", () => {
+    const simulation = buildNOptionSimulation();
+    simulation.optionEntryExecutions = [
+      { id: "history", legId: "n-put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 4.2, settlementCurrency: "USD", commissionUSD: 2.24, source: "saxo_api_estimate", historyCandidateIds: ["fixture-history"], confirmed: true },
+      { id: "manual", legId: "n-put", tradeDate: "2025-03-11", contracts: 1, fillPriceUSD: 4.2, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", memo: "", confirmed: true },
+    ];
+    expect(reconcileLegacyConfirmedOpeningDuplicates(simulation)).toBe(simulation);
   });
   it("prefills the configurable standard USD fee per contract", () => {
     const simulation = buildNOptionSimulation(2);

@@ -219,7 +219,7 @@ describe("history performance", () => {
     expect(calculateHistoryPerformance({ ...base, optionEntryExecutions: [
       { id: "entry-a", legId: "put", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true },
       { id: "entry-b", legId: "put", tradeDate: "2026-08-02", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "broker_statement", confirmed: true },
-    ] }).historicalAnnualReturnMissingReason).toBe("開始約定の重複または競合");
+    ] }).historicalAnnualReturnMissingReason).toBe("開始約定の数量超過（証跡未照合）");
 
     const multiLot = { ...base, optionLegs: [{ ...base.optionLegs[0], id: "call", type: "call" as const, side: "buy" as const, quantity: 2 }], optionEntryExecutions: [
       { id: "entry-one", legId: "call", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD" as const, source: "manual" as const, confirmed: true },
@@ -229,6 +229,27 @@ describe("history performance", () => {
     expect(complete.historicalAnnualReturnMissingReason).toBeUndefined();
     expect(complete.primaryDenominator.annualReturnPct).toBeCloseTo((90 / (102.24 * 4 + 202.24 * 2)) * 365 * 100, 8);
     expect(calculateHistoryPerformance({ ...multiLot, optionCloseExecutions: [{ ...multiLot.optionCloseExecutions![0], contracts: 1 }] }).historicalAnnualReturnMissingReason).toBe("決済ロットの対応");
+  });
+
+  it("canonicalises only entries with the same strong broker identity", () => {
+    const simulation = shortPutSimulation({ id: "canonical-entry", strategyType: "long_call", status: "closed", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCode: "N", accountCurrency: "USD",
+      optionLegs: [{ ...shortPutSimulation().optionLegs[0], id: "call", type: "call", side: "buy", quantity: 1 }],
+      optionEntryExecutions: [
+        { id: "entry-a", legId: "call", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "saxo_api_estimate", saxoTicketId: "fixture-ticket", confirmed: true },
+        { id: "entry-b", legId: "call", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "saxo_api_estimate", saxoTicketId: "fixture-ticket", confirmed: true },
+      ],
+      optionCloseExecutions: [{ id: "close", legId: "call", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 45.52, source: "manual", confirmed: true }],
+    });
+    expect(calculateHistoryPerformance(simulation).historicalAnnualReturnMissingReason).toBeUndefined();
+  });
+
+  it("does not copy the N/USD tax-before annual return into tax-after", () => {
+    const simulation = shortPutSimulation({ id: "usd-tax-after", status: "closed", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCode: "N", accountCurrency: "USD",
+      optionCloseExecutions: [{ id: "close", legId: "put-leg", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 45.52, source: "manual", confirmed: true }],
+    });
+    const result = calculateHistoryPerformance(simulation);
+    expect(result.primaryDenominator.annualReturnPct).toBeDefined();
+    expect(result.primaryDenominator.netAnnualReturnPct).toBeUndefined();
   });
 
   it("uses the one-day convention only for a same-day confirmed long-option close", () => {

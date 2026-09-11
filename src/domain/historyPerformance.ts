@@ -124,7 +124,8 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
           return {
             ...row,
             annualReturnPct,
-            netAnnualReturnPct: annualReturnPct,
+            // USD broker P/L alone is not evidence for JPY-tax annual netting.
+            netAnnualReturnPct: undefined,
           };
         })
       : rows;
@@ -142,8 +143,15 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
   });
   const calculatedDenominators = applyUsdHistoryReturns(calculateDenominators(taxSimulation, taxGrossProfitJPY, taxResult.netProfitJPY));
   const longReturn = longOptionHistory ? applyLongOptionHistoryDenominator({ rows: calculatedDenominators, results: optionCloseExecutionResults, isN: sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT", realizedPnl: sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? realizedOptionProfitUSD : realizedOptionProfitJPY, netProfit: sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? undefined : taxResult.netProfitJPY }) : { rows: calculatedDenominators };
-  const denominators = longReturn.rows;
+  const denominators = sanitized.accountEnvironment === "PROD_N_USD_SETTLEMENT" && historyResultMode
+    ? longReturn.rows.map((row) => ({ ...row, netAnnualReturnPct: undefined }))
+    : longReturn.rows;
   const primaryDenominator = getPrimaryDenominator(denominators);
+  const primaryHistoricalAmount = primaryDenominator.currency === "USD" ? primaryDenominator.amountUSD : primaryDenominator.amountJPY;
+  const genericHistoricalAnnualReturnMissingReason = historyResultMode && hasCloseExecutionResults &&
+    (primaryHistoricalAmount === undefined || primaryHistoricalAmount <= 0 || taxSimulation.dte <= 0 || primaryDenominator.annualReturnPct === undefined)
+      ? "実績分母または保有日数"
+      : undefined;
 
   return {
     simulation: sanitized,
@@ -158,7 +166,7 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
     realizedOptionProfitJPY,
     realizedOptionProfitUSD,
     realizedOptionDays,
-    historicalAnnualReturnMissingReason: longReturn.missingReason ?? grossLongReturn.missingReason,
+    historicalAnnualReturnMissingReason: longReturn.missingReason ?? grossLongReturn.missingReason ?? genericHistoricalAnnualReturnMissingReason,
     taxGrossProfitJPY,
     grossDenominators,
     denominators,

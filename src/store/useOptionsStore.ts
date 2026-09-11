@@ -22,7 +22,7 @@ import {
 } from "@/domain/optionCloseExecutions";
 import { normalizeStockSettlement } from "@/domain/stockSettlementState";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
-import { DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, migrateNOptionEntryStandardCommissions } from "@/domain/optionEntryExecutions";
+import { DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, migrateNOptionEntryStandardCommissions, reconcileLegacyConfirmedOpeningDuplicates } from "@/domain/optionEntryExecutions";
 import { finalizeSyntheticForwardParent } from "@/domain/compositeOptionPosition";
 import {
   isNShortPutWheelSimulation,
@@ -224,8 +224,19 @@ export function normalizeSimulation(simulation: TradeSimulation, workspace: Work
  * Persist only the confirmed N-leg commission correction and any safely-derived
  * synthetic parent totals that it changes. Other normalization remains in-memory.
  */
-export function migrateStoredLiveSimulation(simulation: TradeSimulation): TradeSimulation {
-  return finalizeSyntheticForwardParent(migrateNOptionEntryStandardCommissions(simulation));
+function getApprovedLegacyEntryRepairKeys(): ReadonlySet<string> {
+  const raw = import.meta.env.VITE_APPROVED_LEGACY_ENTRY_REPAIR_KEYS as string | undefined;
+  return new Set((raw ?? "").split(",").map((value) => value.trim()).filter(Boolean));
+}
+
+export function migrateStoredLiveSimulation(
+  simulation: TradeSimulation,
+  approvedLegacyEntryRepairKeys: ReadonlySet<string> = getApprovedLegacyEntryRepairKeys(),
+): TradeSimulation {
+  return finalizeSyntheticForwardParent(reconcileLegacyConfirmedOpeningDuplicates(
+    migrateNOptionEntryStandardCommissions(simulation),
+    approvedLegacyEntryRepairKeys,
+  ));
 }
 
 function normalizeAccountInputs(value: unknown, fallback: AccountInputs): AccountInputs {
@@ -892,7 +903,7 @@ function loadInitialSimulations(): Record<WorkspaceMode, TradeSimulation[]> {
     demo: legacy && legacy.length > 0 ? legacy : [sampleAmznSimulation],
     live: [],
   });
-  const migratedLive = loaded.live.map(migrateStoredLiveSimulation);
+  const migratedLive = loaded.live.map((simulation) => migrateStoredLiveSimulation(simulation));
   const didMigrateLive = migratedLive.some((simulation, index) => simulation !== loaded.live[index]);
   if (didMigrateLive) saveJson(SIMULATIONS_KEY, { ...loaded, live: migratedLive });
   return {

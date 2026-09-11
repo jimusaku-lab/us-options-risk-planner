@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TradeSimulation } from "@/types/domain";
+import { sampleAmznSimulation } from "@/data/sampleAmzn";
+import { getApprovedLegacyOpeningDuplicateRepairKey } from "@/domain/optionEntryExecutions";
 import { migrateStoredLiveSimulation, normalizeSimulation, normalizeStoredSettings } from "./useOptionsStore";
 
 describe("stored N-option standard setting migration", () => {
@@ -43,6 +45,18 @@ describe("stored N-option standard setting migration", () => {
 
     expect(migrated.syntheticForwardTicket).toMatchObject({ actualTotalCommissionUSD: 4.48, entryCostUSD: 524.48 });
     expect(migrateStoredLiveSimulation(migrated)).toBe(migrated);
+  });
+  it("persists strict legacy entry reconciliation once", () => {
+    const simulation = { ...sampleAmznSimulation, id: "legacy-duplicate", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD",
+      optionLegs: [{ ...sampleAmznSimulation.optionLegs[0], id: "leg", quantity: 1 }],
+      optionEntryExecutions: [
+        { id: "history", legId: "leg", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 4.2, settlementCurrency: "USD", commissionUSD: 2.24, source: "saxo_api_estimate", historyCandidateIds: ["fixture-history"], confirmed: true },
+        { id: "manual", legId: "leg", tradeDate: "2025-03-11", contracts: 1, fillPriceUSD: 4.2, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", memo: "", confirmed: true },
+      ] } as TradeSimulation;
+    const approved = new Set([getApprovedLegacyOpeningDuplicateRepairKey(simulation.id, "history", "manual")]);
+    const migrated = migrateStoredLiveSimulation(simulation, approved);
+    expect(migrated.optionEntryExecutions).toHaveLength(1);
+    expect(migrateStoredLiveSimulation(migrated, approved)).toBe(migrated);
   });
 });
 

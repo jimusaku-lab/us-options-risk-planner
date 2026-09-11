@@ -527,7 +527,8 @@ describe("Dashboard close decision actions", () => {
       optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 45.52, source: "manual", confirmed: true }],
     });
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn(), onHistoryEntryAction }));
-    expect(screen.getByText("未確認: 開始約定の重複または競合")).toBeTruthy();
+    expect(screen.getByText("未確認: 開始約定の数量超過（証跡未照合）")).toBeTruthy();
+    expect(screen.queryByText("完了（追加操作なし）")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "購入時約定を確認" }));
     expect(onHistoryEntryAction).toHaveBeenCalledWith(simulation.id);
   });

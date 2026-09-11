@@ -125,6 +125,56 @@ export function migrateNOptionEntryStandardCommissions(simulation: TradeSimulati
   return changed ? { ...simulation, optionEntryExecutions } : simulation;
 }
 
+const LEGACY_ENTRY_DUPLICATE_RECONCILIATION_NOTE = "開始約定重複整理v1: Saxo履歴連携済み実績を正本化";
+
+function sameFiniteNumber(left: number | undefined, right: number | undefined, tolerance = 0.0001): boolean {
+  return left !== undefined && right !== undefined && Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance;
+}
+
+function calendarDayDistance(left: string, right: string): number | undefined {
+  const leftTime = new Date(`${left}T00:00:00Z`).getTime();
+  const rightTime = new Date(`${right}T00:00:00Z`).getTime();
+  return Number.isFinite(leftTime) && Number.isFinite(rightTime) ? Math.abs(leftTime - rightTime) / 86_400_000 : undefined;
+}
+
+function isUnlinkedLegacyManualEntry(execution: OptionEntryExecution): boolean {
+  return execution.confirmed === true && execution.source === "manual" &&
+    (execution.historyCandidateIds ?? []).length === 0 && !execution.saxoTicketId && !execution.saxoOrderId && !execution.saxoPositionId && !execution.saxoUic &&
+    Object.keys(execution.openingFieldSources ?? {}).length === 0 && Object.keys(execution.openingFieldEvidence ?? {}).length === 0 && !(execution.memo ?? "").trim();
+}
+
+export function getApprovedLegacyOpeningDuplicateRepairKey(simulationId: string, saxoEntryId: string, manualEntryId: string): string {
+  return [simulationId, saxoEntryId, manualEntryId].join(":");
+}
+
+/** Reconciles only an explicitly approved history-backed fill and its evidence-free legacy manual duplicate. */
+export function reconcileLegacyConfirmedOpeningDuplicates(
+  simulation: TradeSimulation,
+  approvedRepairKeys: ReadonlySet<string> = new Set(),
+): TradeSimulation {
+  const executions = simulation.optionEntryExecutions ?? [];
+  let changed = false;
+  let nextExecutions = executions;
+  for (const leg of simulation.optionLegs) {
+    const legExecutions = nextExecutions.filter((execution) => execution.legId === leg.id && execution.confirmed);
+    if (legExecutions.length !== 2 || !(leg.quantity > 0)) continue;
+    const saxoEntries = legExecutions.filter((execution) => execution.source === "saxo_api_estimate" && (execution.historyCandidateIds ?? []).length > 0 && execution.historyCompletionStatus !== "source_conflict");
+    const manualEntries = legExecutions.filter(isUnlinkedLegacyManualEntry);
+    if (saxoEntries.length !== 1 || manualEntries.length !== 1) continue;
+    const saxoEntry = saxoEntries[0]; const manualEntry = manualEntries[0];
+    const repairKey = getApprovedLegacyOpeningDuplicateRepairKey(simulation.id, saxoEntry.id, manualEntry.id);
+    if (!approvedRepairKeys.has(repairKey)) continue;
+    const dayDistance = calendarDayDistance(saxoEntry.tradeDate, manualEntry.tradeDate);
+    if (!sameFiniteNumber(saxoEntry.contracts, leg.quantity) || !sameFiniteNumber(saxoEntry.contracts, manualEntry.contracts) ||
+      !sameFiniteNumber(saxoEntry.fillPriceUSD, manualEntry.fillPriceUSD) || !sameFiniteNumber(saxoEntry.commissionUSD, manualEntry.commissionUSD, 0.005) ||
+      saxoEntry.settlementCurrency !== manualEntry.settlementCurrency || dayDistance === undefined || dayDistance > 1) continue;
+    const reconciled = { ...saxoEntry, memo: [saxoEntry.memo?.trim(), LEGACY_ENTRY_DUPLICATE_RECONCILIATION_NOTE].filter(Boolean).join(" / ") };
+    nextExecutions = nextExecutions.filter((execution) => execution.id !== manualEntry.id).map((execution) => execution.id === saxoEntry.id ? reconciled : execution);
+    changed = true;
+  }
+  return changed ? { ...simulation, optionEntryExecutions: nextExecutions } : simulation;
+}
+
 export function getOptionEntryExecutions(simulation: TradeSimulation): OptionEntryExecution[] {
   return simulation.optionEntryExecutions ?? [];
 }

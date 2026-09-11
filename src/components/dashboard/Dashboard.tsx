@@ -555,7 +555,7 @@ export function Dashboard({
                         <span className="block">{formatUSD(premiumDisplayUSD)}</span>
                         {hasHistoryCloseResults && isNAccountRow ? (
                           <span className="block text-xs text-slate-500">
-                            建玉時 {formatUSD(historyCloseResults[0].entryPremiumUSD - historyCloseResults[0].openCommissionUSD)} / 決済支払 -{formatUSD(historyCloseResults[0].closeCostUSD + historyCloseResults[0].closeCommissionUSD)}
+                            建玉時 {formatUSD(historyCloseResults[0].leg.side === "buy" ? historyCloseResults[0].entryPremiumUSD + historyCloseResults[0].openCommissionUSD : historyCloseResults[0].entryPremiumUSD - historyCloseResults[0].openCommissionUSD)} / 決済支払 -{formatUSD(historyCloseResults[0].closeCostUSD + historyCloseResults[0].closeCommissionUSD)}
                           </span>
                         ) : null}
                         {!isHistoryRow && premiumDisplay.netAfterFeesUSD !== undefined && Math.abs(premiumDisplay.netAfterFeesUSD - premiumDisplay.premiumUSD) > 0.005 ? (
@@ -579,6 +579,12 @@ export function Dashboard({
                     {longOptionDisplay ? (
                       <>
                         <span className="block text-xs text-slate-500">支払総額は左列に表示</span>
+                      </>
+                    ) : isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason ? (
+                      <>
+                        <span className="mb-1 block text-[11px] font-bold text-slate-500">実績分母</span>
+                        <span className="block text-slate-500">未確認</span>
+                        <span className="block text-[10px] text-slate-500">{historyPerformance.historicalAnnualReturnMissingReason}</span>
                       </>
                     ) : primary.currency === "USD" ? (
                       <>
@@ -645,14 +651,6 @@ export function Dashboard({
                     ) : (
                       <>
                         {annualReturnLabel}
-                        {isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason ? (
-                          <button type="button" className="mt-1 block rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={(event) => {
-                            event.stopPropagation();
-                            onHistoryEntryAction?.(simulation.id);
-                          }}>
-                            購入時約定を確認
-                          </button>
-                        ) : null}
                         {isHistoryRow && primary.annualReturnPct !== undefined && primary.netAnnualReturnPct === undefined && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
                           <span className="mt-1 block text-left text-[10px] font-medium leading-4 text-slate-500">税後参考未確定: N口座USD実績はJPY税額・年間通算の確定前です</span>
                         ) : null}
@@ -767,7 +765,11 @@ export function Dashboard({
                         Saxo OCO照合済み
                       </span>
                     ))}
-                    {primaryTask.type === "complete" ? (
+                    {isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason ? (
+                      <button type="button" className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-left text-xs font-bold text-amber-800 hover:bg-amber-100" onClick={(event) => { event.stopPropagation(); onHistoryEntryAction?.(simulation.id); }}>
+                        購入時約定を確認
+                      </button>
+                    ) : primaryTask.type === "complete" ? (
                       <span
                         className="inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800"
                         title={primaryTask.detail}

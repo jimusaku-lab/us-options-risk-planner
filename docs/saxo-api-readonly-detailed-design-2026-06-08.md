@@ -9839,7 +9839,9 @@ USDプレミアム 845.00 USD
 - 匿名fixtureでclosed/expired/partial/unconfirmed/assignment、別銘柄singleton、blank ticker、synthetic、migration冪等性、aggregate再計算を検証する。公開版へ実ticker、損益、localStorage、raw、OAuth、backupを移さない。
 ## 2026-09-11 Follow-up: historical entry evidence and 3-A review navigation
 
-- Historical long-option return states distinguish a missing entry date, duplicate/conflicting confirmed entry evidence, and an unmatched partial-close lot. They never become a zero return or a user-invented allocation.
+- Historical long-option return states distinguish a missing entry date, an unresolved entry-quantity surplus, and an unmatched partial-close lot. Only exact strong broker identity duplicates may be canonicalised; records without that evidence remain intact for review. They never become a zero return or a user-invented allocation.
 - Multi-date entry lots are annualised only when a close consumes the complete confirmed lot set, using cost-days. Partial lots without a direct broker lot link remain unresolved.
 - A historical review opens the existing 3-A entry record and focuses it; it does not create a new simulation, unconfirm evidence, or overwrite user data.
-- For N/USD history, after-tax annualisation remains a reference-unavailable state until JPY tax and annual netting evidence exists; pre-tax must not be copied as after-tax.
+- For N/USD history, after-tax annualisation remains a reference-unavailable state until JPY tax and annual netting evidence exists; pre-tax must not be copied as after-tax. An unresolved historical return shows an unconfirmed denominator and a review action, not a completed state.
+- A legacy duplicate may be reconciled only when a private target-specific approval key is supplied at local build time and one confirmed row is linked to Saxo history candidates, the other is an evidence-free generated manual row, currency/quantity/price/fee all agree, the Saxo row alone covers the leg quantity, and the calendar dates differ by no more than one day. The approval key and real identifiers must never be stored in source or the public build. The migration is versioned by an audit memo, persists only on change, and is idempotent. Similar values alone never authorize a merge.
+- Historical bought-option entry display is paid premium plus opening fee; sold-option entry display remains received premium minus opening fee.

@@ -262,6 +262,8 @@ export function SummaryCards({
     ? isTransferredToN
       ? "P→N移管済み / N口座で株式保有中"
       : "P口座で株式取得済み"
+    : historyMode && historyAnnualReturnMissingReason
+      ? "実績確認待ち"
     : primaryWarning
       ? "入力要確認"
       : "入力完了";
@@ -269,15 +271,20 @@ export function SummaryCards({
     ? isTransferredToN
       ? `P→N株式移管は記録済みです。現在はN口座で${simulation.ticker} ${stockTransfer?.shares ?? simulation.stockAcquisition?.shares ?? 0}株を保有しています。JSONバックアップを保存してください。カバードコールを始める場合はC売り候補を確認します。`
       : "P→N移管記録待ち。N口座へ移管した場合だけ移管記録へ進みます。"
+    : historyMode && historyAnnualReturnMissingReason
+      ? `実現損益は保持しています。年率分母は${historyAnnualReturnMissingReason}のため、3-A の購入時約定記録を確認してください。`
     : primaryWarning
       ? primaryWarning.message
       : "必要な実績入力は完了しています。JSONバックアップを保存してください。";
-  const historyDenominatorValue =
-    primaryDenominator.currency === "USD" ? formatUSD(primaryDenominator.amountUSD ?? 0) : formatJPY(primaryDenominator.amountJPY);
-  const historyAnnualFormula = `${formatJPY(taxResult.grossProfitJPY)} ÷ ${formatJPY(primaryDenominator.amountJPY)} × 365 ÷ ${Math.max(
-    1,
-    simulation.dte,
-  )}日。左が税前、右が税引後。`;
+  const historyDenominatorValue = historyAnnualReturnMissingReason
+    ? "実績分母 未確認"
+    : primaryDenominator.currency === "USD" ? formatUSD(primaryDenominator.amountUSD ?? 0) : formatJPY(primaryDenominator.amountJPY);
+  const historyAnnualFormula = historyAnnualReturnMissingReason
+    ? "開始証跡の確認後に、実績分母と保有日数から計算します。"
+    : `${formatJPY(taxResult.grossProfitJPY)} ÷ ${formatJPY(primaryDenominator.amountJPY)} × 365 ÷ ${Math.max(
+      1,
+      simulation.dte,
+    )}日。左が税前、右が税引後。`;
   const historyModeNotice =
     "現在のN口座株式の損益ではありません。現物株の現在時価や移管後の損益は、この年率計算に含めていません。";
   const summaryDenominatorUSD =

@@ -315,7 +315,10 @@ function resolveHistoricalLongOptionBasis(params: { simulation: TradeSimulation;
   const entries = getCanonicalOptionEntryExecutions(simulation).filter((entry) => entry.confirmed && entry.legId === leg.id && Number.isFinite(entry.contracts) && entry.contracts > 0);
   const totalContracts = entries.reduce((sum, entry) => sum + entry.contracts, 0);
   if (entries.length === 0 || totalContracts + 0.0001 < execution.contracts) return { available: false, reason: "購入時支払額" };
-  if (Number.isFinite(leg.quantity) && totalContracts > leg.quantity + 0.0001) return { available: false, reason: "開始約定の重複または競合" };
+  // Exact strong broker identities are canonicalised before this point. A
+  // remaining surplus is unresolved evidence, not proof that records may be
+  // deleted or merged automatically.
+  if (Number.isFinite(leg.quantity) && totalContracts > leg.quantity + 0.0001) return { available: false, reason: "開始約定の数量超過（証跡未照合）" };
   const datedEntries = entries.map((entry) => ({ entry, date: getHistoricalEntryDate(entry) }));
   if (datedEntries.some(({ date }) => !date)) return { available: false, reason: "購入時約定日" };
   const closeDate = normalizeHistoricalCalendarDate(execution.closeDate);
