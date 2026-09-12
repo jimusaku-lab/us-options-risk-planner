@@ -1,10 +1,26 @@
 import { expect, it } from "vitest";
-import { consumeSaxoOauthReturnMarker, isSaxoOauthReturn, shouldScheduleSaxoOauthReturnFocus } from "./saxoOauthReturn";
+import {
+  consumeSaxoOauthReturnMarker,
+  isSaxoOauthReturn,
+  resolveInitialSaxoPanelOpen,
+  shouldScheduleSaxoOauthReturnFocus,
+} from "./saxoOauthReturn";
 
 it("recognizes only the explicit one-shot Saxo OAuth return marker", () => {
   expect(isSaxoOauthReturn("?saxoConnected=1")).toBe(true);
   expect(isSaxoOauthReturn("?saxoConnected=0")).toBe(false);
   expect(isSaxoOauthReturn("?connected=1")).toBe(false);
+});
+
+it("keeps every ordinary first load and reload closed regardless of unrelated URL state", () => {
+  expect(resolveInitialSaxoPanelOpen("")).toBe(false);
+  expect(resolveInitialSaxoPanelOpen("?view=positions&connected=1")).toBe(false);
+  expect(resolveInitialSaxoPanelOpen("?status=expired&pending=1")).toBe(false);
+  expect(resolveInitialSaxoPanelOpen("?saxoConnected=0")).toBe(false);
+});
+
+it("opens initially only for the one-shot OAuth return marker", () => {
+  expect(resolveInitialSaxoPanelOpen("?view=positions&saxoConnected=1")).toBe(true);
 });
 
 it("consumes only the OAuth return marker while retaining route, query, and hash", () => {

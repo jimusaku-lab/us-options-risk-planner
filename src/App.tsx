@@ -95,7 +95,7 @@ import { applyCurrentOptionPricePreview, createCurrentOptionPricePreviewRow, get
 import { fetchSaxoOptionPremiumCandidatesPreview, fetchSaxoStatus } from "@/features/saxo/saxoApiClient";
 import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
-import { consumeSaxoOauthReturnMarker, isSaxoOauthReturn, shouldScheduleSaxoOauthReturnFocus, type SaxoOauthReturnFocusState } from "@/lib/saxoOauthReturn";
+import { consumeSaxoOauthReturnMarker, resolveInitialSaxoPanelOpen, shouldScheduleSaxoOauthReturnFocus, type SaxoOauthReturnFocusState } from "@/lib/saxoOauthReturn";
 import { useCandidatesStore } from "@/store/useCandidatesStore";
 import { DEFAULT_BROKER_COMMISSION_USD, DEFAULT_NISA_EXPECTED_ANNUAL_RETURN_PCT, useOptionsStore } from "@/store/useOptionsStore";
 import type { CandidateSymbol } from "@/types/candidates";
@@ -279,10 +279,9 @@ export default function App() {
   // deliberately only used to restore the read-only panel; it must never cause
   // an import, candidate adoption, or any persisted state change.
   const [oauthReturnPending] = useState(() =>
-    typeof window !== "undefined" && isSaxoOauthReturn(window.location.search),
+    typeof window !== "undefined" && resolveInitialSaxoPanelOpen(window.location.search),
   );
   const [isSaxoDetailOpen, setIsSaxoDetailOpen] = useState(() => oauthReturnPending);
-  const [hasSaxoDetailUserState, setHasSaxoDetailUserState] = useState(false);
   const [wheelFocusRequest, setWheelFocusRequest] = useState<{ ticker?: string; requestId: number } | null>(null);
   const [sameDayUsdJpyQuote, setSameDayUsdJpyQuote] = useState<FxQuote | null>(null);
   const [saxoHistoryFetchState, setSaxoHistoryFetchState] = useState<OpeningHistoryFetchState>("not_fetched");
@@ -2002,6 +2001,9 @@ export default function App() {
     oauthReconnectReturn: oauthReturnPending,
     bulkFetchButtonRef: saxoBulkFetchButtonRef,
   };
+  const saxoPanelSubtitle = saxoHasPendingReflection
+    ? "API接続・取得・反映待ちは必要時だけ確認します。"
+    : "反映待ち候補がないため、接続・同期は必要時だけ開きます。";
   const pendingSaxoStockSettlementItems = saxoHistoryCandidates.filter(
     (item) => getSaxoHistoryCandidateTarget(item) === "stock_settlement",
   );
@@ -2144,8 +2146,17 @@ export default function App() {
                 </button>
               </section>
               <div id="saxo-api-details" ref={saxoApiDetailsRef} tabIndex={-1} className="scroll-mt-4 focus:outline-none">
-                <CollapsibleSection title="Saxo API詳細" collapsed>
-                  <SaxoReadOnlyPanel {...saxoReadOnlyPanelProps} />
+                <CollapsibleSection
+                  title="Saxo API詳細"
+                  subtitle={saxoPanelSubtitle}
+                  collapsed
+                  open={isSaxoDetailOpen}
+                  onOpenChange={setIsSaxoDetailOpen}
+                >
+                  <SaxoReadOnlyPanel
+                    {...saxoReadOnlyPanelProps}
+                    onRequestClose={() => setIsSaxoDetailOpen(false)}
+                  />
                 </CollapsibleSection>
               </div>
               <CollapsibleSection
@@ -2300,11 +2311,6 @@ export default function App() {
     selectedWithAccount.strategyType === "short_put" &&
     selectedWithAccount.optionLegs.some((leg) => leg.type === "put" && leg.side === "sell");
   const compactCoveredCallMode = orderPrepCoveredCallMode || openCoveredCallManagementMode;
-  const shouldCollapseSaxoPanel = compactCoveredCallMode || (selected.status === "open" && !saxoHasPendingReflection);
-  const collapseSaxoPanel = shouldCollapseSaxoPanel || hasSaxoDetailUserState;
-  const saxoPanelSubtitle = saxoHasPendingReflection
-    ? "API接続・取得・反映待ちは必要時だけ確認します。"
-    : "反映待ち候補がないため、接続・同期は必要時だけ開きます。";
   const hasAccountMarginUsageWarning = [accountInputs.P, ...(activeWorkspace === "live" ? [accountInputs.N] : [])]
     .some((account) => resolveAccountMarginUsageWarning(account) !== undefined);
   const collapseAccountOverview = !hasAccountMarginUsageWarning &&
@@ -2489,23 +2495,15 @@ export default function App() {
             ) : null}
             {!positionFocusSimulationId ? <div id="saxo-api-details" ref={saxoApiDetailsRef} tabIndex={-1} className="scroll-mt-4 focus:outline-none">
               <CollapsibleSection
-                title={collapseSaxoPanel ? "Saxo API詳細" : undefined}
-                subtitle={collapseSaxoPanel ? saxoPanelSubtitle : undefined}
-                collapsed={collapseSaxoPanel}
-                open={collapseSaxoPanel ? isSaxoDetailOpen : undefined}
-                onOpenChange={(open) => {
-                  setHasSaxoDetailUserState(true);
-                  setIsSaxoDetailOpen(open);
-                }}
+                title="Saxo API詳細"
+                subtitle={saxoPanelSubtitle}
+                collapsed
+                open={isSaxoDetailOpen}
+                onOpenChange={setIsSaxoDetailOpen}
               >
                 <SaxoReadOnlyPanel
                   {...saxoReadOnlyPanelProps}
-                  onRequestClose={() => {
-                    // Whether the panel was initially inline or collapsible,
-                    // a user close must make it collapsible and closed.
-                    setHasSaxoDetailUserState(true);
-                    setIsSaxoDetailOpen(false);
-                  }}
+                  onRequestClose={() => setIsSaxoDetailOpen(false)}
                 />
               </CollapsibleSection>
             </div> : null}

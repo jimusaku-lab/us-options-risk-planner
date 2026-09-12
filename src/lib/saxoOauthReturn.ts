@@ -6,6 +6,15 @@ export function isSaxoOauthReturn(search: string): boolean {
   return new URLSearchParams(search).get(SAXO_OAUTH_RETURN_MARKER) === "1";
 }
 
+/**
+ * Ordinary mounts always start with the read-only panel closed. Its initial
+ * open state comes only from the one-shot OAuth return marker, never from
+ * storage or connection/reflection state.
+ */
+export function resolveInitialSaxoPanelOpen(search: string): boolean {
+  return isSaxoOauthReturn(search);
+}
+
 /** Keeps React StrictMode/re-renders from scheduling the one-shot return twice. */
 export function shouldScheduleSaxoOauthReturnFocus(pending: boolean, state: SaxoOauthReturnFocusState): boolean {
   return pending && state === "idle";
