@@ -169,6 +169,9 @@ export type SaxoApiPositionSnapshot = {
   currentOptionPrice?: number;
   instrumentCode?: string;
   uic?: number;
+  /** Explicit Saxo parent evidence only. Absence must not trigger automatic pairing. */
+  multiLegOrderId?: string;
+  multiLegOrderIdSourceField?: string;
   shareQuantity?: number;
   averageOpenPrice?: number;
   currentStockPrice?: number;
@@ -618,6 +621,71 @@ export type SaxoSyntheticForwardFillEvidence = {
   putHistory?: SaxoHistoryDiscoveryItem;
   missing: ("parent" | "call" | "put")[];
 };
+
+export type SaxoBearPutSpreadPair = {
+  id: string;
+  parentOrderId: string;
+  accountCode: SaxoAccountCode;
+  accountKey: string;
+  ticker: string;
+  expiry: string;
+  quantity: number;
+  contractSize: number;
+  longPutPosition: SaxoApiPositionSnapshot;
+  shortPutPosition: SaxoApiPositionSnapshot;
+};
+
+export type SaxoBearPutSpreadHold = {
+  parentOrderId: string;
+  positions: SaxoApiPositionSnapshot[];
+  reason: string;
+};
+
+/**
+ * Groups a broker spread only when both legs carry the same explicit Saxo
+ * MultiLegOrderId. Similar strikes, expiry dates, or a lone matching position
+ * are never enough to create a parent strategy automatically.
+ */
+export function findSaxoBearPutSpreadPairs(positions: SaxoApiPositionSnapshot[]): { pairs: SaxoBearPutSpreadPair[]; holds: SaxoBearPutSpreadHold[] } {
+  const groups = new Map<string, SaxoApiPositionSnapshot[]>();
+  for (const position of positions) {
+    if (!position.multiLegOrderId) continue;
+    groups.set(position.multiLegOrderId, [...(groups.get(position.multiLegOrderId) ?? []), position]);
+  }
+  const pairs: SaxoBearPutSpreadPair[] = [];
+  const holds: SaxoBearPutSpreadHold[] = [];
+  for (const [parentOrderId, candidates] of groups) {
+    const puts = candidates.filter((position) => getSaxoSyntheticForwardOptionDetails(position)?.optionType === "put");
+    const longs = puts.filter((position) => resolveSaxoSyntheticForwardSide(position) === "long");
+    const shorts = puts.filter((position) => resolveSaxoSyntheticForwardSide(position) === "short");
+    if (candidates.length !== 2 || longs.length !== 1 || shorts.length !== 1) {
+      holds.push({ parentOrderId, positions: candidates, reason: "明示親注文にP買い1脚とP売り1脚が一意にそろいません。" });
+      continue;
+    }
+    const longPutPosition = longs[0];
+    const shortPutPosition = shorts[0];
+    const longDetails = getSaxoSyntheticForwardOptionDetails(longPutPosition)!;
+    const shortDetails = getSaxoSyntheticForwardOptionDetails(shortPutPosition)!;
+    const sameIdentity = Boolean(longPutPosition.underlyingIdentity && longPutPosition.underlyingIdentity === shortPutPosition.underlyingIdentity);
+    const sameAccount = longPutPosition.accountKey === shortPutPosition.accountKey && longPutPosition.accountAssignment === shortPutPosition.accountAssignment && (longPutPosition.accountAssignment === "P" || longPutPosition.accountAssignment === "N");
+    const quantity = Math.abs(longPutPosition.quantity ?? Number.NaN);
+    const sameQuantity = Number.isInteger(quantity) && quantity > 0 && quantity === Math.abs(shortPutPosition.quantity ?? Number.NaN);
+    const contractSize = longPutPosition.contractSize;
+    const sameContract = Number.isInteger(contractSize) && (contractSize ?? 0) > 0 && contractSize === shortPutPosition.contractSize;
+    if (!sameIdentity || !sameAccount || !sameQuantity || !sameContract || !longDetails.expiry || longDetails.expiry !== shortDetails.expiry || !(longDetails.strike > shortDetails.strike)) {
+      holds.push({ parentOrderId, positions: candidates, reason: "口座・原資産・満期・数量・倍率・行使価格関係のいずれかを確認できません。" });
+      continue;
+    }
+    const ticker = longPutPosition.underlyingSymbol ?? shortPutPosition.underlyingSymbol ?? resolveSaxoPositionSymbol(longPutPosition) ?? resolveSaxoPositionSymbol(shortPutPosition);
+    if (!ticker) {
+      holds.push({ parentOrderId, positions: candidates, reason: "原資産銘柄を確認できません。" });
+      continue;
+    }
+    pairs.push({ id: `bear-put-spread:${parentOrderId}`, parentOrderId, accountCode: longPutPosition.accountAssignment as SaxoAccountCode, accountKey: longPutPosition.accountKey, ticker, expiry: longDetails.expiry, quantity, contractSize: contractSize!, longPutPosition, shortPutPosition });
+  }
+  return { pairs, holds };
+}
+
 
 function isSaxoFilledTradeHistory(item: SaxoHistoryDiscoveryItem | undefined): item is SaxoHistoryDiscoveryItem {
   if (!item || item.kind !== "trade" || item.price === undefined || !Number.isFinite(item.price)) return false;

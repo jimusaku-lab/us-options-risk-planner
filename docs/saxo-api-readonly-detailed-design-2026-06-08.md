@@ -9860,3 +9860,12 @@ USDプレミアム 845.00 USD
 - Ended rows do not show current underlying price or current-to-strike distance/percent. They retain C/P, strike, and expiry. Current/open rows retain their current-price display.
 - Historical P/L, denominator, holding-period return, and annualization use confirmed entry/close evidence and do not change with current price or current FX refreshes. JPY reference remains separate evidence.
 - Active-position warnings are filtered out of ended rows. Only historical data-integrity warnings remain. Missing denominators render as unconfirmed, never as zero. This presentation change does not mutate saved positions or performance data.
+
+## 2026-09-12 Bear Put Spreadの親戦略管理（公開版一般化契約）
+
+- `bear_put_spread` は既存複合戦略から分離し、同一口座・原資産・満期・通貨・契約倍率の高ストライクP買いと低ストライクP売りを1:1で保持する。
+- 外部取得データの自動統合は両脚の明示的な共通親注文証拠がある場合だけ許可する。類似条件や単一候補から親関係を推定しない。
+- 主表示は手数料込みネット支払額、手数料後受取額、概算損益、期間損益率。年率・理論値・履歴は参考情報とする。
+- 買い脚は明示Bid、売り脚は明示Ask、決済手数料と契約倍率は明示値だけを使う。欠損を0、100倍、Mid/Last、別用途費用で補完しない。
+- 部分決済・片脚残存・数量不均衡・全脚終了を区別し、実現済みと未実現見込みを混在させない。確定executionは一意に集計する。
+- UIはread-onlyの「戦略の決済を確認」から始め、外部で注文した後の決済実績を確認する。公開版には個人識別子、raw応答、OAuth、保存データを含めない。

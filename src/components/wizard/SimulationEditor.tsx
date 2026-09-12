@@ -67,7 +67,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
   const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call", "synthetic_forward", "combo"].includes(
     simulation.strategyType,
   );
-  const needsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "synthetic_forward", "combo"].includes(
+  const needsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "bear_put_spread", "synthetic_forward", "combo"].includes(
     simulation.strategyType,
   );
   const needsStock = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
@@ -164,7 +164,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
     const nextNeedsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call", "synthetic_forward", "combo"].includes(
       strategyType,
     );
-    const nextNeedsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "synthetic_forward", "combo"].includes(
+    const nextNeedsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "bear_put_spread", "synthetic_forward", "combo"].includes(
       strategyType,
     );
     const nextNeedsStock = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
@@ -172,7 +172,13 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
     );
     const isComposite = strategyType === "synthetic_forward" || strategyType === "combo";
     const callSide: OptionLeg["side"] = strategyType === "long_call" || isComposite ? "buy" : "sell";
-    const putSide: OptionLeg["side"] = strategyType === "long_put" ? "buy" : "sell";
+    const putSide: OptionLeg["side"] = strategyType === "long_put" || strategyType === "bear_put_spread" ? "buy" : "sell";
+    if (strategyType === "bear_put_spread") {
+      const existingLong = simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "buy");
+      const existingShort = simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell");
+      onChange({ ...simulation, strategyType, stockPosition: null, brokerMarginJPY: 0, denominatorMode: "custom", syntheticForwardTicket: undefined, optionLegs: [existingLong ?? { id: `${simulation.id}-put-long`, type: "put", side: "buy", strikeUSD: 0, premiumUSD: 0, quantity: 1, expiryDate: simulation.expiryDate }, existingShort ?? { id: `${simulation.id}-put-short`, type: "put", side: "sell", strikeUSD: 0, premiumUSD: 0, quantity: 1, expiryDate: simulation.expiryDate, assignmentPolicy: "avoid" }] });
+      return;
+    }
     const nextLegs = [
       ...(nextNeedsCall
         ? [
@@ -262,6 +268,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
   const shortExitLegs = getShortOptionLegs(simulation);
   const isComposite = isCompositeOptionStrategy(simulation);
   const isSyntheticForward = simulation.strategyType === "synthetic_forward";
+  const isBearPutSpread = simulation.strategyType === "bear_put_spread";
   const compositeValidation = validateCompositeOptionPosition(simulation);
   const compositeLifecycle = getCompositeOptionLifecycle(simulation);
   const referencedCloseLegs = optionCloseExecutions
@@ -974,6 +981,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               ["short_strangle", "ショートストラングル"],
               ["long_call", "コール買い"],
               ["long_put", "プット買い"],
+              ["bear_put_spread", "ベア・プット・スプレッド（高P買い + 低P売り）"],
               ["synthetic_forward", "シンセティックフォワード（C買い + P売り・同一行使価格）"],
               ["combo", "コンボ（C買い + P売り・別行使価格可）"],
               ["wheel", "ホイール戦略"],
@@ -1306,8 +1314,9 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
           ) : null}
           {!isSyntheticForward && needsPut && putLeg ? (
             <>
-              <NumberInput label="P権利行使価格" value={putLeg.strikeUSD} suffix="USD" onChange={(strikeUSD) => updateLeg(putLeg.id, { strikeUSD })} />
-              <NumberInput label="Pプレミアム" value={putLeg.premiumUSD} suffix="USD/株" onChange={(premiumUSD) => updateLeg(putLeg.id, { premiumUSD })} />
+              <NumberInput label={isBearPutSpread ? "高ストライクP買い 行使価格" : "P権利行使価格"} value={putLeg.strikeUSD} suffix="USD" onChange={(strikeUSD) => updateLeg(putLeg.id, { strikeUSD })} />
+              <NumberInput label={isBearPutSpread ? "高ストライクP買い プレミアム" : "Pプレミアム"} value={putLeg.premiumUSD} suffix="USD/株" onChange={(premiumUSD) => updateLeg(putLeg.id, { premiumUSD })} />
+              {isBearPutSpread ? <><NumberInput label="契約倍率" value={putLeg.contractSize ?? Number.NaN} suffix="倍" min={1} onChange={(contractSize) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, contractSize })) })} /><NumberInput label="組数" value={putLeg.quantity} suffix="組" min={1} onChange={(quantity) => update({ optionLegs: simulation.optionLegs.map((leg) => ({ ...leg, quantity })) })} /></> : null}
               <Select
                 label="P売りの方針"
                 value={putIntentValue}
@@ -1324,6 +1333,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               />
             </>
           ) : null}
+          {isBearPutSpread && simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell") ? (() => { const shortPut = simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell")!; return <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3"><div className="mb-2 text-sm font-bold text-indigo-950">低ストライクP売り</div><div className="grid gap-3 sm:grid-cols-2"><NumberInput label="行使価格" value={shortPut.strikeUSD} suffix="USD" onChange={(strikeUSD) => updateLeg(shortPut.id, { strikeUSD })} /><NumberInput label="プレミアム" value={shortPut.premiumUSD} suffix="USD/株" onChange={(premiumUSD) => updateLeg(shortPut.id, { premiumUSD })} /></div><p className="mt-2 text-xs text-indigo-800">同一口座・同一満期・同一組数で管理します。P買いより低い行使価格を入力してください。</p></div>; })() : null}
           {!isSyntheticForward && simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
             <NumberInput
               label="取引手数料（USD）"

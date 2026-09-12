@@ -550,7 +550,7 @@ export function calculateYearlyPerformanceSummary(
       if (assignmentYear) availableYearSet.add(assignmentYear);
     }
 
-    ((endedStatuses.has(simulation.status) || simulation.strategyType === "synthetic_forward") && shouldIncludeCompositeCloseResultsInPerformance(simulation) ? calculateOptionCloseExecutionResults(simulation) : [])
+    ((endedStatuses.has(simulation.status) || simulation.strategyType === "synthetic_forward" || simulation.strategyType === "bear_put_spread") && (simulation.strategyType === "bear_put_spread" || shouldIncludeCompositeCloseResultsInPerformance(simulation)) ? calculateOptionCloseExecutionResults(simulation) : [])
       .filter((result) => result.execution.confirmed)
       .forEach((result) => {
         const executionIdentity = `${simulation.id}:${result.execution.id}`;

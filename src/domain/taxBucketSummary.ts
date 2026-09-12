@@ -21,7 +21,7 @@ export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBu
     .reduce<TaxBucketSummary>(
       (summary, simulation) => {
         const isTerminal = endedStatuses.has(simulation.status);
-        const closeExecutionResults = (isTerminal || simulation.strategyType === "synthetic_forward") && shouldIncludeCompositeCloseResultsInPerformance(simulation)
+        const closeExecutionResults = (isTerminal || simulation.strategyType === "synthetic_forward" || simulation.strategyType === "bear_put_spread") && (simulation.strategyType === "bear_put_spread" || shouldIncludeCompositeCloseResultsInPerformance(simulation))
           ? calculateOptionCloseExecutionResults(simulation).filter((result) => result.execution.confirmed)
           : [];
         const hasCloseExecutions = closeExecutionResults.length > 0;

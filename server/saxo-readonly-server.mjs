@@ -1451,6 +1451,7 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
   const currency = firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency", "DisplayCurrency"]);
   const positionId = firstString(raw, ["PositionId", "PositionID", "Id", "PositionKey"]);
   const uic = firstNumber(raw, ["Uic", "UIC"]);
+  const multiLegOrderIdMatch = firstStringMatch(raw, ["MultiLegOrderId"]);
   const underlyingUicMatch = firstNumberMatch(raw, ["UnderlyingUic", "UnderlyingUIC", "UnderlyingInstrumentUic"]);
   const underlyingSymbolMatch = firstStringMatch(raw, ["UnderlyingSymbol", "UnderlyingAssetSymbol", "UnderlyingTicker"]);
   const underlyingAssetTypeMatch = firstStringMatch(raw, ["UnderlyingAssetType"]);
@@ -1535,6 +1536,8 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     currentOptionPrice,
     instrumentCode,
     uic,
+    multiLegOrderId: multiLegOrderIdMatch?.value,
+    multiLegOrderIdSourceField: multiLegOrderIdMatch?.matchedName,
     shareQuantity: kind === "stock" ? quantity : undefined,
     averageOpenPrice,
     currentStockPrice,

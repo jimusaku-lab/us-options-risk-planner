@@ -12,6 +12,7 @@ import {
   findSaxoSyntheticForwardPairs,
   findSaxoSyntheticForwardParentHistory,
   findSaxoSyntheticForwardSimulationForPair,
+  findSaxoBearPutSpreadPairs,
   resolveSaxoSyntheticForwardFillEvidence,
   findOrderCandidatesForLeg,
   getSaxoExitOrderReviews,
@@ -62,6 +63,14 @@ const pAccount: AccountState = {
 };
 
 describe("Saxo read-only account sync", () => {
+  it("groups a bear put spread only by explicit shared multi-leg parent evidence", () => {
+    const base = { accountKey: "acct", accountAssignment: "N", accountCode: "N", assetType: "StockOption", kind: "option", optionType: "put", expiry: "2026-10-02", quantity: 1, contractSize: 100, underlyingIdentity: "uic:1:stock", underlyingSymbol: "TEST", currency: "USD", missingFields: [] as string[], fetchedAt: "2026-09-12T00:00:00Z" } as const;
+    const long = { ...base, id: "long", side: "long", strike: 100, multiLegOrderId: "parent-anon" } as SaxoApiPositionSnapshot;
+    const short = { ...base, id: "short", side: "short", quantity: -1, strike: 90, multiLegOrderId: "parent-anon" } as SaxoApiPositionSnapshot;
+    expect(findSaxoBearPutSpreadPairs([long, short]).pairs).toHaveLength(1);
+    expect(findSaxoBearPutSpreadPairs([{ ...long, multiLegOrderId: undefined }, { ...short, multiLegOrderId: undefined }]).pairs).toHaveLength(0);
+    expect(findSaxoBearPutSpreadPairs([long, { ...short, multiLegOrderId: "other-parent" }]).pairs).toHaveLength(0);
+  });
   it("classifies only a confirmed final ToClose activity as non-accounting close evidence", () => {
     const activity: SaxoHistoryDiscoveryItem = {
       id: "activity-anon", kind: "order_activity", assetType: "StockOption", symbol: "SAMPLE", optionType: "call",

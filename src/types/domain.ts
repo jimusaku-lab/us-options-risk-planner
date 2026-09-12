@@ -6,6 +6,7 @@ export type StrategyType =
   | "short_strangle"
   | "long_call"
   | "long_put"
+  | "bear_put_spread"
   | "synthetic_forward"
   | "combo"
   | "custom";
@@ -213,6 +214,8 @@ export type OptionLeg = {
   strikeUSD: number;
   premiumUSD: number;
   quantity: number;
+  /** Broker-confirmed option contract multiplier. Bear put spreads never assume 100. */
+  contractSize?: number;
   expiryDate: string;
   isCovered?: boolean;
   putIntent?: PutIntent;
@@ -377,6 +380,14 @@ export type SyntheticForwardTicket = {
   assignmentAccepted?: boolean;
 };
 
+export type BearPutSpreadLinkage = {
+  source: "saxo_multileg_order" | "user_confirmed";
+  /** Local-only broker evidence. Never render or export these identifiers. */
+  parentOrderId?: string;
+  legOrderIds?: string[];
+  confirmedAt?: string;
+};
+
 export type OptionCloseExecution = {
   id: string;
   legId: string;
@@ -519,6 +530,7 @@ export type TradeSimulation = {
   referenceFxRateJPY?: number;
   brokerSettlement?: BrokerSettlement;
   syntheticForwardTicket?: SyntheticForwardTicket;
+  bearPutSpreadLinkage?: BearPutSpreadLinkage;
   stockPosition: StockPosition | null;
   optionLegs: OptionLeg[];
   brokerMarginJPY: number;

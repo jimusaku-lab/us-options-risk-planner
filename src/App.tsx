@@ -840,6 +840,7 @@ export default function App() {
           strikeUSD: position.strike ?? 0,
           premiumUSD: position.premiumOpenPrice ?? position.currentOptionPrice ?? 0,
           quantity,
+          contractSize: position.contractSize,
           expiryDate,
           isCovered: position.optionType === "call",
           putIntent: position.optionType === "put" ? "accept_assignment" : undefined,

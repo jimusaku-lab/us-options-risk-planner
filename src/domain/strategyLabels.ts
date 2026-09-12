@@ -8,6 +8,7 @@ export const strategyLabels: Record<StrategyType, string> = {
   short_strangle: "ショートストラングル",
   long_call: "コール買い",
   long_put: "プット買い",
+  bear_put_spread: "ベア・プット・スプレッド",
   synthetic_forward: "シンセティックフォワード",
   combo: "コンボ",
   custom: "カスタム",

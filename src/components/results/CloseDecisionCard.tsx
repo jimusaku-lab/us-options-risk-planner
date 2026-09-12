@@ -19,6 +19,7 @@ import { calculateCurrentPositionEstimate } from "@/domain/currentPositionEstima
 import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
 import type { FxQuote } from "@/lib/marketData";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
+import { calculateBearPutSpreadEstimate } from "@/domain/bearPutSpread";
 
 export function CloseDecisionCard({
   simulation,
@@ -57,6 +58,7 @@ export function CloseDecisionCard({
     return execution?.commissionUSD !== undefined && Number.isFinite(execution.commissionUSD) ? execution.commissionUSD : undefined;
   };
   const entryRationaleJournal = simulation.entryRationaleJournal ?? createJournalForSimulation(simulation);
+  const bearPutEstimate = simulation.strategyType === "bear_put_spread" ? calculateBearPutSpreadEstimate(simulation) : undefined;
   const updateLeg = (id: string, patch: Partial<OptionLeg>) => {
     onChange({
       ...simulation,
@@ -131,10 +133,13 @@ export function CloseDecisionCard({
       {isOpen ? (
         <>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            {longLegs.length > 0 && shortLegs.length === 0
+            {simulation.strategyType === "bear_put_spread"
+              ? "この画面は読み取り専用の判断支援です。実際の二脚決済注文はSaxoで行い、約定後に決済結果を取得・確認します。"
+              : longLegs.length > 0 && shortLegs.length === 0
               ? "買いオプションは原則として満期前に反対売買で決済します。ITMでも権利行使ではなく、まず売却決済・利確/損切りライン・残存日数を確認します。"
               : "Saxoの決済チケットに表示される現在の買戻し価格を入力し、出口ルールに到達しているか確認します。"}
           </p>
+          {bearPutEstimate ? <div className="mt-3 grid gap-2 rounded-md border border-indigo-200 bg-indigo-50 p-3 sm:grid-cols-3"><div><div className="text-xs text-indigo-700">建玉時手数料込み支払額</div><div className="font-bold">{bearPutEstimate.kind === "available" ? formatUSD(bearPutEstimate.entryAllInDebitUSD) : "未確認"}</div></div><div><div className="text-xs text-indigo-700">今閉じた場合の手数料後受取額</div><div className="font-bold">{bearPutEstimate.kind === "available" ? formatUSD(bearPutEstimate.closeNetProceedsUSD) : "未計算"}</div></div><div><div className="text-xs text-indigo-700">概算損益 / 期間損益率</div><div className="font-bold">{bearPutEstimate.kind === "available" ? `${bearPutEstimate.totalEstimatedPnlUSD >= 0 ? "+" : ""}${formatUSD(bearPutEstimate.totalEstimatedPnlUSD)} / ${bearPutEstimate.periodReturnPct >= 0 ? "+" : ""}${formatPct(bearPutEstimate.periodReturnPct)}` : bearPutEstimate.reasons.join(" / ")}</div></div></div> : null}
           {shortLegs.length > 0 ? <CurrentEstimateCompletion simulation={simulation} currentEstimateFxQuote={currentEstimateFxQuote} /> : null}
           <div className={`mt-4 grid gap-3 ${closeDecisionLegs.length === 1 ? "" : "lg:grid-cols-2"}`}>
             {closedLegs.map((leg) => (

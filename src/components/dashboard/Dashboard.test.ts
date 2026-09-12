@@ -72,6 +72,18 @@ afterEach(() => {
 });
 
 describe("synthetic leg history", () => {
+  it("shows bear put spread P/L and period return as the primary dashboard decision", () => {
+    const simulation = createSimulation({ ticker: "TEST", strategyType: "bear_put_spread", entryDate: "2026-09-01", expiryDate: "2026-10-02", optionLegs: [{ id: "long", type: "put", side: "buy", strikeUSD: 100, premiumUSD: 4.92, quantity: 1, contractSize: 100, expiryDate: "2026-10-02", closeCostUSD: 4.5, closePlan: { enabled: true, closePriceUSD: 4.5, commissionUSD: 2.24 } }, { id: "short", type: "put", side: "sell", strikeUSD: 90, premiumUSD: 0.92, quantity: 1, contractSize: 100, expiryDate: "2026-10-02", closeCostUSD: 0.7, closePlan: { enabled: true, closePriceUSD: 0.7, commissionUSD: 2.24 } }], optionEntryExecutions: [{ id: "el", legId: "long", tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 4.92, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }, { id: "es", legId: "short", tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 0.92, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }] });
+    const onPositionFocus = vi.fn();
+    const { rerender } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onPositionFocus }));
+    expect(screen.getByText("ベア・プット・スプレッド")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "戦略の決済を確認" })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("TESTの詳細を表示する"));
+    expect(onPositionFocus).toHaveBeenCalledWith(simulation.id);
+    rerender(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), positionFocusSimulationId: simulation.id, onPositionFocus }));
+    expect(screen.getByTestId("bear-put-spread-focus-detail")).toHaveTextContent("高ストライクP買い");
+    expect(screen.getByTestId("bear-put-spread-focus-detail")).toHaveTextContent("低ストライクP売り");
+  });
   it("shows one confirmed closed leg in history and opens its exact execution", () => {
     const action = vi.fn();
     const simulation = createSimulation({
