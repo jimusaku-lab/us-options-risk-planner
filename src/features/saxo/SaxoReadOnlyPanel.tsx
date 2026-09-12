@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { SpreadStrategyCandidates } from "./SpreadStrategyCandidates";
-import { reconcileStrategyCandidates } from "./spreadStrategyImport";
+import { getSpreadImportIssues, reconcileStrategyCandidates } from "./spreadStrategyImport";
 import { emptyStrategyLedger, type PreparedStrategyImport, type StrategyCoverage, type StrategyLedger } from "@/domain/strategyLedger";
 import { Ban, Cable, CheckCircle2, Clipboard, Download, Eye, FilePlus2, Link2, LogOut, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import {
@@ -361,12 +361,14 @@ export function SaxoReadOnlyPanel({
     () => createEffectiveSaxoHistoryCandidates(historyEndpoints.flatMap((endpoint) => endpoint.items ?? [])),
     [historyEndpoints],
   );
-  const spreadCandidates = useMemo(() => reconcileStrategyCandidates({
+  const spreadSnapshot = useMemo(() => ({
     environment: status?.environment ?? "unknown", requestRevision: spreadRequestRevision,
     positions: mappedPositions, history: historyEndpoints.flatMap(endpoint => endpoint.items ?? []),
     orders: orders.flatMap(order => order.orderId && order.multiLegOrderId && order.multiLegOrderIdSourceField ? [{ accountKey: order.accountKey, orderId: order.orderId, parentOrderId: order.multiLegOrderId, sourceField: order.multiLegOrderIdSourceField }] : []),
     coverage: isLoading ? [] : spreadCoverage,
-  }, strategyLedger ?? emptyStrategyLedger(), simulations), [status?.environment, spreadRequestRevision, mappedPositions, historyEndpoints, orders, spreadCoverage, isLoading, strategyLedger, simulations]);
+  }), [status?.environment, spreadRequestRevision, mappedPositions, historyEndpoints, orders, spreadCoverage, isLoading]);
+  const spreadCandidates = useMemo(() => reconcileStrategyCandidates(spreadSnapshot, strategyLedger ?? emptyStrategyLedger(), simulations), [spreadSnapshot, strategyLedger, simulations]);
+  const spreadIssues = useMemo(() => isLoading ? [] : getSpreadImportIssues(spreadSnapshot, strategyLedger, simulations), [spreadSnapshot, isLoading, strategyLedger, simulations]);
   const effectiveHistoryEndpoints = useMemo(
     () => createEffectiveHistoryEndpoints(historyEndpoints, effectiveHistoryItems),
     [effectiveHistoryItems, historyEndpoints],
@@ -1230,6 +1232,11 @@ export function SaxoReadOnlyPanel({
               <p className="mb-2 text-sm font-bold text-indigo-900">次にすること: 下の2本を確認して、1つの戦略にまとめます。</p>
               <SpreadStrategyCandidates candidates={spreadCandidates} ledger={strategyLedger ?? emptyStrategyLedger()} simulations={simulations} onCommit={onCommitSpread} />
             </div> : null}
+            {onCommitSpread && spreadIssues.length ? <section aria-label="スプレッドにまとめなかった明細" className="rounded border border-amber-200 bg-amber-50 p-3 text-sm">
+              <h3 className="font-bold">一部の明細は、新しいスプレッドにまとめていません</h3>
+              <p className="mt-1 text-xs">現在の保有分を特定できないためです。元の明細は残しています。重複を削除したり、数量を書き換えたりする必要はありません。</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">{spreadIssues.map(issue => <li key={`${issue.code}:${issue.label}`}>{issue.label}: {issue.reason}</li>)}</ul>
+            </section> : null}
             <ReflectionPendingSummary
               ref={pendingSummaryRef}
               summary={reflectionSummary}

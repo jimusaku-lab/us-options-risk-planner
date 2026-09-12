@@ -36,6 +36,13 @@ test("R2 pagination retains complete, partial and failed coverage", async () => 
   assert.equal(partial.coverage.status, "partial");
 });
 
+test("R2 explicit zero transaction fee remains known and beats inference", () => {
+  const zero = normalizeHistoryItem({ TradeId: "TEST-zero", TransactionCost: 0, BookedAmount: -404, Premium: -400 }, "trade", 0);
+  assert.equal(zero.transactionCost, 0);
+  const missing = normalizeHistoryItem({ TradeId: "TEST-missing" }, "trade", 1);
+  assert.equal(missing.transactionCost, undefined);
+});
+
 test("normalizes an anonymized nested Saxo option payload through PositionBase.Uic to a canonical underlying", async () => {
   const raw = (positionId, uic, amount) => ({
     PositionBase: {

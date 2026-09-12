@@ -99,6 +99,23 @@ afterEach(() => {
 });
 
 describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE production import", () => {
+  it("does not revive closed lots and explains why grouping was withheld in the real Panel", async () => {
+    trades.push({ ...trades[0], id: "TEST-old-close", tradeId: "TEST-old-close", openClose: "close", buySell: "sell" });
+    try {
+      render(<App />);
+      const details = screen.getByText("Saxo API詳細").closest("details")!;
+      details.open = true; fireEvent(details, new Event("toggle"));
+      const fetchButton = await screen.findByRole("button", { name: "まとめて取得" });
+      await waitFor(() => expect(fetchButton).toBeEnabled());
+      fireEvent.click(fetchButton);
+      const explanation = await screen.findByRole("region", { name: "スプレッドにまとめなかった明細" });
+      expect(explanation).toHaveTextContent("元の明細は残しています");
+      expect(explanation).toHaveTextContent("現在保有する購入分を確定できません");
+      expect(screen.queryByRole("button", { name: "組み合わせを確認" })).toBeNull();
+      expect(useOptionsStore.getState().simulations).toHaveLength(0);
+      expect(unexpectedRequests).toEqual([]);
+    } finally { trades.pop(); }
+  });
   it("T18: actual App fetch exposes one spread confirmation before any parent/store mutation", async () => {
     // The existing production pair resolver accepts this exact input. The
     // RED must therefore occur in the application connection, not the fixture.

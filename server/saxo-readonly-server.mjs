@@ -1735,10 +1735,9 @@ export function normalizeHistoryItem(raw, kind, index) {
   const bookedAmountMatch = firstNumberMatch(raw, bookedAmountAliases);
   const premiumAmountMatch = firstNumberMatch(raw, premiumAmountAliases);
   const explicitTransactionCostMatch = firstNumberMatch(raw, transactionCostAliases);
-  const transactionCostMatch =
-    explicitTransactionCostMatch && Math.abs(explicitTransactionCostMatch.value) > 0.0001
-      ? explicitTransactionCostMatch
-      : inferTransactionCostFromTradeValue(raw);
+  // An explicit zero is evidence, not absence. Only infer when no numeric
+  // transaction-cost field was supplied by the broker.
+  const transactionCostMatch = explicitTransactionCostMatch ?? inferTransactionCostFromTradeValue(raw);
   const exchangeRateMatch = firstNumberMatch(raw, exchangeRateAliases);
   return {
     id: `${kind}-${index}`,
