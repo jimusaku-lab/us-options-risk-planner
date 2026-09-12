@@ -3,6 +3,7 @@ import { calculateNetInitialPremiumJPY } from "@/domain/calculations";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { normalizeOptionCloseExecutionsForStatus } from "@/domain/optionCloseExecutions";
 import { getStatusLabel, getStrategyLabel } from "@/domain/strategyLabels";
+import type { StrategyLedger } from "@/domain/strategyLedger";
 
 export function exportSimulationJson(simulation: TradeSimulation): string {
   return JSON.stringify(simulation, null, 2);
@@ -16,6 +17,7 @@ export function exportWorkspaceJson({
   wheelEvents,
   stockTransfers,
   exportedAt,
+  strategyLedger,
 }: {
   workspace: "demo" | "live";
   simulations: TradeSimulation[];
@@ -24,6 +26,7 @@ export function exportWorkspaceJson({
   wheelEvents?: WheelEvent[];
   stockTransfers?: StockTransferEvent[];
   exportedAt: string;
+  strategyLedger?: StrategyLedger;
 }): string {
   return JSON.stringify(
     {
@@ -31,6 +34,7 @@ export function exportWorkspaceJson({
       app: "us-options-position-manager",
       workspace,
       exportedAt,
+      strategyLedger,
       simulations,
       accountStates: accountStates ?? [],
       wheelCycles: wheelCycles ?? [],
@@ -64,6 +68,7 @@ export function exportWorkspaceJson({
 }
 
 export type ParsedWorkspaceJson = {
+  strategyLedger?: StrategyLedger;
   simulations: TradeSimulation[];
   accountStates?: AccountState[];
   wheelCycles?: WheelCycle[];
@@ -80,6 +85,7 @@ export function parseWorkspaceJson(text: string): ParsedWorkspaceJson {
   if (parsed && typeof parsed === "object" && "simulations" in parsed) {
     const workspace = parsed as {
       simulations?: unknown;
+      strategyLedger?: StrategyLedger;
       accountStates?: unknown;
       wheelCycles?: unknown;
       wheelEvents?: unknown;
@@ -122,6 +128,7 @@ export function parseWorkspaceJson(text: string): ParsedWorkspaceJson {
       }));
       return {
         simulations,
+        strategyLedger: workspace.strategyLedger,
         accountStates: Array.isArray(workspace.accountStates) ? (workspace.accountStates as AccountState[]) : undefined,
         wheelCycles: Array.isArray(workspace.wheelCycles) ? (workspace.wheelCycles as WheelCycle[]) : undefined,
         wheelEvents: Array.isArray(workspace.wheelEvents) ? (workspace.wheelEvents as WheelEvent[]) : undefined,

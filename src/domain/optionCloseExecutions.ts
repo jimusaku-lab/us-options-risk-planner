@@ -9,6 +9,7 @@ import {
   SAXO_CLOSE_COMMISSION_SOURCE,
 } from "./closeCommissionStandard";
 import type { SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
+import { moneyProduct, spreadCloseMoney } from "./spreadCashflows";
 
 const CONTRACT_SIZE = 100;
 
@@ -23,6 +24,8 @@ export type OptionCloseExecutionResult = {
   closeCommissionJPY: number;
   realizedPnlUSD: number;
   realizedPnlJPY: number;
+  /** Undefined is deliberate: a historical return is not 0% merely because
+   * the confirmed purchase cost or the calendar interval is unavailable. */
   holdingDays?: number;
   annualReturnPct?: number;
   annualReturnMissingReason?: string;
@@ -44,6 +47,11 @@ export type SaxoHistoryRealizedPnlAutofill =
     };
 
 export function getOptionCloseExecutions(simulation: TradeSimulation): OptionCloseExecution[] {
+  if (simulation.strategyType === "bear_put_spread") {
+    const executions = simulation.optionCloseExecutions ?? [];
+    const superseded = new Set(executions.filter(item => item.confirmed).flatMap(item => item.supersedesId ? [item.supersedesId] : []));
+    return executions.filter(item => !item.voided && !superseded.has(item.id));
+  }
   return simulation.optionCloseExecutions ?? [];
 }
 
@@ -70,7 +78,12 @@ export type OptionCloseCompletion = {
   reason?: string;
 };
 
-/** Shared per-leg source of truth. Draft executions do not remove a leg. */
+/**
+ * Per-leg close progress is the sole source of truth for a composite position
+ * after one leg has been confirmed closed.  Draft executions are deliberately
+ * excluded: they still require the user's confirmation and must not remove a
+ * leg from the close-decision or price-update surface.
+ */
 export type OptionLegCloseProgress = {
   legId: string;
   type: OptionLeg["type"];
@@ -81,9 +94,17 @@ export type OptionLegCloseProgress = {
   state: "open" | "partial" | "closed" | "invalid";
   reason?: string;
 };
-export type OptionCloseProgress = { legs: OptionLegCloseProgress[]; invalidReason?: string };
 
-/** Display-only confirmed leg history for an active synthetic parent. */
+export type OptionCloseProgress = {
+  legs: OptionLegCloseProgress[];
+  invalidReason?: string;
+};
+
+/**
+ * A display-only history row for a confirmed leg of a still-open synthetic
+ * forward.  It deliberately contains references to the existing parent and
+ * executions; it is never persisted as another TradeSimulation.
+ */
 export type ClosedSyntheticLegHistoryItem = {
   kind: "closed_leg";
   id: string;
@@ -99,87 +120,214 @@ export type ClosedSyntheticLegHistoryItem = {
   closeDate: string;
 };
 
-/** Operational-only progress includes activity confirmations awaiting accounting. */
+/**
+ * Operational progress is only for live-operation surfaces.  Unlike the
+ * formal resolver below it includes activity confirmations that are awaiting
+ * report accounting.  It must never drive performance, cash, wheel events or
+ * the persisted terminal simulation status.
+ */
 export function getOptionLegOperationalCloseProgress(simulation: TradeSimulation): OptionCloseProgress {
+  const legs = simulation.optionLegs;
   const closedByLeg = new Map<string, number>();
   let invalidReason: string | undefined;
   for (const execution of getOptionCloseExecutions(simulation)) {
     const operational = execution.confirmed || execution.executionEvidenceStatus === "user_confirmed_pending_accounting" || execution.executionEvidenceStatus === "accounting_arrived";
     if (!operational || execution.confirmationStatus === "invalid") continue;
-    const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
-    if (!leg || !Number.isFinite(execution.contracts) || execution.contracts <= 0) { invalidReason ??= "決済約定証拠の対象脚または数量が不正です。"; continue; }
+    const leg = legs.find((item) => item.id === execution.legId);
+    if (!leg || !Number.isFinite(execution.contracts) || execution.contracts <= 0) {
+      invalidReason ??= "決済約定証拠の対象脚または数量が不正です。";
+      continue;
+    }
     closedByLeg.set(leg.id, (closedByLeg.get(leg.id) ?? 0) + execution.contracts);
   }
-  const legs = simulation.optionLegs.map<OptionLegCloseProgress>((leg) => {
-    const closed = closedByLeg.get(leg.id) ?? 0;
-    if (!Number.isFinite(leg.quantity) || leg.quantity <= 0) return { legId: leg.id, type: leg.type, side: leg.side, state: "invalid", reason: "対象脚または建玉数量が不正です。" };
-    if (closed > leg.quantity) return { legId: leg.id, type: leg.type, side: leg.side, openedContracts: leg.quantity, confirmedClosedContracts: closed, state: "invalid", reason: "決済約定証拠が建玉数量を超えています。" };
-    const remainingContracts = leg.quantity - closed;
-    return { legId: leg.id, type: leg.type, side: leg.side, openedContracts: leg.quantity, confirmedClosedContracts: closed, remainingContracts, state: remainingContracts === 0 ? "closed" : closed > 0 ? "partial" : "open" };
-  });
-  return { legs, invalidReason: invalidReason ?? legs.find((item) => item.state === "invalid")?.reason };
-}
-export function getOperationalRemainingOptionLegs(simulation: TradeSimulation): Array<{ leg: OptionLeg; progress: OptionLegCloseProgress }> {
-  const progress = getOptionLegOperationalCloseProgress(simulation);
-  if (progress.invalidReason) return [];
-  return simulation.optionLegs.flatMap((leg) => { const item = progress.legs.find((entry) => entry.legId === leg.id); return item && (item.remainingContracts ?? 0) > 0 ? [{ leg, progress: item }] : []; });
-}
-
-export function getOptionLegCloseProgress(simulation: TradeSimulation): OptionCloseProgress {
-  const closedByLeg = new Map<string, number>();
-  let invalidReason: string | undefined;
-  for (const execution of getOptionCloseExecutions(simulation).filter((item) => item.confirmed)) {
-    if (execution.confirmationStatus === "invalid") { invalidReason ??= "無効な確認済み決済実績があります。"; continue; }
-    const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
-    if (!leg || !Number.isFinite(execution.contracts) || execution.contracts <= 0) { invalidReason ??= "確認済み決済実績の対象脚または数量が不正です。"; continue; }
-    closedByLeg.set(leg.id, (closedByLeg.get(leg.id) ?? 0) + execution.contracts);
-  }
-  const legs = simulation.optionLegs.map<OptionLegCloseProgress>((leg) => {
+  const progress = legs.map<OptionLegCloseProgress>((leg) => {
     if (!Number.isFinite(leg.quantity) || leg.quantity <= 0) return { legId: leg.id, type: leg.type, side: leg.side, state: "invalid", reason: "対象脚または建玉数量が不正です。" };
     const confirmedClosedContracts = closedByLeg.get(leg.id) ?? 0;
-    if (confirmedClosedContracts > leg.quantity) return { legId: leg.id, type: leg.type, side: leg.side, openedContracts: leg.quantity, confirmedClosedContracts, state: "invalid", reason: "確認済み決済実績が建玉数量を超えています。" };
+    if (confirmedClosedContracts > leg.quantity) return { legId: leg.id, type: leg.type, side: leg.side, openedContracts: leg.quantity, confirmedClosedContracts, state: "invalid", reason: "決済約定証拠が建玉数量を超えています。" };
     const remainingContracts = leg.quantity - confirmedClosedContracts;
     return { legId: leg.id, type: leg.type, side: leg.side, openedContracts: leg.quantity, confirmedClosedContracts, remainingContracts, state: remainingContracts === 0 ? "closed" : confirmedClosedContracts > 0 ? "partial" : "open" };
   });
-  return { legs, invalidReason: invalidReason ?? legs.find((item) => item.state === "invalid")?.reason };
+  return { legs: progress, invalidReason: invalidReason ?? progress.find((item) => item.state === "invalid")?.reason };
 }
 
+export function getOperationalRemainingOptionLegs(simulation: TradeSimulation): Array<{ leg: OptionLeg; progress: OptionLegCloseProgress }> {
+  const closeProgress = getOptionLegOperationalCloseProgress(simulation);
+  if (closeProgress.invalidReason) return [];
+  return simulation.optionLegs.flatMap((leg) => {
+    const progress = closeProgress.legs.find((item) => item.legId === leg.id);
+    return progress && (progress.remainingContracts ?? 0) > 0 ? [{ leg, progress }] : [];
+  });
+}
+
+export function getOptionLegCloseProgress(simulation: TradeSimulation): OptionCloseProgress {
+  const legs = simulation.optionLegs;
+  const closedByLeg = new Map<string, number>();
+  let invalidReason: string | undefined;
+  const ids = getOptionCloseExecutions(simulation).filter(item => item.confirmed).map(item => item.id);
+  if (new Set(ids).size !== ids.length) invalidReason = "確認済み決済実績が重複しています。";
+
+  for (const execution of getOptionCloseExecutions(simulation).filter((item) => item.confirmed)) {
+    if (execution.confirmationStatus === "invalid") {
+      invalidReason ??= "無効な確認済み決済実績があります。";
+      continue;
+    }
+    const leg = legs.find((item) => item.id === execution.legId);
+    if (!leg || !Number.isFinite(execution.contracts) || execution.contracts <= 0) {
+      invalidReason ??= "確認済み決済実績の対象脚または数量が不正です。";
+      continue;
+    }
+    closedByLeg.set(leg.id, (closedByLeg.get(leg.id) ?? 0) + execution.contracts);
+  }
+
+  const progress = legs.map<OptionLegCloseProgress>((leg) => {
+    if (!Number.isFinite(leg.quantity) || leg.quantity <= 0) {
+      return {
+        legId: leg.id,
+        type: leg.type,
+        side: leg.side,
+        state: "invalid",
+        reason: "対象脚または建玉数量が不正です。",
+      };
+    }
+    const confirmedClosedContracts = closedByLeg.get(leg.id) ?? 0;
+    if (confirmedClosedContracts > leg.quantity) {
+      return {
+        legId: leg.id,
+        type: leg.type,
+        side: leg.side,
+        openedContracts: leg.quantity,
+        confirmedClosedContracts,
+        state: "invalid",
+        reason: "確認済み決済実績が建玉数量を超えています。",
+      };
+    }
+    const remainingContracts = leg.quantity - confirmedClosedContracts;
+    return {
+      legId: leg.id,
+      type: leg.type,
+      side: leg.side,
+      openedContracts: leg.quantity,
+      confirmedClosedContracts,
+      remainingContracts,
+      state: remainingContracts === 0 ? "closed" : confirmedClosedContracts > 0 ? "partial" : "open",
+    };
+  });
+
+  const legInvalid = progress.find((item) => item.state === "invalid");
+  return { legs: progress, invalidReason: invalidReason ?? legInvalid?.reason };
+}
+
+/** Returns only legs that still have a confirmed remaining quantity. */
 export function getRemainingOptionLegs(simulation: TradeSimulation): Array<{ leg: OptionLeg; progress: OptionLegCloseProgress }> {
   const closeProgress = getOptionLegCloseProgress(simulation);
   if (closeProgress.invalidReason) return [];
   return simulation.optionLegs.flatMap((leg) => {
     const progress = closeProgress.legs.find((item) => item.legId === leg.id);
-    return progress && (progress.state === "open" || progress.state === "partial") && (progress.remainingContracts ?? 0) > 0 ? [{ leg, progress }] : [];
+    return progress && (progress.state === "open" || progress.state === "partial") && (progress.remainingContracts ?? 0) > 0
+      ? [{ leg, progress }]
+      : [];
   });
 }
 
-/** Determines terminal status only from valid confirmed quantities per option leg. */
+/**
+ * Determines whether every option leg has a valid, confirmed close for its
+ * full opening quantity.  This is deliberately quantity based: a confirmed
+ * execution for just one leg, or just part of a leg, must never close the
+ * parent simulation.
+ */
 export function getOptionCloseCompletion(simulation: TradeSimulation): OptionCloseCompletion {
   const progress = getOptionLegCloseProgress(simulation);
-  if (progress.legs.length === 0 || progress.invalidReason) return { state: "invalid", remainingContracts: 0, reason: progress.invalidReason ?? "対象脚または建玉数量が不正です。" };
-  const confirmed = getOptionCloseExecutions(simulation).filter((execution) => execution.confirmed);
+  if (progress.legs.length === 0 || progress.invalidReason) {
+    return { state: "invalid", remainingContracts: 0, reason: progress.invalidReason ?? "対象脚または建玉数量が不正です。" };
+  }
   const remainingContracts = progress.legs.reduce((total, leg) => total + (leg.remainingContracts ?? 0), 0);
   const openedContracts = progress.legs.reduce((total, leg) => total + (leg.openedContracts ?? 0), 0);
-  if (remainingContracts === openedContracts) return { state: "none", remainingContracts };
+  if (remainingContracts === openedContracts) {
+    return { state: "none", remainingContracts };
+  }
   if (remainingContracts > 0) return { state: "partial", remainingContracts };
-  const terminalStatus = confirmed.length > 0 && confirmed.every((execution) => execution.closeKind === "expired") ? "expired" : "closed";
+
+  const confirmed = getOptionCloseExecutions(simulation).filter((execution) => execution.confirmed);
+  const terminalStatus = confirmed.length > 0 && confirmed.every((execution) => execution.closeKind === "expired")
+    ? "expired"
+    : "closed";
   return { state: "complete", terminalStatus, remainingContracts: 0 };
+}
+
+/**
+ * Derives leg-level history only while a synthetic parent remains active.
+ * Invalid, unknown, duplicated, unconfirmed or over-close executions are
+ * intentionally excluded and remain on the confirmation path instead.
+ */
+export function getClosedSyntheticLegHistoryItems(simulations: TradeSimulation[]): ClosedSyntheticLegHistoryItem[] {
+  return simulations.flatMap((simulation) => {
+    if (!["synthetic_forward", "bear_put_spread"].includes(simulation.strategyType) || !["open", "entry_confirmation"].includes(simulation.status)) return [];
+    const completion = getOptionCloseCompletion(simulation);
+    const progress = getOptionLegCloseProgress(simulation);
+    if (completion.state !== "partial" || progress.invalidReason) return [];
+    const confirmed = getOptionCloseExecutions(simulation).filter((execution) => execution.confirmed && execution.confirmationStatus !== "invalid");
+    return simulation.optionLegs.flatMap((leg) => {
+      const legProgress = progress.legs.find((item) => item.legId === leg.id);
+      if (!legProgress || (legProgress.confirmedClosedContracts ?? 0) <= 0 || legProgress.state === "invalid") return [];
+      const executions = confirmed.filter((execution) => execution.legId === leg.id);
+      const executionIds = executions.map((execution) => execution.id);
+      if (executions.length === 0 || new Set(executionIds).size !== executionIds.length) return [];
+      const closeResults = executions
+        .map((execution) => calculateOptionCloseExecutionResult(simulation, execution))
+        .filter((result): result is OptionCloseExecutionResult => Boolean(result));
+      // A confirmed close fact is independent from P/L and reference-currency
+      // completeness.  In particular, an N/USD execution must not disappear
+      // merely because its optional JPY reference is unavailable.
+      const closeDate = executions.map((execution) => execution.closeDate).filter(Boolean).sort().at(-1);
+      if (!closeDate) return [];
+      const stableIds = [...executionIds].sort();
+      return [{
+        kind: "closed_leg" as const,
+        id: `${simulation.id}:closed-leg:${leg.id}:${stableIds.join(",")}`,
+        simulationId: simulation.id,
+        simulation,
+        legId: leg.id,
+        leg,
+        executionIds: stableIds,
+        executions,
+        closeResults,
+        closedContracts: legProgress.confirmedClosedContracts ?? 0,
+        remainingContracts: legProgress.remainingContracts ?? 0,
+        closeDate,
+      }];
+    });
+  });
 }
 
 export function normalizeOptionCloseCompletionStatus(simulation: TradeSimulation): TradeSimulation {
   if (simulation.status !== "open") return simulation;
   const completion = getOptionCloseCompletion(simulation);
-  return completion.state === "complete" && completion.terminalStatus ? { ...simulation, status: completion.terminalStatus } : simulation;
+  return completion.state === "complete" && completion.terminalStatus
+    ? { ...simulation, status: completion.terminalStatus }
+    : simulation;
 }
 
-export function repairLegacySaxoHistoryRealizedPnl(simulation: TradeSimulation, candidates: SaxoHistoryDiscoveryItem[]): TradeSimulation {
+/** Repairs only the known historic USD-booked-amount-as-JPY-PnL corruption. */
+export function repairLegacySaxoHistoryRealizedPnl(
+  simulation: TradeSimulation,
+  candidates: SaxoHistoryDiscoveryItem[],
+): TradeSimulation {
   let changed = false;
   const executions = getOptionCloseExecutions(simulation).map((execution) => {
     if (execution.source !== "saxo_history" || !execution.confirmed || execution.brokerRealizedPnlJPY === undefined) return execution;
-    const related = candidates.find((candidate) => [candidate.id, ...(candidate.relatedCandidateKeys ?? [])].includes(execution.sourceCandidateId ?? "") || [candidate.id, ...(candidate.relatedCandidateKeys ?? [])].includes(execution.sourceTradeId ?? ""));
-    if (!related || related.accountCode !== "P" || related.accountCurrency !== "JPY" || related.profitLossAccountCurrency === undefined || related.bookedAmountUSD === undefined || execution.brokerRealizedPnlJPY !== related.bookedAmountUSD || execution.memo?.includes("PnLAccountCurrency修復済み")) return execution;
+    const related = candidates.find((candidate) => {
+      const keys = [candidate.id, ...(candidate.relatedCandidateKeys ?? [])];
+      return keys.includes(execution.sourceCandidateId ?? "") || keys.includes(execution.sourceTradeId ?? "");
+    });
+    if (!related || related.accountCode !== "P" || related.accountCurrency !== "JPY" ||
+      related.profitLossAccountCurrency === undefined || related.bookedAmountUSD === undefined ||
+      execution.brokerRealizedPnlJPY !== related.bookedAmountUSD || execution.memo?.includes("PnLAccountCurrency修復済み")) return execution;
     changed = true;
-    return { ...execution, brokerRealizedPnlJPY: related.profitLossAccountCurrency, memo: `${execution.memo ?? ""}${execution.memo ? " " : ""}Saxo履歴のPnLAccountCurrency修復済み。` };
+    return {
+      ...execution,
+      brokerRealizedPnlJPY: related.profitLossAccountCurrency,
+      memo: `${execution.memo ?? ""}${execution.memo ? " " : ""}Saxo履歴のPnLAccountCurrency修復済み。`,
+    };
   });
   return changed ? { ...simulation, optionCloseExecutions: executions } : simulation;
 }
@@ -309,42 +457,88 @@ function getHistoricalEntryDate(entry: ReturnType<typeof getCanonicalOptionEntry
   return normalizeHistoricalCalendarDate(entry.tradeDate) ?? normalizeHistoricalCalendarDate(entry.canonicalTradeDate) ?? normalizeHistoricalCalendarDate(entry.executionTimeUtc) ?? normalizeHistoricalCalendarDate(entry.sourceTradeDate);
 }
 
-/** Historical long-option performance uses only confirmed entry purchase evidence. */
-function resolveHistoricalLongOptionBasis(params: { simulation: TradeSimulation; leg: OptionLeg; execution: OptionCloseExecution; realizedPnlUSD: number; realizedPnlJPY: number }): HistoricalLongOptionBasis {
+/**
+ * Resolves a realised long-option return from confirmed entry evidence only.
+ * It intentionally does not use margin, current prices, FX conversion, or a
+ * parent synthetic ticket as a substitute for the purchased option cost.
+ */
+function resolveHistoricalLongOptionBasis(params: {
+  simulation: TradeSimulation;
+  leg: OptionLeg;
+  execution: OptionCloseExecution;
+  realizedPnlUSD: number;
+  realizedPnlJPY: number;
+}): HistoricalLongOptionBasis {
   const { simulation, leg, execution } = params;
-  const entries = getCanonicalOptionEntryExecutions(simulation).filter((entry) => entry.confirmed && entry.legId === leg.id && Number.isFinite(entry.contracts) && entry.contracts > 0);
+  const entries = getCanonicalOptionEntryExecutions(simulation)
+    .filter((entry) => entry.confirmed && entry.legId === leg.id && Number.isFinite(entry.contracts) && entry.contracts > 0);
   const totalContracts = entries.reduce((sum, entry) => sum + entry.contracts, 0);
-  if (entries.length === 0 || totalContracts + 0.0001 < execution.contracts) return { available: false, reason: "購入時支払額" };
-  // Exact strong broker identities are canonicalised before this point. A
-  // remaining surplus is unresolved evidence, not proof that records may be
-  // deleted or merged automatically.
-  if (Number.isFinite(leg.quantity) && totalContracts > leg.quantity + 0.0001) return { available: false, reason: "開始約定の数量超過（証跡未照合）" };
+  if (entries.length === 0 || totalContracts + 0.0001 < execution.contracts) {
+    return { available: false, reason: "購入時支払額" };
+  }
+  // A leg contains its entered contract quantity. Extra confirmed entry
+  // records cannot be silently treated as extra lots: that would double the
+  // purchase basis for a one-contract position. Canonicalisation has already
+  // removed records with the same strong broker identity; a surplus that
+  // remains here is not proof of a duplicate, so leave both records intact
+  // and ask for source-evidence review in 3-A.
+  if (Number.isFinite(leg.quantity) && totalContracts > leg.quantity + 0.0001) {
+    return { available: false, reason: "開始約定の数量超過（証跡未照合）" };
+  }
   const datedEntries = entries.map((entry) => ({ entry, date: getHistoricalEntryDate(entry) }));
   if (datedEntries.some(({ date }) => !date)) return { available: false, reason: "購入時約定日" };
   const closeDate = normalizeHistoricalCalendarDate(execution.closeDate);
   if (!closeDate) return { available: false, reason: "決済日" };
   const closeTime = new Date(`${closeDate}T00:00:00Z`).getTime();
   const entryTimes = datedEntries.map(({ date }) => new Date(`${date!}T00:00:00Z`).getTime());
-  if (!Number.isFinite(closeTime) || entryTimes.some((time) => !Number.isFinite(time))) return { available: false, reason: "建玉日または決済日" };
+  if (!Number.isFinite(closeTime) || entryTimes.some((time) => !Number.isFinite(time))) {
+    return { available: false, reason: "建玉日または決済日" };
+  }
   if (entryTimes.some((time) => closeTime < time)) return { available: false, reason: "建玉日と決済日の順序" };
   const dates = Array.from(new Set(datedEntries.map(({ date }) => date!)));
-  if (dates.length > 1 && Math.abs(totalContracts - execution.contracts) > 0.0001) return { available: false, reason: "決済ロットの対応" };
+  // Different purchase dates are a valid multi-lot history when this close
+  // consumes every confirmed lot.  A partial close without a broker lot link
+  // is genuinely ambiguous, so do not invent FIFO/LIFO allocation.
+  if (dates.length > 1 && Math.abs(totalContracts - execution.contracts) > 0.0001) {
+    return { available: false, reason: "決済ロットの対応" };
+  }
   const proportion = execution.contracts / totalContracts;
   const holdingDaysForEntry = (date: string) => Math.max(1, Math.ceil((closeTime - new Date(`${date}T00:00:00Z`).getTime()) / 86_400_000));
   if (simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT") {
-    if (entries.some((entry) => !Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD <= 0 || entry.commissionUSD === undefined || !Number.isFinite(entry.commissionUSD))) return { available: false, reason: "購入時支払額" };
-    const entryCosts = datedEntries.map(({ entry, date }) => ({ amount: entry.fillPriceUSD * CONTRACT_SIZE * entry.contracts + Math.abs(entry.commissionUSD ?? 0), holdingDays: holdingDaysForEntry(date!) }));
+    if (entries.some((entry) => !Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD <= 0 || entry.commissionUSD === undefined || !Number.isFinite(entry.commissionUSD))) {
+      return { available: false, reason: "購入時支払額" };
+    }
+    const entryCosts = datedEntries.map(({ entry, date }) => ({
+      amount: entry.fillPriceUSD * CONTRACT_SIZE * entry.contracts + Math.abs(entry.commissionUSD ?? 0),
+      holdingDays: holdingDaysForEntry(date!),
+    }));
     const denominatorUSD = entryCosts.reduce((sum, item) => sum + item.amount, 0) * proportion;
     if (!(denominatorUSD > 0)) return { available: false, reason: "購入時支払額" };
     const holdingDays = entryCosts.reduce((sum, item) => sum + item.amount * item.holdingDays, 0) * proportion / denominatorUSD;
-    return { available: true, denominatorUSD, denominatorJPY: 0, holdingDays, annualReturnPct: calculateAnnualReturnPercentByCurrency({ netProfit: params.realizedPnlUSD, denominator: denominatorUSD, dte: holdingDays }) };
+    return {
+      available: true,
+      denominatorUSD,
+      denominatorJPY: 0,
+      holdingDays,
+      annualReturnPct: calculateAnnualReturnPercentByCurrency({ netProfit: params.realizedPnlUSD, denominator: denominatorUSD, dte: holdingDays }),
+    };
   }
-  if (entries.some((entry) => entry.brokerBookedAmountJPY === undefined || !Number.isFinite(entry.brokerBookedAmountJPY))) return { available: false, reason: "購入時支払額" };
-  const entryCosts = datedEntries.map(({ entry, date }) => ({ amount: Math.abs(entry.brokerBookedAmountJPY ?? 0), holdingDays: holdingDaysForEntry(date!) }));
+  if (entries.some((entry) => entry.brokerBookedAmountJPY === undefined || !Number.isFinite(entry.brokerBookedAmountJPY))) {
+    return { available: false, reason: "購入時支払額" };
+  }
+  const entryCosts = datedEntries.map(({ entry, date }) => ({
+    amount: Math.abs(entry.brokerBookedAmountJPY ?? 0),
+    holdingDays: holdingDaysForEntry(date!),
+  }));
   const denominatorJPY = entryCosts.reduce((sum, item) => sum + item.amount, 0) * proportion;
   if (!(denominatorJPY > 0)) return { available: false, reason: "購入時支払額" };
   const holdingDays = entryCosts.reduce((sum, item) => sum + item.amount * item.holdingDays, 0) * proportion / denominatorJPY;
-  return { available: true, denominatorJPY, holdingDays, annualReturnPct: calculateAnnualReturnPercentByCurrency({ netProfit: params.realizedPnlJPY, denominator: denominatorJPY, dte: holdingDays }) };
+  return {
+    available: true,
+    denominatorJPY,
+    holdingDays,
+    annualReturnPct: calculateAnnualReturnPercentByCurrency({ netProfit: params.realizedPnlJPY, denominator: denominatorJPY, dte: holdingDays }),
+  };
 }
 
 export function createOptionCloseExecutionDraft(params: {
@@ -356,8 +550,8 @@ export function createOptionCloseExecutionDraft(params: {
 }): OptionCloseExecution {
   const closeKind = params.closeKind ?? "buyback";
   const closeDate = params.closeDate ?? formatLocalDate();
-  // This is a close-only standard. Never reuse an entry fee or make a USD
-  // standard into a P/JPY broker-statement cost.
+  // This is a close-only standard.  Never reuse an entry fee, and never make a
+  // USD standard into a P/JPY broker-statement cost.
   const confirmedNCloseCommissionUSD = closeKind === "buyback" &&
     params.simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
     ? calculateConfirmedSaxoCloseCommissionUSD(params.leg.quantity)
@@ -493,6 +687,20 @@ export function calculateOptionCloseExecutionResult(
 ): OptionCloseExecutionResult | null {
   const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
   if (!leg) return null;
+  if (simulation.strategyType === "bear_put_spread") {
+    const evidence = spreadCloseMoney(simulation, execution);
+    if (!evidence || getOptionLegCloseProgress(simulation).invalidReason) return null;
+    const days = evidence.entryDate && execution.closeDate ? calculateHoldingDays(evidence.entryDate, execution.closeDate) : undefined;
+    const denominatorUSD = leg.side === "buy" ? evidence.entryDebitUSD : moneyProduct(leg.strikeUSD, leg.contractSize!, execution.contracts);
+    // Reference FX is not a prerequisite for a confirmed USD result.
+    const fx = execution.brokerExchangeRateJPY ?? execution.fxRateJPY;
+    const referenceFx = fx !== undefined && Number.isFinite(fx) && fx > 0 ? fx : Number.NaN;
+    return { execution, leg, ...evidence, openCommissionJPY: Number.NaN, closeCommissionJPY: Number.NaN,
+      realizedPnlJPY: evidence.realizedPnlUSD * referenceFx, currency: "USD", basis: "estimated",
+      holdingDays: days, denominatorUSD, denominatorJPY: denominatorUSD * referenceFx,
+      annualReturnPct: days && denominatorUSD > 0 ? evidence.realizedPnlUSD / denominatorUSD * 365 / days * 100 : undefined,
+      annualReturnMissingReason: !days ? "開始日・決済日またはlot対応 未確認" : denominatorUSD <= 0 ? "実績分母 未確認" : undefined };
+  }
   const contracts = Math.max(0, Math.min(execution.contracts, leg.quantity));
   if (contracts <= 0) return null;
   const shortLegs = simulation.optionLegs.filter((item) => item.side === "sell");
@@ -561,7 +769,9 @@ export function calculateOptionCloseExecutionResult(
     denominator: isN ? primary.amountUSD ?? 0 : primary.amountJPY,
     dte: defaultHoldingDays,
   });
-  const longHistoryBasis = leg.side === "buy" ? resolveHistoricalLongOptionBasis({ simulation, leg, execution, realizedPnlUSD, realizedPnlJPY }) : undefined;
+  const longHistoryBasis = leg.side === "buy"
+    ? resolveHistoricalLongOptionBasis({ simulation, leg, execution, realizedPnlUSD, realizedPnlJPY })
+    : undefined;
   const holdingDays = longHistoryBasis?.available ? longHistoryBasis.holdingDays : longHistoryBasis ? undefined : defaultHoldingDays;
   const annualReturnPct = longHistoryBasis?.available ? longHistoryBasis.annualReturnPct : longHistoryBasis ? undefined : defaultAnnualReturnPct;
   const annualReturnMissingReason = longHistoryBasis && !longHistoryBasis.available ? longHistoryBasis.reason : undefined;
@@ -590,29 +800,6 @@ export function calculateOptionCloseExecutionResults(simulation: TradeSimulation
   return getOptionCloseExecutions(simulation)
     .map((execution) => calculateOptionCloseExecutionResult(simulation, execution))
     .filter((result): result is OptionCloseExecutionResult => Boolean(result));
-}
-
-/** Never persists a cloned strategy; derives only valid confirmed partial legs. */
-export function getClosedSyntheticLegHistoryItems(simulations: TradeSimulation[]): ClosedSyntheticLegHistoryItem[] {
-  return simulations.flatMap((simulation) => {
-    if (simulation.strategyType !== "synthetic_forward" || !["open", "entry_confirmation"].includes(simulation.status)) return [];
-    const completion = getOptionCloseCompletion(simulation);
-    const progress = getOptionLegCloseProgress(simulation);
-    if (completion.state !== "partial" || progress.invalidReason) return [];
-    const confirmed = getOptionCloseExecutions(simulation).filter((execution) => execution.confirmed && execution.confirmationStatus !== "invalid");
-    return simulation.optionLegs.flatMap((leg) => {
-      const legProgress = progress.legs.find((item) => item.legId === leg.id);
-      if (!legProgress || (legProgress.confirmedClosedContracts ?? 0) <= 0 || legProgress.state === "invalid") return [];
-      const executions = confirmed.filter((execution) => execution.legId === leg.id);
-      const executionIds = executions.map((execution) => execution.id);
-      if (!executions.length || new Set(executionIds).size !== executionIds.length) return [];
-      const closeResults = executions.map((execution) => calculateOptionCloseExecutionResult(simulation, execution)).filter((result): result is OptionCloseExecutionResult => Boolean(result));
-      const closeDate = executions.map((execution) => execution.closeDate).filter(Boolean).sort().at(-1);
-      if (!closeDate) return [];
-      const stableIds = [...executionIds].sort();
-      return [{ kind: "closed_leg" as const, id: `${simulation.id}:closed-leg:${leg.id}:${stableIds.join(",")}`, simulationId: simulation.id, simulation, legId: leg.id, leg, executionIds: stableIds, executions, closeResults, closedContracts: legProgress.confirmedClosedContracts ?? 0, remainingContracts: legProgress.remainingContracts ?? 0, closeDate }];
-    });
-  });
 }
 
 export function calculateTotalOptionCloseRealizedPnlJPY(simulation: TradeSimulation): number {

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { commitStrategyImport as commitStrategyLedgerImport, emptyStrategyLedger, materializeStrategyEntries, mergeStrategyViewUpdates, projectStrategyWorkspace, strategyContractState, type PreparedStrategyImport, type StrategyLedger } from "@/domain/strategyLedger";
 import type {
   AccountCashAdjustment,
   AccountState,
@@ -22,7 +23,11 @@ import {
 } from "@/domain/optionCloseExecutions";
 import { normalizeStockSettlement } from "@/domain/stockSettlementState";
 import { addLocalDays, formatLocalDate } from "@/lib/date";
-import { DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, migrateNOptionEntryStandardCommissions, reconcileLegacyConfirmedOpeningDuplicates } from "@/domain/optionEntryExecutions";
+import {
+  DEFAULT_N_OPTION_STANDARD_COMMISSION_USD,
+  migrateNOptionEntryStandardCommissions,
+  reconcileLegacyConfirmedOpeningDuplicates,
+} from "@/domain/optionEntryExecutions";
 import { finalizeSyntheticForwardParent } from "@/domain/compositeOptionPosition";
 import {
   isNShortPutWheelSimulation,
@@ -71,6 +76,7 @@ export type AppSettings = {
 export type AccountInputs = Record<SaxoAccountCode, AccountState>;
 
 type WorkspaceImportData = {
+  strategyLedger?: StrategyLedger;
   simulations: TradeSimulation[];
   accountStates?: AccountState[];
   wheelCycles?: WheelCycle[];
@@ -79,6 +85,9 @@ type WorkspaceImportData = {
 };
 
 type OptionsStore = {
+  strategyLedgersByWorkspace: Record<WorkspaceMode, StrategyLedger>;
+  commitSpreadImport: (prepared: PreparedStrategyImport, requestRevision: number) => Promise<{ strategyId?: string; reasons?: string[] }>;
+  ungroupSpread: (id: string) => { reason?: string };
   activeWorkspace: WorkspaceMode;
   simulationsByWorkspace: Record<WorkspaceMode, TradeSimulation[]>;
   wheelCyclesByWorkspace: Record<WorkspaceMode, WheelCycle[]>;
@@ -126,7 +135,20 @@ function loadJson<T>(key: string, fallback: T): T {
 
 function saveJson<T>(key: string, value: T): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(key, JSON.stringify(value));
+  window.localStorage.setItem(key, JSON.stringify(key === SIMULATIONS_KEY ? packStrategyEnvelope(value as Record<WorkspaceMode, TradeSimulation[]>, runtimeStrategyLedgers) : value));
+}
+
+let runtimeStrategyLedgers: Record<WorkspaceMode, StrategyLedger> = loadJson<{ strategyLedgers?: Record<WorkspaceMode, StrategyLedger> }>(SIMULATIONS_KEY, {}).strategyLedgers ?? { demo: emptyStrategyLedger(), live: emptyStrategyLedger() };
+export function packStrategyEnvelope(simulations: Record<WorkspaceMode, TradeSimulation[]>, ledgers: Record<WorkspaceMode, StrategyLedger>) {
+  const strip = (items: TradeSimulation[]) => items.map(simulation => simulation.strategyGroupId ? { ...simulation, optionEntryExecutions: [] } : simulation);
+  return { demo: strip(simulations.demo), live: strip(simulations.live), strategyLedgers: ledgers };
+}
+export function hydrateStrategyRecords(simulations: TradeSimulation[], ledger: StrategyLedger): TradeSimulation[] {
+  return simulations.map(simulation => {
+    if (!simulation.strategyGroupId) return simulation;
+    const projected = materializeStrategyEntries(simulation.strategyGroupId, ledger, simulations);
+    return { ...simulation, optionEntryExecutions: projected.entries, optionLegs: projected.legs.map(leg => ({ ...simulation.optionLegs.find(saved => saved.id === leg.id), ...leg })) };
+  });
 }
 
 function getAccountCurrency(accountEnvironment: AccountEnvironment): Currency {
@@ -907,8 +929,8 @@ function loadInitialSimulations(): Record<WorkspaceMode, TradeSimulation[]> {
   const didMigrateLive = migratedLive.some((simulation, index) => simulation !== loaded.live[index]);
   if (didMigrateLive) saveJson(SIMULATIONS_KEY, { ...loaded, live: migratedLive });
   return {
-    demo: loaded.demo.map((simulation) => normalizeSimulation(simulation, "demo")),
-    live: migratedLive.map((simulation) => normalizeSimulation(simulation, "live")),
+    demo: hydrateStrategyRecords(loaded.demo, runtimeStrategyLedgers.demo).map((simulation) => normalizeSimulation(simulation, "demo")),
+    live: hydrateStrategyRecords(migratedLive, runtimeStrategyLedgers.live).map((simulation) => normalizeSimulation(simulation, "live")),
   };
 }
 
@@ -992,7 +1014,65 @@ const initialSelectedIds: Record<WorkspaceMode, string> = {
   live: initialSimulationsByWorkspace.live[0]?.id ?? "",
 };
 
-export const useOptionsStore = create<OptionsStore>((set) => ({
+export const useOptionsStore = create<OptionsStore>((set, get) => ({
+  strategyLedgersByWorkspace: runtimeStrategyLedgers,
+  ungroupSpread: (id) => {
+    const state = get(), workspace = state.activeWorkspace;
+    const parent = state.simulationsByWorkspace[workspace].find(item => item.id === id);
+    if (!parent?.strategyGroupId) return { reason: "対象の組み合わせがありません" };
+    if (parent.optionCloseExecutions?.length) return { reason: "決済記録のある組み合わせは解除できません。実績を保持しています。" };
+    const ledger = state.strategyLedgersByWorkspace[workspace];
+    const sources = state.simulationsByWorkspace[workspace].filter(item => item.id !== id);
+    const fills = ledger.fills.map(fill => {
+      const allocation = ledger.allocations.find(item => item.strategyId === id && item.eventKey === fill.key);
+      if (!allocation || fill.existing || !fill.execution) return fill;
+      const leg = parent.optionLegs.find(item => item.id === allocation.legId)!;
+      const sourceId = `${id}:source:${leg.id}`;
+      sources.push({ ...parent, id: sourceId, strategyGroupId: undefined, strategyContractVerification: undefined,
+        strategyType: leg.side === "buy" ? "long_put" : "short_put", name: `${parent.ticker} ${leg.side === "buy" ? "P買い" : "P売り"}`,
+        optionLegs: [{ ...leg, quantity: fill.execution.contracts }], optionEntryExecutions: [{ ...fill.execution, legId: leg.id }], optionCloseExecutions: [] });
+      return { ...fill, existing: { simulationId: sourceId, executionId: fill.execution.id, legId: leg.id }, execution: undefined };
+    });
+    const updated = { ...ledger, revision: ledger.revision + 1, fills, allocations: ledger.allocations.filter(item => item.strategyId !== id), commits: ledger.commits.filter(item => item !== id) };
+    const ledgers = { ...state.strategyLedgersByWorkspace, [workspace]: updated };
+    const simulationsByWorkspace = { ...state.simulationsByWorkspace, [workspace]: sources };
+    try { window.localStorage.setItem(SIMULATIONS_KEY, JSON.stringify(packStrategyEnvelope(simulationsByWorkspace, ledgers))); }
+    catch { return { reason: "保存に失敗しました。組み合わせは変更していません。" }; }
+    runtimeStrategyLedgers = ledgers;
+    set({ strategyLedgersByWorkspace: ledgers, simulationsByWorkspace, simulations: projectStrategyWorkspace(sources, updated), selectedSimulationId: sources[0]?.id ?? "", selectedSimulationIds: { ...state.selectedSimulationIds, [workspace]: sources[0]?.id ?? "" } });
+    return {};
+  },
+  commitSpreadImport: async (prepared, requestRevision) => {
+    const transaction = () => {
+      const state = get(), workspace = state.activeWorkspace;
+      const ledger = state.strategyLedgersByWorkspace[workspace];
+      const persistedEnvelope = loadJson<Partial<Record<WorkspaceMode, TradeSimulation[]>> & { strategyLedgers?: Record<WorkspaceMode, StrategyLedger> }>(SIMULATIONS_KEY, {});
+      const persisted = persistedEnvelope.strategyLedgers?.[workspace];
+      if (persisted && persisted.revision !== ledger.revision) return { reasons: ["別画面で保存が更新されました。再読込して組み合わせを再確認してください"] };
+      if (persistedEnvelope[workspace] && JSON.stringify(persistedEnvelope[workspace]) !== JSON.stringify(packStrategyEnvelope(state.simulationsByWorkspace, state.strategyLedgersByWorkspace)[workspace])) return { reasons: ["保存済み建玉が更新されています。再読込して組み合わせを再確認してください"] };
+      const committed = commitStrategyLedgerImport(prepared, ledger, state.simulationsByWorkspace[workspace], requestRevision);
+      if ("reasons" in committed) return committed;
+      if (!committed.changed) return { strategyId: committed.strategyId };
+      const projected = materializeStrategyEntries(committed.strategyId, committed.ledger, state.simulationsByWorkspace[workspace]);
+      const contract = prepared.candidate.fills[0].contract;
+      const parent: TradeSimulation = { ...createBlankSimulation(workspace, state.settings), id: committed.strategyId, strategyGroupId: committed.strategyId,
+        strategyContractVerification: { state: strategyContractState(prepared.candidate) },
+        name: `${contract.ticker} Bear Put Spread`, ticker: contract.ticker, strategyType: "bear_put_spread", status: "open", accountCode: "N", accountCurrency: "USD", accountEnvironment: "PROD_N_USD_SETTLEMENT",
+        entryDate: projected.entries[0].tradeDate, expiryDate: contract.expiry, optionLegs: projected.legs, optionEntryExecutions: projected.entries, optionCloseExecutions: [], stockPosition: null,
+        currentPriceUSD: Number.NaN, fxRateJPY: Number.NaN, brokerMarginJPY: Number.NaN };
+      const simulations = [parent, ...state.simulationsByWorkspace[workspace]];
+      const simulationsByWorkspace = { ...state.simulationsByWorkspace, [workspace]: simulations };
+      const ledgers = { ...state.strategyLedgersByWorkspace, [workspace]: committed.ledger };
+      // One atomic storage item owns parent, references and reservations. No
+      // wheel/cash action is dispatched by grouping existing economic evidence.
+      try { window.localStorage.setItem(SIMULATIONS_KEY, JSON.stringify(packStrategyEnvelope(simulationsByWorkspace, ledgers))); }
+      catch { return { reasons: ["保存できませんでした。親・数量割当は変更していません"] }; }
+      runtimeStrategyLedgers = ledgers;
+      set({ strategyLedgersByWorkspace: ledgers, simulationsByWorkspace, simulations: projectStrategyWorkspace(simulations, committed.ledger), selectedSimulationId: parent.id, selectedSimulationIds: { ...state.selectedSimulationIds, [workspace]: parent.id } });
+      return { strategyId: parent.id };
+    };
+    return typeof navigator !== "undefined" && navigator.locks ? navigator.locks.request("us-options-strategy-import", transaction) : transaction();
+  },
   activeWorkspace: initialWorkspace,
   simulationsByWorkspace: initialSimulationsByWorkspace,
   wheelCyclesByWorkspace: initialWheelCyclesByWorkspace,
@@ -1000,7 +1080,7 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
   stockTransfersByWorkspace: initialStockTransfersByWorkspace,
   accountInputsByWorkspace: initialAccountInputsByWorkspace,
   selectedSimulationIds: initialSelectedIds,
-  simulations: initialSimulationsByWorkspace[initialWorkspace],
+  simulations: projectStrategyWorkspace(initialSimulationsByWorkspace[initialWorkspace], runtimeStrategyLedgers[initialWorkspace]),
   wheelCycles: initialWheelCyclesByWorkspace[initialWorkspace],
   wheelEvents: initialWheelEventsByWorkspace[initialWorkspace],
   stockTransfers: initialStockTransfersByWorkspace[initialWorkspace],
@@ -1012,7 +1092,7 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       saveJson("us-options-active-workspace", workspace);
       return {
         activeWorkspace: workspace,
-        simulations: state.simulationsByWorkspace[workspace],
+        simulations: projectStrategyWorkspace(state.simulationsByWorkspace[workspace], state.strategyLedgersByWorkspace[workspace]),
         wheelCycles: state.wheelCyclesByWorkspace[workspace],
         wheelEvents: state.wheelEventsByWorkspace[workspace],
         stockTransfers: state.stockTransfersByWorkspace[workspace],
@@ -1076,8 +1156,9 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
     }),
   upsertSimulation: (simulation) =>
     set((state) => {
-      const normalized = normalizeSimulation(simulation, state.activeWorkspace);
       const current = state.simulationsByWorkspace[state.activeWorkspace];
+      const sourceSafe = mergeStrategyViewUpdates(current, [simulation], state.strategyLedgersByWorkspace[state.activeWorkspace]).find(item => item.id === simulation.id)!;
+      const normalized = normalizeSimulation(hydrateStrategyRecords([sourceSafe, ...current.filter(item => item.id !== sourceSafe.id)], state.strategyLedgersByWorkspace[state.activeWorkspace])[0], state.activeWorkspace);
       const exists = current.some((item) => item.id === normalized.id);
       const simulations = exists ? current.map((item) => (item.id === normalized.id ? normalized : item)) : [normalized, ...current];
       const simulationsByWorkspace = { ...state.simulationsByWorkspace, [state.activeWorkspace]: simulations };
@@ -1150,16 +1231,17 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       saveJson(SIMULATIONS_KEY, simulationsByWorkspace);
       saveJson(WHEEL_KEY, wheelCyclesByWorkspace);
       saveJson(WHEEL_EVENTS_KEY, wheelEventsByWorkspace);
-      return { simulationsByWorkspace, selectedSimulationIds, wheelCyclesByWorkspace, wheelEventsByWorkspace, simulations, wheelCycles, wheelEvents, selectedSimulationId: normalized.id };
+      return { simulationsByWorkspace, selectedSimulationIds, wheelCyclesByWorkspace, wheelEventsByWorkspace, simulations: projectStrategyWorkspace(simulations, state.strategyLedgersByWorkspace[state.activeWorkspace]), wheelCycles, wheelEvents, selectedSimulationId: normalized.id };
     }),
   applySimulationBatch: (simulations) =>
     set((state) => {
-      const normalized = simulations.map((simulation) => normalizeSimulation(simulation, state.activeWorkspace));
+      const records = mergeStrategyViewUpdates(state.simulationsByWorkspace[state.activeWorkspace], simulations, state.strategyLedgersByWorkspace[state.activeWorkspace]);
+      const normalized = hydrateStrategyRecords(records, state.strategyLedgersByWorkspace[state.activeWorkspace]).map((simulation) => normalizeSimulation(simulation, state.activeWorkspace));
       const simulationsByWorkspace = { ...state.simulationsByWorkspace, [state.activeWorkspace]: normalized };
       const reconciled = reconcileWheelDerivedState({
         cycles: state.wheelCyclesByWorkspace[state.activeWorkspace],
         events: state.wheelEventsByWorkspace[state.activeWorkspace],
-        simulations: normalized,
+        simulations: projectStrategyWorkspace(normalized, state.strategyLedgersByWorkspace[state.activeWorkspace]),
         workspace: state.activeWorkspace,
       });
       const wheelCyclesByWorkspace = { ...state.wheelCyclesByWorkspace, [state.activeWorkspace]: reconciled.cycles };
@@ -1171,7 +1253,7 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       }
       return {
         simulationsByWorkspace,
-        simulations: normalized,
+        simulations: projectStrategyWorkspace(normalized, state.strategyLedgersByWorkspace[state.activeWorkspace]),
         wheelCyclesByWorkspace,
         wheelEventsByWorkspace,
         wheelCycles: reconciled.cycles,
@@ -1180,7 +1262,10 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
     }),
   replaceWorkspaceData: (incoming) =>
     set((state) => {
-      const simulations = incoming.simulations.map((simulation) =>
+      if (incoming.simulations.some(simulation => simulation.strategyGroupId) && !incoming.strategyLedger) throw new Error("戦略台帳を含まないバックアップです。現在の記録は変更していません。");
+      const importedLedger = incoming.strategyLedger ?? emptyStrategyLedger();
+      if (importedLedger.schema !== 1 || !Array.isArray(importedLedger.fills) || !Array.isArray(importedLedger.allocations) || !Array.isArray(importedLedger.commits)) throw new Error("戦略台帳の形式が不正です。");
+      const simulations = hydrateStrategyRecords(incoming.simulations, importedLedger).map((simulation) =>
         normalizeSimulation({
           ...simulation,
           id: simulation.id || `${state.activeWorkspace}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -1202,7 +1287,9 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       const wheelEventsByWorkspace = { ...state.wheelEventsByWorkspace, [state.activeWorkspace]: wheelEvents };
       const stockTransfersByWorkspace = { ...state.stockTransfersByWorkspace, [state.activeWorkspace]: stockTransfers };
       const selectedSimulationIds = { ...state.selectedSimulationIds, [state.activeWorkspace]: simulations[0]?.id ?? "" };
-      saveJson(SIMULATIONS_KEY, simulationsByWorkspace);
+      const strategyLedgersByWorkspace = { ...state.strategyLedgersByWorkspace, [state.activeWorkspace]: importedLedger };
+      window.localStorage.setItem(SIMULATIONS_KEY, JSON.stringify(packStrategyEnvelope(simulationsByWorkspace, strategyLedgersByWorkspace)));
+      runtimeStrategyLedgers = strategyLedgersByWorkspace;
       saveJson(ACCOUNT_KEY, accountInputsByWorkspace);
       saveJson(WHEEL_KEY, wheelCyclesByWorkspace);
       saveJson(WHEEL_EVENTS_KEY, wheelEventsByWorkspace);
@@ -1214,7 +1301,8 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
         wheelEventsByWorkspace,
         stockTransfersByWorkspace,
         selectedSimulationIds,
-        simulations,
+        strategyLedgersByWorkspace,
+        simulations: projectStrategyWorkspace(simulations, importedLedger),
         accountInputs,
         wheelCycles,
         wheelEvents,
@@ -1224,6 +1312,8 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
     }),
   deleteSimulation: (id) =>
     set((state) => {
+      const ledger = state.strategyLedgersByWorkspace[state.activeWorkspace];
+      if (state.simulationsByWorkspace[state.activeWorkspace].some(item => item.id === id && item.strategyGroupId) || ledger.fills.some(fill => fill.existing?.simulationId === id && ledger.allocations.some(allocation => allocation.eventKey === fill.key))) return state;
       const simulations = state.simulationsByWorkspace[state.activeWorkspace].filter((item) => item.id !== id);
       const simulationsByWorkspace = { ...state.simulationsByWorkspace, [state.activeWorkspace]: simulations };
       const selectedSimulationIds = { ...state.selectedSimulationIds, [state.activeWorkspace]: simulations[0]?.id ?? "" };
@@ -1492,3 +1582,5 @@ export const useOptionsStore = create<OptionsStore>((set) => ({
       return { settings: next };
     }),
 }));
+
+useOptionsStore.subscribe(state => { runtimeStrategyLedgers = state.strategyLedgersByWorkspace; });

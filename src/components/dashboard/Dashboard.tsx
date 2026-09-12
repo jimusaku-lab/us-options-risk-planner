@@ -19,7 +19,7 @@ import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
 import { formatCurrentPriceStrikeDifference, formatCurrentPriceStrikePercent, getCurrentPriceStrikeDisplay } from "@/domain/currentPriceStrikeDisplay";
 import { getBulkApplicableTargetIds, getBulkOptionPricePreviewCounts, type CurrentOptionPricePreviewRow } from "@/domain/bulkOptionPrice";
 import { getSaxoExitOrderReviews, type SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
-import { calculateBearPutSpreadEstimate, getBearPutSpreadLifecycle, validateBearPutSpread } from "@/domain/bearPutSpread";
+import { calculateBearPutSpreadEstimate, getBearPutSpreadLifecycle } from "@/domain/bearPutSpread";
 
 const statusClassName = {
   planned: "bg-sky-100 text-sky-800",
@@ -42,9 +42,14 @@ function formatRealizedUSD(value: number): string {
 }
 
 const historyRiskWarningIds = new Set<RiskWarning["id"]>([
-  "option-entry-unconfirmed", "option-close-execution-unconfirmed", "closed-without-option-close-execution",
-  "expired-without-option-expiry-record", "assigned-put-without-stock-acquisition", "assigned-call-without-stock-settlement",
-  "assigned-uncovered-call", "invalid-dte",
+  "option-entry-unconfirmed",
+  "option-close-execution-unconfirmed",
+  "closed-without-option-close-execution",
+  "expired-without-option-expiry-record",
+  "assigned-put-without-stock-acquisition",
+  "assigned-call-without-stock-settlement",
+  "assigned-uncovered-call",
+  "invalid-dte",
 ]);
 
 /** Rows for confirmed legs of a still-open synthetic parent.  These are history
@@ -62,7 +67,9 @@ function ClosedLegHistoryRows({ items, onOpen }: { items: ClosedSyntheticLegHist
       const firstResult = item.closeResults[0];
       const denominatorValues = item.closeResults.map((result) => isN ? result.denominatorUSD : result.denominatorJPY);
       const denominatorComplete = denominatorValues.length === item.executions.length && denominatorValues.every((value) => value !== undefined && Number.isFinite(value) && value > 0);
-      const denominatorTotal = denominatorComplete ? denominatorValues.reduce<number>((sum, value) => sum + (value as number), 0) : undefined;
+      const denominatorTotal = denominatorComplete
+        ? denominatorValues.reduce<number>((sum, value) => sum + (value as number), 0)
+        : undefined;
       const periodReturnPct = primaryComplete && denominatorTotal !== undefined ? totalPrimary / denominatorTotal * 100 : undefined;
       const holdingDays = item.closeResults.map((result) => result.holdingDays);
       const annualExposure = denominatorComplete && holdingDays.every((days) => days !== undefined && days > 0)
@@ -185,6 +192,7 @@ export function Dashboard({
   onWarningAction?: (simulationId: string, warning: RiskWarning) => void;
   onWorkflowTaskAction?: (simulationId: string, task: WorkflowTask) => void;
   onHistoryLegAction?: (simulationId: string, executionId: string) => void;
+  /** Opens the existing 3-A entry evidence for a historical annual-return issue. */
   onHistoryEntryAction?: (simulationId: string) => void;
   onJournalAction?: (simulationId: string) => void;
   onCurrentEstimateAction?: (simulationId: string, legId?: string, field?: string) => void;
@@ -327,7 +335,7 @@ export function Dashboard({
               <th className="py-2 pr-3">満期</th>
               <th className="py-2 pr-3 text-right">建玉時の受払</th>
               <th className="py-2 pr-3 text-right">実績分母 / 保有期間損益率</th>
-              <th className="py-2 pr-3 text-right">年率</th>
+              <th className="py-2 pr-3 text-right">損益・参考年率</th>
               <th className="py-2 pr-3 text-right">警告</th>
               <th className="py-2 pr-3">次にやること</th>
               <th className="py-2 pr-3 text-right">操作</th>
@@ -353,7 +361,9 @@ export function Dashboard({
               const realizedOptionDays = historyPerformance?.realizedOptionDays;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
               const currentEstimate = !isHistoryRow ? calculateCurrentPositionEstimate(simulationWithAccount, new Date(), currentEstimateFxQuote) : { kind: "not_applicable" } as const;
-              const bearPutEstimate = !isHistoryRow && simulation.strategyType === "bear_put_spread" ? calculateBearPutSpreadEstimate(simulationWithAccount) : undefined;
+              const bearPutEstimate = !isHistoryRow && simulation.strategyType === "bear_put_spread"
+                ? calculateBearPutSpreadEstimate(simulationWithAccount)
+                : undefined;
               const bearPutLifecycle = simulation.strategyType === "bear_put_spread" ? getBearPutSpreadLifecycle(simulationWithAccount) : undefined;
               const currentEstimateIsRemainingLeg = currentEstimate.kind === "available" && currentEstimate.evaluationScope === "remaining_leg";
               const longOptionDisplay = !isHistoryRow ? premiumDisplay.longOptionOrderDisplay : undefined;
@@ -393,7 +403,9 @@ export function Dashboard({
                     })
                     .join(" / ")
                 : null;
-              const countableWarnings = warnings.filter((warning) => warning.severity !== "info" && (!isHistoryRow || historyRiskWarningIds.has(warning.id)));
+              const countableWarnings = warnings.filter((warning) =>
+                warning.severity !== "info" && (!isHistoryRow || historyRiskWarningIds.has(warning.id)),
+              );
               const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
               const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
               const currentPriceStrikeDisplay = getCurrentPriceStrikeDisplay(simulation);
@@ -470,7 +482,6 @@ export function Dashboard({
                   key={simulation.id}
                     tabIndex={!isHistoryRow ? 0 : undefined}
                     aria-selected={!isHistoryRow ? isFocusedPositionRow : undefined}
-                    aria-pressed={!isHistoryRow ? isFocusedPositionRow : undefined}
                   aria-label={!isHistoryRow ? `${tickerLabel}の詳細を${isFocusedPositionRow ? "閉じる" : "表示する"}` : undefined}
                   className={`border-b border-slate-100 outline-none transition-colors ${
                     isFocusedPositionRow
@@ -483,6 +494,8 @@ export function Dashboard({
                   }`}
                   onClick={togglePositionFocus}
                   onKeyDown={(event) => {
+                    // Nested controls retain their own keyboard activation without toggling the row.
+                    if (event.target !== event.currentTarget) return;
                     if (!isHistoryRow && (event.key === "Enter" || event.key === " ")) {
                       event.preventDefault();
                       togglePositionFocus();
@@ -538,7 +551,8 @@ export function Dashboard({
                     </span>
                   </td>
                   <td className="py-3 pr-3 text-slate-700">
-                    <div>{getStrategyLabel(simulation.strategyType)}</div>
+                    <div>{simulation.strategyType === "bear_put_spread" && simulation.strategyContractVerification?.state !== "verified" ? "2脚の組み合わせ" : getStrategyLabel(simulation.strategyType)}</div>
+                    {simulation.strategyType === "bear_put_spread" && simulation.strategyContractVerification?.state !== "verified" ? <p className="text-[11px] text-slate-500">ベア・プットとして管理／契約仕様未照合</p> : null}
                     {bearPutLifecycle ? <div className="mt-1 text-xs font-semibold text-indigo-700">{bearPutLifecycle.label}</div> : null}
                     {isCompositeOptionStrategy(simulation) ? <div className="mt-1 text-xs font-semibold text-indigo-700">C買い {callLeg?.quantity ?? 0} / P売り {putLeg?.quantity ?? 0}</div> : null}
                     {simulation.strategyType === "synthetic_forward" ? (
@@ -546,7 +560,9 @@ export function Dashboard({
                         <div>ネット約定 {simulation.syntheticForwardTicket?.netFillPriceUSD === undefined ? "未入力" : `${formatUSD(simulation.syntheticForwardTicket.netFillPriceUSD)} / 株`}</div>
                         <div>実績総手数料 {simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.actualTotalCommissionUSD)} / 建玉時支払額 {simulation.syntheticForwardTicket?.entryCostUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.entryCostUSD)}</div>
                         <div>{getSyntheticPutAssignmentPolicy(simulation) === "accept" ? "方針: 株を取得できる" : getSyntheticPutAssignmentPolicy(simulation) === "avoid" ? "方針: 株を取得しない・反対売買で閉じる" : "方針未確認"}</div>
-                        {simulation.status === "planned" ? <div>注文時証拠金 {simulation.syntheticForwardTicket?.requiredMarginUSD === undefined ? "未確認" : formatUSD(simulation.syntheticForwardTicket.requiredMarginUSD)}</div> : <details className="mt-1 text-[11px] text-slate-600"><summary className="cursor-pointer">建玉開始時の証拠金記録（任意）</summary><div className="mt-1">{simulation.syntheticForwardTicket?.requiredMarginUSD === undefined ? "未記録" : formatUSD(simulation.syntheticForwardTicket.requiredMarginUSD)}。現在の残存P売りの必要証拠金には使いません。</div></details>}
+                        {simulation.status === "planned" ? <div>注文時証拠金 {simulation.syntheticForwardTicket?.requiredMarginUSD === undefined ? "未確認" : formatUSD(simulation.syntheticForwardTicket.requiredMarginUSD)}</div> : (
+                          <details className="mt-1 text-[11px] text-slate-600"><summary className="cursor-pointer">建玉開始時の証拠金記録（任意）</summary><div className="mt-1">{simulation.syntheticForwardTicket?.requiredMarginUSD === undefined ? "未記録" : formatUSD(simulation.syntheticForwardTicket.requiredMarginUSD)}。現在の残存P売りの必要証拠金には使いません。</div></details>
+                        )}
                       </div>
                     ) : null}
                   </td>
@@ -580,21 +596,30 @@ export function Dashboard({
                   </td>
                   <td className="py-3 pr-3 text-slate-700">{simulation.expiryDate}</td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {bearPutEstimate && !isHistoryRow ? (bearPutEstimate.kind === "available" ? <><span className="block text-[11px] font-bold text-slate-500">建玉時ネット支払額</span><span className="block text-slate-950">{formatUSD(bearPutEstimate.entryAllInDebitUSD)}</span></> : <><span className="block text-[11px] font-bold text-slate-500">建玉時ネット支払額</span><span className="block text-slate-500">未確認</span></>) : !premiumDisplay.hasPremiumInput && !isHistoryRow ? (
-                      <span className="font-bold text-slate-500">未入力</span>
+                    {bearPutEstimate && !isHistoryRow ? (
+                      bearPutEstimate.kind === "available" ? <>
+                        <span className="block text-[11px] font-bold text-slate-500">建玉時ネット支払額</span>
+                        <span className="block text-slate-950">{formatUSD(bearPutEstimate.entryAllInDebitUSD)}</span>
+                      </> : <><span className="block text-[11px] font-bold text-slate-500">建玉時ネット支払額</span><span className="block text-slate-500">未確認</span></>
                     ) : longOptionDisplay && !isHistoryRow ? (
                       <>
-                        <span className="block text-[11px] font-bold text-slate-500">支払プレミアム</span>
-                        <span className="block">{formatUSD(longOptionDisplay.paidPremiumUSD)}</span>
+                        <span className="block text-[11px] font-bold text-slate-500">{premiumDisplay.basis === "confirmed" ? "支払プレミアム" : "予定の支払プレミアム"}</span>
+                        <span className="block text-slate-950">{formatUSD(longOptionDisplay.paidPremiumUSD)}</span>
                         <span className="block text-xs text-slate-500">手数料込 {formatUSD(longOptionDisplay.totalCostUSD)}</span>
                       </>
+                    ) : !premiumDisplay.hasPremiumInput && !isHistoryRow ? (
+                      <span className="font-bold text-slate-500">未入力</span>
                     ) : simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? (
                       <>
                         <span className="block text-[11px] font-bold text-slate-500">{isHistoryRow ? (premiumDisplayUSD >= 0 ? "実現利益" : "実現損失") : premiumDisplay.label}</span>
                         <span className={`block ${isHistoryRow ? `text-base font-extrabold ${premiumDisplayUSD >= 0 ? "text-emerald-700" : "text-red-700"}` : ""}`}>{isHistoryRow ? formatRealizedUSD(premiumDisplayUSD) : formatUSD(premiumDisplayUSD)}</span>
                         {hasHistoryCloseResults && isNAccountRow ? (
                           <span className="block text-xs text-slate-500">
-                            建玉時 {formatUSD(historyCloseResults[0].leg.side === "buy" ? historyCloseResults[0].entryPremiumUSD + historyCloseResults[0].openCommissionUSD : historyCloseResults[0].entryPremiumUSD - historyCloseResults[0].openCommissionUSD)} / 決済支払 -{formatUSD(historyCloseResults[0].closeCostUSD + historyCloseResults[0].closeCommissionUSD)}
+                            建玉時 {formatUSD(
+                              historyCloseResults[0].leg.side === "buy"
+                                ? historyCloseResults[0].entryPremiumUSD + historyCloseResults[0].openCommissionUSD
+                                : historyCloseResults[0].entryPremiumUSD - historyCloseResults[0].openCommissionUSD,
+                            )} / 決済支払 -{formatUSD(historyCloseResults[0].closeCostUSD + historyCloseResults[0].closeCommissionUSD)}
                           </span>
                         ) : null}
                         {!isHistoryRow && premiumDisplay.netAfterFeesUSD !== undefined && Math.abs(premiumDisplay.netAfterFeesUSD - premiumDisplay.premiumUSD) > 0.005 ? (
@@ -615,9 +640,14 @@ export function Dashboard({
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {bearPutEstimate && !isHistoryRow ? (bearPutEstimate.kind === "available" ? <><span className="block text-[11px] font-bold text-slate-500">損益率（保有期間）</span><span className={`block ${bearPutEstimate.periodReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{bearPutEstimate.periodReturnPct >= 0 ? "+" : ""}{formatPct(bearPutEstimate.periodReturnPct)}</span></> : <span className="text-slate-500">未計算</span>) : longOptionDisplay ? (
+                    {bearPutEstimate && !isHistoryRow ? (
+                      bearPutEstimate.kind === "available" ? <>
+                        <span className="block text-[11px] font-bold text-slate-500">戦略開始支払（費用込み）</span>
+                        <span className="block">{formatUSD(bearPutEstimate.entryAllInDebitUSD)}</span>
+                      </> : <span className="text-slate-500">未計算</span>
+                    ) : longOptionDisplay && !isHistoryRow ? (
                       <>
-                        <span className="block text-xs text-slate-500">支払総額は左列に表示</span>
+                        <span className="block text-xs font-normal text-slate-400">支払総額は左列に表示</span>
                       </>
                     ) : isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason ? (
                       <>
@@ -639,7 +669,7 @@ export function Dashboard({
                       </>
                     ) : primary.currency === "USD" ? (
                       <>
-                        {isHistoryRow ? <><span className="mb-1 block text-[11px] font-bold text-slate-500">実績分母</span><span className="mb-1 block text-[10px] text-slate-500">（{primary.label}）</span></> : null}
+                        {isHistoryRow ? <span className="mb-1 block text-[11px] font-bold text-slate-500">実績分母 <span className="font-normal">（{primary.label}）</span></span> : null}
                         <span className="block">{primary.amountUSD === undefined ? "未確認" : formatUSD(primary.amountUSD)}</span>
                         <span className="block text-xs text-slate-500">
                           {hasEffectiveFx && Math.abs(primary.amountJPY) > 0.5 ? `参考 ${formatJPY(primary.amountJPY)}` : "参考JPY未計算"}
@@ -653,7 +683,9 @@ export function Dashboard({
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {bearPutEstimate ? <span className="block text-[11px] font-bold text-slate-500">現在決済見込み</span> : usesCurrentEstimate ? (
+                    {bearPutEstimate ? (
+                      <span className="block text-[11px] font-bold text-slate-500">取得価格ベースの参考</span>
+                    ) : usesCurrentEstimate ? (
                       <span className="block text-[11px] font-bold text-slate-500">
                         {currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel
                           ? `${currentEstimate.evaluatedLegLabel}残存の現在決済年率`
@@ -662,7 +694,16 @@ export function Dashboard({
                     ) : !isHistoryRow && premiumDisplay.annualReturnPct !== undefined ? (
                       <span className="block text-[11px] font-bold text-slate-500">プレミアム年率</span>
                     ) : null}
-                    {bearPutEstimate?.kind === "available" ? <><span className={`block text-base ${bearPutEstimate.totalEstimatedPnlUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>概算損益 {formatSignedUSD(bearPutEstimate.totalEstimatedPnlUSD)}</span><span className={`block text-sm ${bearPutEstimate.periodReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>期間損益率 {bearPutEstimate.periodReturnPct >= 0 ? "+" : ""}{formatPct(bearPutEstimate.periodReturnPct)}</span>{bearPutEstimate.annualizedReturnPct !== undefined ? <span className="block text-[10px] text-slate-500">参考年率 {bearPutEstimate.annualizedReturnPct >= 0 ? "+" : ""}{formatPct(bearPutEstimate.annualizedReturnPct)}</span> : null}</> : bearPutEstimate?.kind === "missing" ? <><span className="block text-slate-500">未計算</span><span className="block text-[11px] text-slate-500">{bearPutEstimate.reasons.join(" / ")}</span></> : usesCurrentEstimate && currentEstimate.kind === "available" ? (
+                    {bearPutEstimate?.kind === "available" ? (
+                      <>
+                        <span className={`block text-base ${bearPutEstimate.totalEstimatedPnlUSD >= 0 ? "text-emerald-700" : "text-red-700"}`}>概算損益 {formatSignedUSD(bearPutEstimate.totalEstimatedPnlUSD)}</span>
+                        <span className={`block text-sm ${bearPutEstimate.periodReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>期間損益率 {bearPutEstimate.periodReturnPct >= 0 ? "+" : ""}{formatPct(bearPutEstimate.periodReturnPct)}</span>
+                        {bearPutEstimate.annualizedReturnPct !== undefined ? <span className="block text-[10px] text-slate-500">参考年率 {bearPutEstimate.annualizedReturnPct >= 0 ? "+" : ""}{formatPct(bearPutEstimate.annualizedReturnPct)}</span> : null}
+                        {bearPutEstimate.realizedPnlUSD !== 0 ? <span className="block text-[10px] text-slate-500">実現済み {formatSignedUSD(bearPutEstimate.realizedPnlUSD)} / 残存見込み {formatSignedUSD(bearPutEstimate.remainingEstimatedPnlUSD)}</span> : null}
+                      </>
+                    ) : bearPutEstimate?.kind === "missing" ? (
+                      <><span className="block text-slate-500">未計算</span><span className="block text-[11px] text-slate-500">{bearPutEstimate.reasons.join(" / ")}</span></>
+                    ) : usesCurrentEstimate && currentEstimate.kind === "available" ? (
                       <>
                         <span className={`block ${currentEstimate.annualizedReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{currentEstimate.annualizedReturnPct >= 0 ? "+" : ""}{formatPct(currentEstimate.annualizedReturnPct)}</span>
                         {currentEstimate.currency === "JPY" ? (
@@ -688,12 +729,22 @@ export function Dashboard({
                         <span className="block text-slate-500">未計算</span>
                         <span className="block text-[11px] text-slate-500">{currentEstimate.reason}</span>
                         {currentEstimate.reason === "為替レート 未確認" ? (
-                          <button type="button" className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50" onClick={onRefreshFx}>為替を取得</button>
+                          <button
+                            type="button"
+                            className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onRefreshFx?.();
+                            }}
+                          >為替を取得</button>
                         ) : currentEstimate.missingRequirements[0]?.field === "exit_price" || currentEstimate.missingRequirements[0]?.field === "close_fee" ? (
                           <button
                             type="button"
                             className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
-                            onClick={() => onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field);
+                            }}
                           >
                             不足情報を確認
                           </button>
@@ -827,8 +878,19 @@ export function Dashboard({
                         Saxo OCO照合済み
                       </span>
                     ))}
-                    {!isHistoryRow && simulation.strategyType === "bear_put_spread" ? <button type="button" className="rounded-md border border-teal-300 bg-teal-50 px-2 py-1 text-left text-xs font-bold text-teal-900 hover:bg-teal-100" onClick={(event) => { event.stopPropagation(); onCurrentEstimateAction?.(simulation.id, bearPutEstimate?.kind === "available" ? bearPutEstimate.evaluatedLegs[0]?.legId : undefined, "exit_price"); }}>戦略の決済を確認</button> : isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason ? (
-                      <button type="button" className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-left text-xs font-bold text-amber-800 hover:bg-amber-100" onClick={(event) => { event.stopPropagation(); onHistoryEntryAction?.(simulation.id); }}>
+                    {!isHistoryRow && simulation.strategyType === "bear_put_spread" ? (
+                      <button type="button" className="rounded-md border border-teal-300 bg-teal-50 px-2 py-1 text-left text-xs font-bold text-teal-900 hover:bg-teal-100" onClick={(event) => { event.stopPropagation(); onCurrentEstimateAction?.(simulation.id, bearPutEstimate?.kind === "available" ? bearPutEstimate.evaluatedLegs[0]?.legId : undefined, "exit_price"); }}>
+                        戦略の決済を確認
+                      </button>
+                    ) : isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason ? (
+                      <button
+                        type="button"
+                        className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-left text-xs font-bold text-amber-800 hover:bg-amber-100"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onHistoryEntryAction?.(simulation.id);
+                        }}
+                      >
                         購入時約定を確認
                       </button>
                     ) : primaryTask.type === "complete" ? (
@@ -877,6 +939,7 @@ export function Dashboard({
                     <button
                       className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
                       title="この建玉を削除"
+                      disabled={Boolean(simulation.strategyGroupId)}
                       onClick={(event) => {
                         event.stopPropagation();
                         onDelete(simulation.id);
@@ -886,7 +949,6 @@ export function Dashboard({
                     </button>
                   </td>
                 </tr>
-                {isFocusedPositionRow && bearPutEstimate ? (() => { const validation = validateBearPutSpread(simulationWithAccount); if (!validation.valid) return <tr><td colSpan={12} className="bg-indigo-50 p-4 text-sm text-red-700">{validation.reasons.join(" / ")}</td></tr>; return <tr data-testid="bear-put-spread-focus-detail"><td colSpan={12} className="bg-indigo-50 p-4"><div className="grid gap-3 md:grid-cols-3"><div className="rounded border bg-white p-3"><div className="text-xs text-slate-500">建玉時の手数料込み支払額</div><div className="mt-1 text-lg font-bold">{bearPutEstimate.kind === "available" ? formatUSD(bearPutEstimate.entryAllInDebitUSD) : "未確認"}</div></div><div className="rounded border bg-white p-3"><div className="text-xs text-slate-500">今閉じた場合の手数料後受取額</div><div className="mt-1 text-lg font-bold">{bearPutEstimate.kind === "available" ? formatUSD(bearPutEstimate.closeNetProceedsUSD) : "未計算"}</div></div><div className="rounded border bg-white p-3"><div className="text-xs text-slate-500">概算損益 / 期間損益率</div><div className="mt-1 text-lg font-bold">{bearPutEstimate.kind === "available" ? `${formatSignedUSD(bearPutEstimate.totalEstimatedPnlUSD)} / ${bearPutEstimate.periodReturnPct >= 0 ? "+" : ""}${formatPct(bearPutEstimate.periodReturnPct)}` : "未計算"}</div></div></div><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[620px] bg-white text-xs"><thead><tr className="border-b text-left text-slate-500"><th className="p-2">脚</th><th>行使価格</th><th>建玉価格</th><th>現在決済候補</th><th>状態</th></tr></thead><tbody>{[validation.longPut, validation.shortPut].map((leg) => <tr key={leg.id} className="border-b"><td className="p-2 font-bold">{leg.side === "buy" ? "高ストライクP買い" : "低ストライクP売り"}</td><td>{formatUSD(leg.strikeUSD)}</td><td>{formatUSD(leg.premiumUSD)}</td><td>{leg.closePlan?.closePriceUSD === undefined && leg.closeCostUSD === undefined ? "未取得" : formatUSD(leg.closePlan?.closePriceUSD ?? leg.closeCostUSD!)}</td><td>{getOptionLegCloseProgress(simulationWithAccount).legs.find((item) => item.legId === leg.id)?.state ?? "未確認"}</td></tr>)}</tbody></table></div><details className="mt-3 rounded border border-slate-200 bg-white p-3"><summary className="cursor-pointer text-xs font-bold">参考指標・価格履歴</summary><p className="mt-2 text-xs text-slate-600">現在見込みには明示Bid/Askと確認済み手数料だけを使います。</p></details></td></tr>; })() : null}
                 </Fragment>
               );
             })}

@@ -172,6 +172,11 @@ export type SaxoApiPositionSnapshot = {
   /** Explicit Saxo parent evidence only. Absence must not trigger automatic pairing. */
   multiLegOrderId?: string;
   multiLegOrderIdSourceField?: string;
+  /** Explicit instrument specification only; no standard-deliverable fallback. */
+  settlementType?: string;
+  deliverableIdentity?: string;
+  underlyingTypeCategory?: string;
+  contractSpecificationSource?: string;
   shareQuantity?: number;
   averageOpenPrice?: number;
   currentStockPrice?: number;
@@ -686,7 +691,6 @@ export function findSaxoBearPutSpreadPairs(positions: SaxoApiPositionSnapshot[])
   return { pairs, holds };
 }
 
-
 function isSaxoFilledTradeHistory(item: SaxoHistoryDiscoveryItem | undefined): item is SaxoHistoryDiscoveryItem {
   if (!item || item.kind !== "trade" || item.price === undefined || !Number.isFinite(item.price)) return false;
   const status = (item.sourceStatus ?? "").toLowerCase();
@@ -733,6 +737,8 @@ export type SaxoPositionReconciliationRow = {
 export type SaxoApiOrderSnapshot = {
   id: string;
   orderId?: string;
+  multiLegOrderId?: string;
+  multiLegOrderIdSourceField?: string;
   /** Local-runtime only: never render or export the unmasked activity identity. */
   positionId?: string;
   accountKey: string;
@@ -761,6 +767,7 @@ export type SaxoApiOrderSnapshot = {
 };
 
 export type SaxoHistoryDiscoveryEndpoint = {
+  coverage?: { completedPages: number; status: "complete" | "partial" };
   endpoint: string;
   label: string;
   classification: string;
@@ -770,7 +777,11 @@ export type SaxoHistoryDiscoveryEndpoint = {
 };
 
 export type SaxoHistoryDiscoveryItem = {
+  /** Local-only canonical reconciliation identity, never rendered. */
+  brokerAccountKey?: string;
+  brokerHistoryId?: string;
   id: string;
+  tradeId?: string;
   orderId?: string;
   positionId?: string;
   ticketId?: string;

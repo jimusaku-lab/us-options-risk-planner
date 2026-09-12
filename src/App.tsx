@@ -84,6 +84,7 @@ import { DenominatorTable } from "@/components/results/DenominatorTable";
 import { RiskPanel } from "@/components/results/RiskPanel";
 import { ScenarioCards } from "@/components/results/ScenarioCards";
 import { SummaryCards } from "@/components/results/SummaryCards";
+import { SpreadPerformancePreview } from "@/components/results/SpreadPerformancePreview";
 import { StockHoldingEvaluationCard } from "@/components/results/StockHoldingEvaluationCard";
 import { TaxComparisonCard } from "@/components/results/TaxComparisonCard";
 import { BackToTopButton } from "@/components/ui/BackToTopButton";
@@ -635,7 +636,8 @@ export default function App() {
       [
         exportWorkspaceJson({
           workspace: activeWorkspace,
-          simulations,
+          simulations: useOptionsStore.getState().simulationsByWorkspace[activeWorkspace],
+          strategyLedger: useOptionsStore.getState().strategyLedgersByWorkspace[activeWorkspace],
           accountStates: accountStatesForExport,
           wheelCycles,
           wheelEvents,
@@ -1338,6 +1340,10 @@ export default function App() {
     setJournalFocusSimulationId(null);
     selectSimulation(id);
     setIsEditorOpen(true);
+    // A historical annual-return issue is resolved by reviewing the already
+    // saved 3-A evidence, not by creating a new position or returning the
+    // simulation to an unconfirmed state.  The previous edit action only
+    // changed selection, leaving the editor below the viewport.
     if (targetSimulation && ["closed", "assigned", "expired"].includes(targetSimulation.status)) {
       setPositionFocusSimulationId(null);
       setEditorFocusRequest({ anchorId: "option-entry-executions", requestId: Date.now() + Math.random() });
@@ -1893,6 +1899,7 @@ export default function App() {
     }
     setActiveView("positions");
     setIsEditorOpen(false);
+    setPositionFocusSimulationId(simulationId);
     setCloseDecisionSectionOpen(true);
     setCoveredCallReferenceOpen(true);
     setCloseDecisionFocusRequest({ anchorId: warning.actionAnchorId || "close-decision", requestId: Date.now() + Math.random() });
@@ -1904,6 +1911,7 @@ export default function App() {
     if (task.targetAnchor === "close-decision") {
       setActiveView("positions");
       setIsEditorOpen(false);
+      setPositionFocusSimulationId(simulationId);
       setCloseDecisionSectionOpen(true);
       setCoveredCallReferenceOpen(true);
       setCloseDecisionFocusRequest({ anchorId: task.focusField ?? anchorId, requestId: Date.now() + Math.random() });
@@ -1917,8 +1925,13 @@ export default function App() {
     selectSimulation(simulationId);
     setActiveView("positions");
     setIsEditorOpen(false);
+    setPositionFocusSimulationId(simulationId);
     setCloseDecisionSectionOpen(true);
     setCoveredCallReferenceOpen(true);
+    if (simulations.find(item => item.id === simulationId)?.strategyType === "bear_put_spread") {
+      window.setTimeout(() => { const preview = document.getElementById(`spread-close-preview-${simulationId}`); preview?.scrollIntoView({ behavior: "smooth", block: "start" }); preview?.focus(); }, 60);
+      return;
+    }
     const inputKind = field === "exit_price" ? "price" : "fee";
     setCloseDecisionFocusRequest({ anchorId: legId ? `current-estimate-${inputKind}-${legId}` : "current-estimate-completion", requestId: Date.now() + Math.random() });
   };
@@ -1971,6 +1984,12 @@ export default function App() {
       .filter((entry): entry is [string, StockHoldingEvaluation] => Boolean(entry[1])),
   );
   const saxoReadOnlyPanelProps = {
+    strategyLedger: useOptionsStore.getState().strategyLedgersByWorkspace[activeWorkspace],
+    onCommitSpread: async (prepared: import("@/domain/strategyLedger").PreparedStrategyImport, requestRevision: number) => {
+      const result = await useOptionsStore.getState().commitSpreadImport(prepared, requestRevision);
+      if (result.strategyId) { openSyntheticForwardDashboard(result.strategyId); setPositionFocusSimulationId(result.strategyId); }
+      return result;
+    },
     workspace: activeWorkspace,
     accountInputs,
     simulations,
@@ -2058,7 +2077,7 @@ export default function App() {
         <div
           id={activeView === "performance" ? "performance-view-top" : "positions-view-top"}
           tabIndex={-1}
-          className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5 focus:outline-none"
+          className="mx-auto grid max-w-[1440px] grid-cols-[minmax(0,1fr)] gap-5 px-4 py-5 focus:outline-none"
         >
           {isGuideOpen ? <UserGuide onClose={() => setIsGuideOpen(false)} /> : null}
           {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
@@ -2342,7 +2361,7 @@ export default function App() {
       <div
         id={activeView === "performance" ? "performance-view-top" : "positions-view-top"}
         tabIndex={-1}
-        className="mx-auto grid max-w-[1440px] gap-5 px-4 py-5 focus:outline-none"
+        className="mx-auto grid max-w-[1440px] grid-cols-[minmax(0,1fr)] gap-5 px-4 py-5 focus:outline-none"
       >
         {isGuideOpen ? <UserGuide onClose={() => setIsGuideOpen(false)} /> : null}
         {isDataOpen ? <DataPanel externalQuoteModeLabel={externalQuoteModeLabel} onClose={() => setIsDataOpen(false)} /> : null}
@@ -2398,7 +2417,7 @@ export default function App() {
               saxoOrders={saxoOrderCandidates}
               onSaxoExitOrderAction={openSaxoExitOrderRule}
             />
-            {orderPrepCoveredCallMode ? (
+            {positionFocusSimulationId && orderPrepCoveredCallMode ? (
               <CoveredCallOrderPrepPanel
                 simulation={selectedWithAccount}
                 checklist={checklist}
@@ -2410,7 +2429,7 @@ export default function App() {
                 payoff={payoff}
               />
             ) : null}
-            {openCoveredCallManagementMode ? (
+            {positionFocusSimulationId && openCoveredCallManagementMode ? (
               <CoveredCallOpenManagementPanel
                 simulation={selectedWithAccount}
                 coverage={selectedCoveredCallCoverage}
@@ -2488,6 +2507,7 @@ export default function App() {
                 onCloseDecisionAction={(anchorId) => {
                   setIsEditorOpen(false);
                   setJournalFocusSimulationId(null);
+                  setPositionFocusSimulationId(selected.id);
                   setCloseDecisionSectionOpen(true);
                   setCoveredCallReferenceOpen(true);
                   setCloseDecisionFocusRequest({ anchorId, requestId: Date.now() });
@@ -2530,7 +2550,7 @@ export default function App() {
                 onChange={updateAccountState}
               />
             </CollapsibleSection> : null}
-            {historyResultMode ? (
+            {showSelectedHistoryDetails ? (
               <HistoryStatusCard
                 simulation={selectedWithAccount}
                 stockHoldingMode={assignedPutStockHoldingMode}
@@ -2540,7 +2560,14 @@ export default function App() {
                 stockEvaluation={selectedStockHoldingEvaluation}
               />
             ) : null}
-            {!historyResultMode || showSelectedHistoryDetails ? (
+            {(showSelectedHistoryDetails || positionFocusSimulationId) && selected.strategyType === "bear_put_spread" ? (
+              <SpreadPerformancePreview simulation={selected} anchor editable={!showSelectedHistoryDetails} onChange={upsertSimulation} onUngroup={selected.strategyGroupId ? () => { const result = useOptionsStore.getState().ungroupSpread(selected.id); setQuoteStatus(result.reason ?? "組み合わせを解除しました。2本の約定は単独建玉に残しています。"); if (!result.reason) setPositionFocusSimulationId(null); } : undefined} onDraft={(leg) => {
+                upsertSimulation({ ...selected, optionCloseExecutions: [...(selected.optionCloseExecutions ?? []), createOptionCloseExecutionDraft({ simulation: selected, leg, closePriceUSD: leg.closePlan?.closePriceUSD ?? leg.closeCostUSD ?? 0 })] });
+                setIsEditorOpen(true);
+                setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
+              }} />
+            ) : null}
+            {(showSelectedHistoryDetails || positionFocusSimulationId) && selected.strategyType !== "bear_put_spread" ? (
               <CollapsibleSection
                 title={
                   orderPrepCoveredCallMode
@@ -2588,12 +2615,7 @@ export default function App() {
                 />
               </CollapsibleSection>
             ) : null}
-            {historyResultMode && !showSelectedHistoryDetails ? (
-              <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600 shadow-sm">
-                履歴一覧を畳んでいるため、終了済みプット売り1件の実績カードは非表示です。履歴1件の確定オプション収入・年率を確認する場合は、上の建玉ダッシュボードで履歴を表示して対象行を選んでください。
-              </section>
-            ) : null}
-            {showSelectedHistoryDetails ? (
+            {(showSelectedHistoryDetails || positionFocusSimulationId) && selected.strategyType !== "bear_put_spread" ? (showSelectedHistoryDetails ? (
               <DenominatorTable
                 denominators={denominators}
                 collapsible
@@ -2918,7 +2940,7 @@ export default function App() {
                 )}
               </>
               )
-            ) : null}
+            ) : null) : null}
             {!positionFocusSimulationId && activeWorkspace === "live" ? (
               <CollapsibleSection
                 title={compactCoveredCallMode ? "ホイール管理詳細" : undefined}
@@ -3447,11 +3469,11 @@ function AppHeader({
 }) {
   return (
     <header className="border-b border-slate-200 bg-white">
-      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-3 px-4 py-3">
-        <div className="min-w-0 flex-1">
+      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="min-w-[240px] flex-1">
           <h1 className="text-xl font-bold tracking-normal">米国株オプション建玉管理・リスク確認</h1>
         </div>
-        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+        <div className="flex max-w-full flex-wrap items-center gap-2 whitespace-nowrap">
           <div className="flex rounded-md border border-slate-300 bg-slate-50 p-0.5">
             <button
               className={`rounded px-3 py-1.5 text-sm font-bold ${

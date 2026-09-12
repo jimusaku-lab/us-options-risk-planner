@@ -26,12 +26,14 @@ export type SaxoAccountsSnapshotResponse = {
 };
 
 export type SaxoPositionsSnapshotResponse = {
+  coverage?: { completedPages: number; status: "complete" | "partial" };
   environment: "sim" | "live";
   fetchedAt: string;
   positions: SaxoApiPositionSnapshot[];
 };
 
 export type SaxoOrdersSnapshotResponse = {
+  coverage?: { completedPages: number; status: "complete" | "partial" };
   environment: "sim" | "live";
   fetchedAt: string;
   orders: SaxoApiOrderSnapshot[];

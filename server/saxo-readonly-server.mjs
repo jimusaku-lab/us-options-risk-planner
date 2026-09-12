@@ -562,10 +562,29 @@ async function getAccountsSnapshot() {
   };
 }
 
+export async function fetchSaxoPages(path, query, fetchPage = saxoGet, base = getOpenApiBaseUrl()) {
+  const Data = [], seen = new Set();
+  let currentPath = path, currentQuery = query, completedPages = 0;
+  while (completedPages < 100) {
+    let payload;
+    try { payload = await fetchPage(currentPath, currentQuery); }
+    catch (error) { if (!completedPages) throw error; return { Data, coverage: { completedPages, status: "partial" } }; }
+    Data.push(...(payload.Data ?? payload.Positions ?? payload.Orders ?? payload.Trades ?? []));
+    completedPages += 1;
+    if (!payload.__next) return { Data, coverage: { completedPages, status: "complete" } };
+    const next = new URL(payload.__next, base), root = new URL(base);
+    if (next.origin !== root.origin || seen.has(next.href)) return { Data, coverage: { completedPages, status: "partial" } };
+    seen.add(next.href);
+    currentPath = `${next.pathname.startsWith(root.pathname) ? next.pathname.slice(root.pathname.length) : next.pathname.replace(/^\//, "")}${next.search}`;
+    currentQuery = {};
+  }
+  return { Data, coverage: { completedPages, status: "partial" } };
+}
+
 async function getPositions(accountKey) {
   const client = await getClient();
   const clientKey = client.ClientKey ?? client.ClientId ?? client.ClientKeyId;
-  const payload = await saxoGet("port/v1/positions", {
+  const payload = await fetchSaxoPages("port/v1/positions", {
     ...(clientKey ? { ClientKey: clientKey } : {}),
     ...(accountKey ? { AccountKey: accountKey } : {}),
     FieldGroups: "Costs,PositionBase,PositionView",
@@ -579,6 +598,7 @@ async function getPositions(accountKey) {
     environment: getEnvironment(),
     fetchedAt,
     positions: await enrichPositionUnderlyingIdentities(normalizedPositions, clientKey),
+    coverage: payload.coverage,
     raw: payload,
   };
 }
@@ -589,13 +609,14 @@ async function getPositionsSnapshot() {
     environment: response.environment,
     fetchedAt: response.fetchedAt,
     positions: response.positions,
+    coverage: response.coverage,
   };
 }
 
 async function getOrders(accountKey) {
   const client = await getClient();
   const clientKey = getClientKey(client);
-  const payload = await saxoGet("port/v1/orders", {
+  const payload = await fetchSaxoPages("port/v1/orders", {
     ...(clientKey ? { ClientKey: clientKey } : {}),
     ...(accountKey ? { AccountKey: accountKey } : {}),
     Status: "Working",
@@ -609,6 +630,7 @@ async function getOrders(accountKey) {
     environment: getEnvironment(),
     fetchedAt,
     orders: rawOrders.map((raw, index) => normalizeOrder(raw, accountsByKey, fetchedAt, index)),
+    coverage: payload.coverage,
     raw: payload,
   };
 }
@@ -619,6 +641,7 @@ async function getOrdersSnapshot() {
     environment: response.environment,
     fetchedAt: response.fetchedAt,
     orders: response.orders,
+    coverage: response.coverage,
   };
 }
 
@@ -628,7 +651,7 @@ async function getClosedPositions({ fromDate, toDate }) {
   if (!clientKey) {
     throw new HttpError(422, "client_key_unavailable", "ClientKeyが未取得のため、閉鎖建玉履歴を取得できません。");
   }
-  const payload = await saxoGet(`cs/v1/reports/closedPositions/${encodeURIComponent(clientKey)}/${encodeURIComponent(fromDate)}/${encodeURIComponent(toDate)}`, {
+  const payload = await fetchSaxoPages(`cs/v1/reports/closedPositions/${encodeURIComponent(clientKey)}/${encodeURIComponent(fromDate)}/${encodeURIComponent(toDate)}`, {
     $top: 100,
   });
   const rawItems = Array.isArray(payload.Data) ? payload.Data : [];
@@ -639,6 +662,7 @@ async function getClosedPositions({ fromDate, toDate }) {
     toDate,
     fetchedAt: new Date().toISOString(),
     items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "closed_position", index)),
+    coverage: payload.coverage,
     raw: payload,
   };
 }
@@ -649,7 +673,7 @@ async function getTrades({ fromDate, toDate }) {
   if (!clientKey) {
     throw new HttpError(422, "client_key_unavailable", "ClientKeyが未取得のため、取引履歴候補を取得できません。");
   }
-  const payload = await saxoGet(`cs/v1/reports/trades/${encodeURIComponent(clientKey)}`, {
+  const payload = await fetchSaxoPages(`cs/v1/reports/trades/${encodeURIComponent(clientKey)}`, {
     FromDate: fromDate,
     ToDate: toDate,
     $top: 100,
@@ -662,6 +686,7 @@ async function getTrades({ fromDate, toDate }) {
     toDate,
     fetchedAt: new Date().toISOString(),
     items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "trade", index)),
+    coverage: payload.coverage,
     raw: payload,
   };
 }
@@ -1565,15 +1590,24 @@ export async function enrichPositionUnderlyingIdentities(positions, clientKey, f
   const optionDetails = new Map();
   const underlyingDetails = new Map();
   return Promise.all(positions.map(async (position) => {
-    if (position.underlyingIdentity || position.kind !== "option" || !Number.isFinite(position.uic) || !position.assetType) return position;
+    if (position.kind !== "option" || !Number.isFinite(position.uic) || !position.assetType) return position;
     const optionKey = `${position.uic}:${position.assetType}:${position.accountKey}`;
     let optionDetail = optionDetails.get(optionKey);
     if (!optionDetail) {
       optionDetail = await fetchDetails({ uic: position.uic, assetType: position.assetType, accountKey: position.accountKey, clientKey }).catch(() => undefined);
       optionDetails.set(optionKey, optionDetail);
     }
+    // Documented InstrumentDetails fields only. Instrument is not proof of a
+    // standard, unadjusted deliverable; leave deliverableIdentity unknown.
+    const specification = {
+      ...position,
+      contractSize: position.contractSize ?? (Number.isFinite(optionDetail?.ContractSize) ? optionDetail.ContractSize : undefined),
+      settlementType: optionDetail?.SettlementStyle,
+      underlyingTypeCategory: optionDetail?.UnderlyingTypeCategory,
+      contractSpecificationSource: optionDetail ? `ref/v1/instruments/details/${position.uic}/${position.assetType}` : undefined,
+    };
     const reference = resolveUnderlyingReference(optionDetail);
-    if (!reference?.uic) return position;
+    if (!reference?.uic || position.underlyingIdentity) return specification;
     const underlyingKey = `${reference.uic}:${reference.assetType ?? "Stock"}:${position.accountKey}`;
     let underlyingDetail = underlyingDetails.get(underlyingKey);
     if (!underlyingDetail) {
@@ -1583,7 +1617,7 @@ export async function enrichPositionUnderlyingIdentities(positions, clientKey, f
     const underlyingSymbol = normalizeUnderlyingSymbol(firstString(underlyingDetail, ["Symbol", "DisplayAndFormat.Symbol"]) ?? firstString(optionDetail, ["UnderlyingSymbol"]));
     const underlyingAssetType = reference.assetType ?? firstString(optionDetail, ["UnderlyingAssetType"]);
     return {
-      ...position,
+      ...specification,
       underlyingUic: reference.uic,
       underlyingAssetType,
       underlyingSymbol,
@@ -1621,7 +1655,7 @@ function normalizeUnderlyingSymbol(value) {
   return token || undefined;
 }
 
-function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
+export function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
   const accountKey = firstString(raw, ["AccountKey", "AccountId", "AccountNumber"]) ?? "";
   const account = accountsByKey.get(accountKey);
   const orderId = firstString(raw, ["OrderId", "OrderID", "Id"]) ?? `${accountKey || "unknown"}-order-${index}`;
@@ -1637,7 +1671,8 @@ function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
   const status = firstString(raw, ["Status", "OrderStatus"]);
   const symbol = inferSymbol(raw);
   const optionType = inferOptionType(raw);
-  const relation = firstString(raw, ["OrderRelation", "Relation", "RelatedOrderType", "MultiLegOrderId"]);
+  const relation = firstString(raw, ["OrderRelation", "Relation", "RelatedOrderType"]);
+  const multiLegOrderId = firstStringMatch(raw, ["MultiLegOrderId"]);
   const missingFields = [];
   for (const [field, value] of Object.entries({ accountKey, symbol, assetType, quantity, orderType, status })) {
     if (value === undefined || value === "") missingFields.push(field);
@@ -1655,6 +1690,8 @@ function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
     side: inferBuySell(raw),
     orderType,
     orderRelation: relation,
+    multiLegOrderId: multiLegOrderId?.value,
+    multiLegOrderIdSourceField: multiLegOrderId?.matchedName,
     status,
     price,
     stopPrice,
@@ -1670,12 +1707,12 @@ function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
   };
 }
 
-function normalizeHistoryItem(raw, kind, index) {
+export function normalizeHistoryItem(raw, kind, index) {
   const accountKey = firstString(raw, ["AccountKey"]);
   const accountId = firstString(raw, ["AccountId"]);
   const accountNumber = firstString(raw, ["AccountNumber"]);
   const sourceId = firstString(raw, kind === "order_activity" ? ["LogId"] : ["ClosedPositionId", "TradeId", "PositionId", "OrderId", "Id"]);
-  const orderId = firstString(raw, ["OrderId", "OrderID", "RelatedOrderId", "MultiLegOrderId"]);
+  const orderId = firstString(raw, ["OrderId", "OrderID", "RelatedOrderId"]);
   const profitLoss = firstNumber(raw, ["ClosedProfitLoss", "ProfitLossOnTrade", "RealizedPnl", "ProfitLoss"]);
   const profitLossAccountCurrency = firstNumber(raw, ["PnLAccountCurrency"]);
   const profitLossClientCurrency = firstNumber(raw, ["PnLClientCurrency"]);
@@ -1705,6 +1742,11 @@ function normalizeHistoryItem(raw, kind, index) {
   const exchangeRateMatch = firstNumberMatch(raw, exchangeRateAliases);
   return {
     id: `${kind}-${index}`,
+    // Scoped runtime identity for strategy reconciliation. Display fields stay
+    // masked; array indices and order IDs are never economic fill identities.
+    brokerAccountKey: accountKey,
+    brokerHistoryId: firstString(raw, ["TradeId", "Id"]),
+    tradeId: kind === "trade" ? firstString(raw, ["TradeId"]) : undefined,
     orderId,
     positionId: firstString(raw, ["PositionId", "PositionID"]),
     kind,
@@ -1842,6 +1884,7 @@ function normalizeDiscoveryResult(endpoint, label, result) {
       itemCount: result.value.items?.length ?? 0,
       message: `${endpoint} から候補を取得しました。正式保存はしていません。`,
       items: result.value.items ?? [],
+      coverage: result.value.coverage,
     };
   }
   const reason = result.reason;
@@ -2125,6 +2168,7 @@ function getStatus(message) {
       optionPremiumCandidate: true,
       bulkOptionPremiumPreview: true,
       orderActivitiesCloseLifecycle: true,
+      spreadStrategyImport: true,
     },
     connected: connectionState === "connected",
     connectionState,

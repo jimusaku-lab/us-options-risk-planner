@@ -175,6 +175,8 @@ export type ClosePlan = {
   latestCloseDate?: string;
   orderType?: "limit" | "market" | "stop" | "stop_limit";
   commissionUSD?: number;
+  /** Explicit total for these remaining contracts. Never prorate a scenario total. */
+  commissionContracts?: number;
   /** Provenance of an explicitly confirmed future close-fee estimate. */
   commissionSource?: "user_confirmed_standard" | "manual" | "saxo_readonly_candidate";
   /** ISO timestamp recorded only when the user confirms a candidate or manual value. */
@@ -390,6 +392,10 @@ export type BearPutSpreadLinkage = {
 
 export type OptionCloseExecution = {
   id: string;
+  supersedesId?: string;
+  voided?: boolean;
+  entryAllocations?: { entryExecutionId: string; contracts: number }[];
+  realizedPnlEvidence?: { contracts: number; entryFeesIncluded: boolean; closeFeesIncluded: boolean; source: string };
   legId: string;
   closeKind?: "buyback" | "expired";
   confirmed: boolean;
@@ -467,6 +473,8 @@ export type OptionEntryOpeningFieldEvidence = {
 
 export type OptionEntryExecution = {
   id: string;
+  supersedesId?: string;
+  voided?: boolean;
   legId: string;
   tradeDate: string;
   contracts: number;
@@ -506,6 +514,7 @@ export type OptionEntryExecution = {
   /** Stable identifiers used only to reconcile the same Saxo opening event. */
   saxoPositionId?: string;
   saxoOrderId?: string;
+  saxoFillId?: string;
   saxoTicketId?: string;
   saxoUic?: number;
   confirmed: boolean;
@@ -513,6 +522,9 @@ export type OptionEntryExecution = {
 };
 
 export type TradeSimulation = {
+  /** Parent view references; canonical entry fills live in the ledger envelope. */
+  strategyGroupId?: string;
+  strategyContractVerification?: { state: "verified" | "unknown" | "incompatible"; source?: string; confirmedAt?: string };
   id: string;
   status: SimulationStatus;
   name: string;

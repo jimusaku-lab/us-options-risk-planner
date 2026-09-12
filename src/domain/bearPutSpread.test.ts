@@ -63,9 +63,11 @@ describe("bear put spread", () => {
     const result = calculateBearPutSpreadEstimate(partial, "2026-09-11");
     expect(result.kind).toBe("available");
     if (result.kind !== "available") return;
-    expect(result.realizedPnlUSD).toBe(-20);
+    // An unscoped broker P/L is not authoritative. Confirmed cashflows are
+    // 470 - 492 - 2.24 - 2.24, with no arbitrary -20 override.
+    expect(result.realizedPnlUSD).toBe(-26.48);
     expect(result.remainingEstimatedPnlUSD).toBeCloseTo(17.52, 8);
-    expect(result.totalEstimatedPnlUSD).toBeCloseTo(-2.48, 8);
+    expect(result.totalEstimatedPnlUSD).toBeCloseTo(-8.96, 8);
     expect(result.evaluatedLegs.map((leg) => leg.legId)).toEqual(["short"]);
   });
 

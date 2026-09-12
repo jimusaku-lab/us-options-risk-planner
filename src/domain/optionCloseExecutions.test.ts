@@ -8,6 +8,7 @@ import {
   getClosedSyntheticLegHistoryItems,
   getOptionLegCloseProgress,
   getOptionLegOperationalCloseProgress,
+  repairLegacySaxoHistoryRealizedPnl,
   resolveSaxoHistoryCloseDraftCommission,
   sanitizeSaxoHistoryCloseExecutions,
   validateSaxoHistoryCloseExecution,
@@ -40,11 +41,36 @@ function openPutSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulatio
 
 describe("Saxo history close execution validation", () => {
   it("derives one confirmed closed-leg history row while the synthetic parent remains open", () => {
-    const simulation = openPutSimulation({ id: "synthetic-partial", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", optionLegs: [{ ...putLeg, id: "call-leg", type: "call", side: "buy", premiumUSD: 5, quantity: 1 }, { ...putLeg, id: "put-leg", type: "put", side: "sell", premiumUSD: 4, quantity: 1 }], optionEntryExecutions: [{ id: "entry-call", legId: "call-leg", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 5, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }, { id: "entry-put", legId: "put-leg", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 4, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }], optionCloseExecutions: [{ id: "close-call", legId: "call-leg", closeKind: "buyback", closePriceUSD: 6, closeDate: "2026-06-10", contracts: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }] });
-    expect(getClosedSyntheticLegHistoryItems([simulation])).toEqual([expect.objectContaining({ legId: "call-leg", executionIds: ["close-call"], closedContracts: 1 })]);
+    const simulation = openPutSimulation({
+      id: "synthetic-partial",
+      strategyType: "synthetic_forward",
+      accountCode: "N",
+      accountEnvironment: "PROD_N_USD_SETTLEMENT",
+      optionLegs: [
+        { ...putLeg, id: "call-leg", type: "call", side: "buy", premiumUSD: 5, quantity: 1 },
+        { ...putLeg, id: "put-leg", type: "put", side: "sell", premiumUSD: 4, quantity: 1 },
+      ],
+      optionEntryExecutions: [
+        { id: "entry-call", legId: "call-leg", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 5, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
+        { id: "entry-put", legId: "put-leg", tradeDate: "2026-06-01", contracts: 1, fillPriceUSD: 4, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
+      ],
+      optionCloseExecutions: [{ id: "close-call", legId: "call-leg", closeKind: "buyback", closePriceUSD: 6, closeDate: "2026-06-10", contracts: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+    });
+    const rows = getClosedSyntheticLegHistoryItems([simulation]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ simulationId: "synthetic-partial", legId: "call-leg", closedContracts: 1, remainingContracts: 0, executionIds: ["close-call"] });
     expect(getClosedSyntheticLegHistoryItems([{ ...simulation, status: "closed" }])).toEqual([]);
+    expect(getClosedSyntheticLegHistoryItems([{ ...simulation, optionCloseExecutions: [{ ...simulation.optionCloseExecutions![0], confirmed: false }] }])).toEqual([]);
     expect(getClosedSyntheticLegHistoryItems([{ ...simulation, optionCloseExecutions: [{ ...simulation.optionCloseExecutions![0], contracts: 2 }] }])).toEqual([]);
   });
+
+  it("keeps a confirmed N/USD leg history row when reference JPY or realised P/L is unavailable", () => {
+    const base = openPutSimulation({ id: "synthetic-entry-confirmation", status: "entry_confirmation", strategyType: "synthetic_forward", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", optionLegs: [{ ...putLeg, id: "call", type: "call", side: "buy", quantity: 1 }, { ...putLeg, id: "put", type: "put", side: "sell", quantity: 1 }], optionCloseExecutions: [{ id: "close", legId: "call", closeKind: "buyback", closeDate: "2026-06-10", closePriceUSD: 2, contracts: 1, settlementCurrency: "USD", source: "manual", confirmed: true }] });
+    const rows = getClosedSyntheticLegHistoryItems([base]);
+    expect(rows).toEqual([expect.objectContaining({ legId: "call", executionIds: ["close"] })]);
+    expect(rows[0].closeResults).toHaveLength(1);
+  });
+
   it("uses only the confirmed N/USD close standard for a new buyback draft", () => {
     const nSimulation = openPutSimulation({
       accountCode: "N",
@@ -88,26 +114,98 @@ describe("Saxo history close execution validation", () => {
     expect(override.realizedPnlUSD).toBe(91.23);
   });
 
-  it("closes only after every leg is fully confirmed and is idempotent on reload", () => {
-    const partial = openPutSimulation({ optionLegs: [{ ...putLeg, id: "two", quantity: 2 }], optionCloseExecutions: [{ id: "first", legId: "two", closeKind: "buyback", confirmed: true, closeDate: "2026-06-02", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
-    expect(getOptionCloseCompletion(partial)).toMatchObject({ state: "partial", remainingContracts: 1 });
-    const full = { ...partial, optionCloseExecutions: [...partial.optionCloseExecutions!, { id: "second", legId: "two", closeKind: "buyback" as const, confirmed: true, closeDate: "2026-06-03", contracts: 1, settlementCurrency: "JPY" as const, source: "manual" as const }] };
-    expect(getOptionCloseCompletion(full)).toMatchObject({ state: "complete", terminalStatus: "closed" });
-    const normalized = sanitizeSaxoHistoryCloseExecutions(full);
+  it("repairs only a confirmed Saxo history P/L exactly equal to the candidate USD booked amount", () => {
+    const simulation = openPutSimulation({ optionCloseExecutions: [{ id: "close", legId: "put-p200", confirmed: true, closeDate: "2026-08-10", contracts: 1, settlementCurrency: "JPY", source: "saxo_history", sourceCandidateId: "candidate", brokerRealizedPnlJPY: 3235.23 }] });
+    const candidates = [{ id: "candidate", kind: "trade", accountCode: "P" as const, accountCurrency: "JPY", bookedAmountUSD: 3235.23, profitLossAccountCurrency: 119265 }];
+    const repaired = repairLegacySaxoHistoryRealizedPnl(simulation, candidates);
+    expect(repaired.optionCloseExecutions?.[0]?.brokerRealizedPnlJPY).toBe(119265);
+    expect(repairLegacySaxoHistoryRealizedPnl(repaired, candidates)).toBe(repaired);
+    expect(repairLegacySaxoHistoryRealizedPnl({ ...simulation, optionCloseExecutions: [{ ...simulation.optionCloseExecutions![0], source: "manual" }] }, candidates)).toBeTruthy();
+  });
+  it("closes only when every option leg has a full valid confirmed close, and normalizes once on reload", () => {
+    const oneOfTwo = openPutSimulation({
+      optionLegs: [{ ...putLeg, id: "quantity-two", quantity: 2 }],
+      optionCloseExecutions: [{
+        id: "first-close", legId: "quantity-two", closeKind: "buyback", confirmed: true,
+        closeDate: "2026-06-02", contracts: 1, settlementCurrency: "JPY", source: "manual",
+      }],
+    });
+    expect(getOptionCloseCompletion(oneOfTwo)).toMatchObject({ state: "partial", remainingContracts: 1 });
+
+    const completed = {
+      ...oneOfTwo,
+      optionCloseExecutions: [...oneOfTwo.optionCloseExecutions!, {
+        id: "second-close", legId: "quantity-two", closeKind: "buyback" as const, confirmed: true,
+        closeDate: "2026-06-03", contracts: 1, settlementCurrency: "JPY" as const, source: "manual" as const,
+      }],
+    };
+    expect(getOptionCloseCompletion(completed)).toMatchObject({ state: "complete", terminalStatus: "closed", remainingContracts: 0 });
+    const normalized = sanitizeSaxoHistoryCloseExecutions(completed);
     expect(normalized.status).toBe("closed");
     expect(sanitizeSaxoHistoryCloseExecutions(normalized)).toBe(normalized);
   });
 
-  it("requires each leg and rejects over-close while distinguishing expiry and mixed closes", () => {
-    const twoLegs = openPutSimulation({ optionLegs: [{ ...putLeg, id: "a", quantity: 1 }, { ...putLeg, id: "b", type: "call", quantity: 1 }], optionCloseExecutions: [{ id: "a-close", legId: "a", closeKind: "expired", confirmed: true, closeDate: "2026-06-05", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
+  it("requires every leg and rejects over-close or invalid confirmed quantities", () => {
+    const twoLegs = openPutSimulation({
+      optionLegs: [{ ...putLeg, id: "leg-a", quantity: 1 }, { ...putLeg, id: "leg-b", type: "call", quantity: 1 }],
+      optionCloseExecutions: [{
+        id: "only-a", legId: "leg-a", confirmed: true, closeKind: "buyback", closeDate: "2026-06-02",
+        contracts: 1, settlementCurrency: "JPY", source: "manual",
+      }],
+    });
     expect(getOptionCloseCompletion(twoLegs)).toMatchObject({ state: "partial", remainingContracts: 1 });
     expect(getOptionCloseCompletion({ ...twoLegs, optionCloseExecutions: [{ ...twoLegs.optionCloseExecutions![0], contracts: 2 }] })).toMatchObject({ state: "invalid" });
-    const completeExpired = openPutSimulation({ optionCloseExecutions: [{ id: "expire", legId: "put-p200", closeKind: "expired", confirmed: true, closeDate: "2026-06-05", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
-    expect(getOptionCloseCompletion(completeExpired)).toMatchObject({ state: "complete", terminalStatus: "expired" });
+    expect(getOptionCloseCompletion({ ...twoLegs, optionCloseExecutions: [{ ...twoLegs.optionCloseExecutions![0], contracts: 0 }] })).toMatchObject({ state: "invalid" });
   });
-  it("exposes confirmed quantities per leg and leaves unconfirmed drafts out of progress", () => {
-    const simulation = openPutSimulation({ optionLegs: [{ ...putLeg, id: "call", type: "call", side: "buy", quantity: 1 }, { ...putLeg, id: "put", type: "put", side: "sell", quantity: 2 }], optionCloseExecutions: [{ id: "call-close", legId: "call", closeKind: "buyback", confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "JPY", source: "manual" }, { id: "put-draft", legId: "put", closeKind: "buyback", confirmed: false, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
-    expect(getOptionLegCloseProgress(simulation).legs).toEqual(expect.arrayContaining([expect.objectContaining({ legId: "call", state: "closed", remainingContracts: 0 }), expect.objectContaining({ legId: "put", state: "open", remainingContracts: 2 })]));
+
+  it("returns confirmed close progress per leg without treating unconfirmed drafts as closed", () => {
+    const composite = openPutSimulation({
+      optionLegs: [
+        { ...putLeg, id: "closed-call", type: "call", side: "buy", quantity: 1 },
+        { ...putLeg, id: "remaining-put", type: "put", side: "sell", quantity: 2 },
+      ],
+      optionCloseExecutions: [
+        { id: "close-call", legId: "closed-call", closeKind: "buyback", confirmed: true, closeDate: "2026-06-02", contracts: 1, settlementCurrency: "JPY", source: "manual" },
+        { id: "draft-put", legId: "remaining-put", closeKind: "buyback", confirmed: false, closeDate: "2026-06-03", contracts: 1, settlementCurrency: "JPY", source: "manual" },
+      ],
+    });
+    expect(getOptionLegCloseProgress(composite).legs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ legId: "closed-call", state: "closed", openedContracts: 1, confirmedClosedContracts: 1, remainingContracts: 0 }),
+      expect.objectContaining({ legId: "remaining-put", state: "open", openedContracts: 2, confirmedClosedContracts: 0, remainingContracts: 2 }),
+    ]));
+  });
+
+  it("keeps an activity-confirmed close out of formal completion while removing only that leg operationally", () => {
+    const composite = openPutSimulation({
+      optionLegs: [
+        { ...putLeg, id: "activity-call", type: "call", side: "buy", quantity: 1 },
+        { ...putLeg, id: "remaining-put", type: "put", side: "sell", quantity: 1 },
+      ],
+      optionCloseExecutions: [{
+        id: "activity-close", legId: "activity-call", confirmed: false, closeDate: "2026-06-02", contracts: 1,
+        settlementCurrency: "JPY", source: "saxo_order_activity", confirmationStatus: "pending",
+        executionEvidenceStatus: "user_confirmed_pending_accounting", accountingStatus: "pending",
+      }],
+    });
+    expect(getOptionLegCloseProgress(composite).legs.find((leg) => leg.legId === "activity-call")).toMatchObject({ state: "open", remainingContracts: 1 });
+    expect(getOptionLegOperationalCloseProgress(composite).legs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ legId: "activity-call", state: "closed", remainingContracts: 0 }),
+      expect.objectContaining({ legId: "remaining-put", state: "open", remainingContracts: 1 }),
+    ]));
+    expect(getOptionCloseCompletion(composite)).toMatchObject({ state: "none" });
+  });
+
+  it("marks a fully expired position expired and a mixed close closed", () => {
+    const expired = openPutSimulation({ optionCloseExecutions: [{ id: "expired", legId: "put-p200", closeKind: "expired", confirmed: true, closeDate: "2026-06-05", contracts: 1, settlementCurrency: "JPY", source: "manual" }] });
+    expect(getOptionCloseCompletion(expired)).toMatchObject({ state: "complete", terminalStatus: "expired" });
+    const mixed = openPutSimulation({
+      optionLegs: [{ ...putLeg, id: "put-a", quantity: 1 }, { ...putLeg, id: "call-b", type: "call", quantity: 1 }],
+      optionCloseExecutions: [
+        { id: "expired-a", legId: "put-a", closeKind: "expired", confirmed: true, closeDate: "2026-06-05", contracts: 1, settlementCurrency: "JPY", source: "manual" },
+        { id: "buyback-b", legId: "call-b", closeKind: "buyback", confirmed: true, closeDate: "2026-06-05", contracts: 1, settlementCurrency: "JPY", source: "manual" },
+      ],
+    });
+    expect(getOptionCloseCompletion(mixed)).toMatchObject({ state: "complete", terminalStatus: "closed" });
   });
   it("autofills deterministic N account short put close P/L from the shared calculation", () => {
     const simulation = openPutSimulation({
@@ -268,20 +366,6 @@ describe("Saxo history close execution validation", () => {
 
     expect(sanitized.optionCloseExecutions?.[0]?.confirmationStatus).toBe("invalid");
     expect(sanitized.optionCloseExecutions?.[0]?.invalidReason).toContain("別の建玉");
-  });
-
-  it("keeps activity-confirmed quantity operational only until accounting is formally confirmed", () => {
-    const simulation = openPutSimulation({
-      optionLegs: [{ ...putLeg, id: "activity-put", quantity: 1 }],
-      optionCloseExecutions: [{
-        id: "activity-close", legId: "activity-put", confirmed: false, closeDate: "2026-06-02", contracts: 1,
-        settlementCurrency: "JPY", source: "saxo_order_activity", confirmationStatus: "pending",
-        executionEvidenceStatus: "user_confirmed_pending_accounting", accountingStatus: "pending",
-      }],
-    });
-    expect(getOptionLegCloseProgress(simulation).legs[0]).toMatchObject({ state: "open", remainingContracts: 1 });
-    expect(getOptionLegOperationalCloseProgress(simulation).legs[0]).toMatchObject({ state: "closed", remainingContracts: 0 });
-    expect(getOptionCloseCompletion(simulation)).toMatchObject({ state: "none" });
   });
 
   it("does not validate Saxo close drafts without their source history id", () => {

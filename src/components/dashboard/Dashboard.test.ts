@@ -73,16 +73,29 @@ afterEach(() => {
 
 describe("synthetic leg history", () => {
   it("shows bear put spread P/L and period return as the primary dashboard decision", () => {
-    const simulation = createSimulation({ ticker: "TEST", strategyType: "bear_put_spread", entryDate: "2026-09-01", expiryDate: "2026-10-02", optionLegs: [{ id: "long", type: "put", side: "buy", strikeUSD: 100, premiumUSD: 4.92, quantity: 1, contractSize: 100, expiryDate: "2026-10-02", closeCostUSD: 4.5, closePlan: { enabled: true, closePriceUSD: 4.5, commissionUSD: 2.24 } }, { id: "short", type: "put", side: "sell", strikeUSD: 90, premiumUSD: 0.92, quantity: 1, contractSize: 100, expiryDate: "2026-10-02", closeCostUSD: 0.7, closePlan: { enabled: true, closePriceUSD: 0.7, commissionUSD: 2.24 } }], optionEntryExecutions: [{ id: "el", legId: "long", tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 4.92, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }, { id: "es", legId: "short", tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 0.92, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true }] });
+    const simulation = createSimulation({
+      ticker: "TEST", strategyType: "bear_put_spread", entryDate: "2026-09-01", expiryDate: "2026-10-02",
+      optionLegs: [
+        { id: "long", type: "put", side: "buy", strikeUSD: 100, premiumUSD: 4.92, quantity: 1, contractSize: 100, expiryDate: "2026-10-02", closeCostUSD: 4.5, closePlan: { enabled: true, closePriceUSD: 4.5, commissionUSD: 2.24 } },
+        { id: "short", type: "put", side: "sell", strikeUSD: 90, premiumUSD: 0.92, quantity: 1, contractSize: 100, expiryDate: "2026-10-02", closeCostUSD: 0.7, closePlan: { enabled: true, closePriceUSD: 0.7, commissionUSD: 2.24 } },
+      ],
+      optionEntryExecutions: [
+        { id: "el", legId: "long", tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 4.92, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
+        { id: "es", legId: "short", tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 0.92, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
+      ],
+    });
     const onPositionFocus = vi.fn();
     const { rerender } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onPositionFocus }));
-    expect(screen.getByText("ベア・プット・スプレッド")).toBeTruthy();
+    expect(screen.getByText("2脚の組み合わせ")).toBeTruthy();
+    expect(screen.getByText(/概算損益/)).toBeTruthy();
+    expect(screen.getAllByText(/期間損益率/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "戦略の決済を確認" })).toBeTruthy();
     fireEvent.click(screen.getByLabelText("TESTの詳細を表示する"));
     expect(onPositionFocus).toHaveBeenCalledWith(simulation.id);
     rerender(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), positionFocusSimulationId: simulation.id, onPositionFocus }));
-    expect(screen.getByTestId("bear-put-spread-focus-detail")).toHaveTextContent("高ストライクP買い");
-    expect(screen.getByTestId("bear-put-spread-focus-detail")).toHaveTextContent("低ストライクP売り");
+    // The real App renders one responsive parent preview outside this wide
+    // table; Dashboard must not duplicate that three-card summary.
+    expect(screen.queryByTestId("bear-put-spread-focus-detail")).toBeNull();
   });
   it("shows one confirmed closed leg in history and opens its exact execution", () => {
     const action = vi.fn();
@@ -143,33 +156,43 @@ describe("synthetic leg history", () => {
     expect(row?.textContent).not.toContain("現在株価");
     expect(row?.textContent).not.toContain("税後参考未確定");
     expect(screen.getAllByText(/N口座の実現損益は米ドル建て・手数料控除後・税引前/)).toHaveLength(1);
+    const stableHistory = ["実現利益+$1,505.52", "+190.0%", "年率換算（参考）+5,335.6%保有13日"];
     rerender(createElement(Dashboard, {
       simulations: [{ ...simulation, currentPriceUSD: 999 }], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs,
       historyOpen: true, onHistoryOpenChange: vi.fn(), currentEstimateFxQuote: { pair: "USDJPY", rate: 180, date: "2026-09-11", fetchedAt: "2026-09-11T00:00:00Z", source: "frankfurter" },
     }));
     const rerenderedRow = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("XYZ"));
-    ["実現利益+$1,505.52", "+190.0%", "年率換算（参考）+5,335.6%保有13日"].forEach((text) => expect(rerenderedRow?.textContent).toContain(text));
+    stableHistory.forEach((text) => expect(rerenderedRow?.textContent).toContain(text));
     expect(rerenderedRow?.textContent).not.toContain("現在株価");
   });
 
-  it("keeps signed losses and P/JPY history while hiding active market comparisons", () => {
-    const loss = createSimulation({
-      status: "closed", ticker: "LOSS", strategyType: "long_put",
+  it("keeps the minus sign and labels an N/USD realized loss explicitly", () => {
+    const simulation = createSimulation({
+      status: "closed",
+      ticker: "LOSS",
+      strategyType: "long_put",
+      entryDate: "2025-03-10",
       optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", side: "buy", premiumUSD: 1, quantity: 1, assignmentPolicy: "avoid" }],
       optionEntryExecutions: [{ id: "entry", legId: "put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
       optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2025-03-23", contracts: 1, closePriceUSD: 0.3, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: -74.48, source: "manual", confirmed: true }],
     });
-    const { container } = render(createElement(Dashboard, { simulations: [loss], selectedId: loss.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn() }));
-    const lossRow = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("LOSS"));
-    expect(lossRow?.textContent).toContain("実現損失-$74.48");
-    expect(lossRow?.textContent).not.toContain("現在株価");
-    expect(lossRow?.textContent).not.toContain("出口ルール");
+    const { container } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn() }));
+    const row = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("LOSS"));
+    expect(row?.textContent).toContain("実現損失-$74.48");
+    expect(row?.textContent).not.toContain("現在株価");
+    expect(row?.textContent).toContain("警告なし");
+    expect(row?.textContent).not.toContain("出口ルール");
   });
 
-  it("keeps P/JPY realized history primary without current stock price", () => {
+  it("keeps P/JPY realized history primary and hides active market comparisons", () => {
     const simulation = createSimulation({
-      status: "closed", ticker: "JPYC", strategyType: "long_call", accountCode: "P",
-      accountEnvironment: "PROD_P_JPY_SETTLEMENT", accountCurrency: "JPY", currentPriceUSD: 300,
+      status: "closed",
+      ticker: "JPYC",
+      strategyType: "long_call",
+      accountCode: "P",
+      accountEnvironment: "PROD_P_JPY_SETTLEMENT",
+      accountCurrency: "JPY",
+      currentPriceUSD: 300,
       optionLegs: [{ ...createSimulation().optionLegs[0], id: "call", type: "call", side: "buy", strikeUSD: 220, premiumUSD: 2, quantity: 1 }],
       optionEntryExecutions: [{ id: "entry", legId: "call", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 2, settlementCurrency: "JPY", brokerBookedAmountJPY: -32_000, source: "manual", confirmed: true }],
       optionCloseExecutions: [{ id: "close", legId: "call", closeKind: "buyback", closeDate: "2025-03-23", contracts: 1, closePriceUSD: 3, settlementCurrency: "JPY", brokerRealizedPnlJPY: 12_345, source: "manual", confirmed: true }],
@@ -179,6 +202,7 @@ describe("synthetic leg history", () => {
     expect(row?.textContent).toContain("実現利益+12,345円");
     expect(row?.textContent).toContain("契約C $220.00");
     expect(row?.textContent).not.toContain("現在株価");
+    expect(row?.textContent).not.toContain("+$80.00");
   });
 });
 
@@ -468,11 +492,15 @@ describe("Dashboard close decision actions", () => {
     }));
 
     const positionRow = document.querySelector('tr[aria-label="PGRの詳細を表示する"]')!;
+    expect(positionRow).toHaveClass("bg-white");
+    expect(positionRow).toHaveAttribute("aria-selected", "false");
     fireEvent.click(positionRow);
     expect(onFocus).toHaveBeenCalledWith(selected.id);
 
     fireEvent.keyDown(positionRow, { key: "Enter" });
     expect(onFocus).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(positionRow, { key: " " });
+    expect(onFocus).toHaveBeenCalledTimes(3);
 
     rerender(createElement(Dashboard, {
       simulations: [selected, other],
@@ -492,8 +520,41 @@ describe("Dashboard close decision actions", () => {
     expect(screen.getByText("PGRを確認中")).toBeTruthy();
     expect(screen.getByText("他1件を非表示")).toBeTruthy();
     expect(screen.queryByText("OTHER")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "全建玉一覧に戻る" }));
+    const focusedRow = document.querySelector('tr[aria-label="PGRの詳細を閉じる"]')!;
+    expect(focusedRow).toHaveAttribute("aria-selected", "true");
+    expect(focusedRow).toHaveClass("bg-emerald-100");
+    fireEvent.click(focusedRow);
     expect(onClearPositionFocus).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "全建玉一覧に戻る" }));
+    expect(onClearPositionFocus).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not toggle position focus from nested edit and delete controls", () => {
+    const onFocus = vi.fn();
+    const onEdit = vi.fn();
+    const onDelete = vi.fn();
+    const simulation = createSimulation({ id: "sim-controls", ticker: "CTRL" });
+
+    render(createElement(Dashboard, {
+      simulations: [simulation],
+      selectedId: simulation.id,
+      onSelect: vi.fn(),
+      onEdit,
+      onDelete,
+      workspace: "live",
+      accountInputs,
+      historyOpen: false,
+      onHistoryOpenChange: vi.fn(),
+      onPositionFocus: onFocus,
+    }));
+
+    fireEvent.click(screen.getByTitle("この建玉を編集"));
+    fireEvent.click(screen.getByTitle("この建玉を削除"));
+    fireEvent.keyDown(screen.getByTitle("この建玉を編集"), { key: "Enter" });
+    fireEvent.keyDown(screen.getByTitle("この建玉を削除"), { key: " " });
+    expect(onEdit).toHaveBeenCalledWith(simulation.id);
+    expect(onDelete).toHaveBeenCalledWith(simulation.id);
+    expect(onFocus).not.toHaveBeenCalled();
   });
 
   it("calls the workflow action from the next-action close decision button without selecting only the row", () => {
@@ -598,7 +659,9 @@ describe("Dashboard close decision actions", () => {
   it("offers a direct 3-A review for a historical long-option entry conflict", () => {
     const onHistoryEntryAction = vi.fn();
     const simulation = createSimulation({
-      status: "closed", ticker: "ABC", strategyType: "long_put",
+      status: "closed",
+      ticker: "ABC",
+      strategyType: "long_put",
       optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", type: "put", side: "buy", quantity: 1 }],
       optionEntryExecutions: [
         { id: "entry-a", legId: "put", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true },
@@ -606,7 +669,10 @@ describe("Dashboard close decision actions", () => {
       ],
       optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2026-08-05", contracts: 1, closePriceUSD: 1.5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 45.52, source: "manual", confirmed: true }],
     });
-    render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn(), onHistoryEntryAction }));
+    render(createElement(Dashboard, {
+      simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs,
+      historyOpen: true, onHistoryOpenChange: vi.fn(), onHistoryEntryAction,
+    }));
     expect(screen.getAllByText("開始約定の数量超過（証跡未照合）").length).toBeGreaterThan(0);
     expect(screen.queryByText("完了（追加操作なし）")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "購入時約定を確認" }));

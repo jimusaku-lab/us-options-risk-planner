@@ -1,9 +1,7 @@
 import type { OptionEntryExecution, OptionLeg, TradeSimulation } from "@/types/domain";
 import { formatLocalDate } from "@/lib/date";
-import { getCanonicalOptionEntryExecutions } from "./optionEntryExecutions";
 import { calculateOptionCloseExecutionResult, getOptionLegCloseProgress } from "./optionCloseExecutions";
-
-const EPSILON = 0.0001;
+import { activeSpreadCloses, activeSpreadEntries, moneyProduct, moneySum, spreadCloseMoney, spreadEntryBasis, spreadFinalCashflow } from "./spreadCashflows";
 
 export type BearPutSpreadValidation =
   | { valid: true; longPut: OptionLeg; shortPut: OptionLeg; contractSize: number; contracts: number }
@@ -17,7 +15,7 @@ export type BearPutSpreadLifecycle = {
 };
 
 export type BearPutSpreadEstimate =
-  | { kind: "missing"; lifecycle: BearPutSpreadLifecycle; reasons: string[] }
+  | { kind: "missing"; lifecycle: BearPutSpreadLifecycle; reasons: string[]; entryAllInDebitUSD?: number; realizedPnlUSD?: number }
   | {
       kind: "available";
       lifecycle: BearPutSpreadLifecycle;
@@ -53,20 +51,21 @@ export function validateBearPutSpread(simulation: TradeSimulation): BearPutSprea
   if (!positiveInteger(longPut.quantity) || !positiveInteger(shortPut.quantity) || longPut.quantity !== shortPut.quantity) reasons.push("両脚は同じ正の整数契約数である必要があります");
   if (!positiveInteger(longPut.contractSize) || !positiveInteger(shortPut.contractSize) || longPut.contractSize !== shortPut.contractSize) reasons.push("両脚の明示的な契約倍率が必要です");
   if (simulation.accountCurrency !== "USD") reasons.push("現時点のBear Put Spread実績計算はUSD口座だけに対応します");
+  if (longPut.saxoAccountKey && shortPut.saxoAccountKey && longPut.saxoAccountKey !== shortPut.saxoAccountKey) reasons.push("両脚の口座が一致していません");
   return reasons.length > 0
     ? { valid: false, reasons }
     : { valid: true, longPut, shortPut, contractSize: longPut.contractSize!, contracts: longPut.quantity };
 }
 
 function confirmedEntriesForLeg(simulation: TradeSimulation, leg: OptionLeg): OptionEntryExecution[] {
-  return getCanonicalOptionEntryExecutions(simulation).filter((entry) => entry.confirmed && entry.legId === leg.id);
+  return activeSpreadEntries(simulation, leg);
 }
 
 function hasCompleteEntry(simulation: TradeSimulation, leg: OptionLeg): boolean {
   const entries = confirmedEntriesForLeg(simulation, leg);
   return entries.length > 0 &&
     entries.reduce((sum, entry) => sum + entry.contracts, 0) === leg.quantity &&
-    entries.every((entry) => entry.settlementCurrency === "USD" && Number.isFinite(entry.fillPriceUSD) && entry.fillPriceUSD > 0 && entry.commissionUSD !== undefined && Number.isFinite(entry.commissionUSD));
+    entries.every((entry) => entry.settlementCurrency === "USD" && Number.isFinite(entry.fillPriceUSD) && entry.fillPriceUSD >= 0);
 }
 
 export function getBearPutSpreadLifecycle(simulation: TradeSimulation): BearPutSpreadLifecycle {
@@ -87,23 +86,19 @@ export function getBearPutSpreadLifecycle(simulation: TradeSimulation): BearPutS
 
 function entryEconomics(simulation: TradeSimulation, leg: OptionLeg, multiplier: number) {
   const entries = confirmedEntriesForLeg(simulation, leg);
-  if (!hasCompleteEntry(simulation, leg)) return undefined;
-  const premium = entries.reduce((sum, entry) => sum + entry.fillPriceUSD * entry.contracts * multiplier, 0);
-  const fees = entries.reduce((sum, entry) => sum + Math.abs(entry.commissionUSD!), 0);
+  if (!hasCompleteEntry(simulation, leg) || entries.some(entry => entry.commissionUSD === undefined || !Number.isFinite(entry.commissionUSD))) return undefined;
+  const premium = moneySum(...entries.map(entry => moneyProduct(entry.fillPriceUSD, entry.contracts, multiplier)));
+  const fees = moneySum(...entries.map(entry => entry.commissionUSD!));
   return { total: leg.side === "buy" ? premium + fees : premium - fees, perContract: (leg.side === "buy" ? premium + fees : premium - fees) / leg.quantity };
 }
 
 function explicitRealizedPnlUSD(simulation: TradeSimulation): number | undefined {
-  const confirmed = (simulation.optionCloseExecutions ?? []).filter((execution) => execution.confirmed);
+  const confirmed = activeSpreadCloses(simulation);
   let total = 0;
   for (const execution of confirmed) {
-    if (execution.realizedPnlUSD !== undefined && Number.isFinite(execution.realizedPnlUSD)) {
-      total += execution.realizedPnlUSD;
-      continue;
-    }
     const result = calculateOptionCloseExecutionResult(simulation, execution);
     if (!result || result.currency !== "USD" || !Number.isFinite(result.realizedPnlUSD)) return undefined;
-    total += result.realizedPnlUSD;
+    total = moneySum(total, result.realizedPnlUSD);
   }
   return total;
 }
@@ -123,10 +118,11 @@ export function calculateBearPutSpreadEstimate(simulation: TradeSimulation, asOf
   const longEntry = entryEconomics(simulation, validation.longPut, validation.contractSize);
   const shortEntry = entryEconomics(simulation, validation.shortPut, validation.contractSize);
   if (!longEntry || !shortEntry) return { kind: "missing", lifecycle, reasons: ["建玉時実績 未確認"] };
-  const entryAllInDebitUSD = longEntry.total - shortEntry.total;
-  if (!(entryAllInDebitUSD > 0)) return { kind: "missing", lifecycle, reasons: ["建玉時ネット支払額を確認できません"] };
-  const realizedPnlUSD = explicitRealizedPnlUSD(simulation);
-  if (realizedPnlUSD === undefined) return { kind: "missing", lifecycle, reasons: ["決済済み脚の実現損益 未確認"] };
+  const basis = spreadEntryBasis(simulation);
+  if (basis.state !== "known") return { kind: "missing", lifecycle, reasons: [basis.reason] };
+  const entryAllInDebitUSD = basis.value;
+  const realizedPnlUSD = explicitRealizedPnlUSD(simulation) ?? (lifecycle.state === "closed" ? spreadFinalCashflow(simulation) : undefined);
+  if (realizedPnlUSD === undefined) return { kind: "missing", lifecycle, entryAllInDebitUSD, reasons: ["決済済み脚の実現損益・開始ロット割当 未確認"] };
   const progress = getOptionLegCloseProgress(simulation);
   const remaining = [validation.longPut, validation.shortPut].map((leg) => ({ leg, remainingContracts: progress.legs.find((item) => item.legId === leg.id)?.remainingContracts ?? 0 }));
   const evaluatedLegs: Extract<BearPutSpreadEstimate, { kind: "available" }>["evaluatedLegs"] = [];
@@ -136,20 +132,27 @@ export function calculateBearPutSpreadEstimate(simulation: TradeSimulation, asOf
   for (const item of remaining.filter((value) => value.remainingContracts > 0)) {
     const price = item.leg.closePlan?.closePriceUSD ?? item.leg.closeCostUSD;
     const fee = item.leg.closePlan?.commissionUSD;
-    if (!(price !== undefined && Number.isFinite(price) && price > 0)) reasons.push(`${item.leg.side === "buy" ? "P買い売却" : "P売り買戻し"}価格 未確認`);
-    if (!(fee !== undefined && Number.isFinite(fee) && fee >= 0)) reasons.push(`${item.leg.side === "buy" ? "P買い" : "P売り"}決済想定手数料 未確認`);
+    if (!(price !== undefined && Number.isFinite(price) && price >= 0)) reasons.push(`${item.leg.side === "buy" ? "P買い売却" : "P売り買戻し"}価格 未確認`);
+    if (!(fee !== undefined && Number.isFinite(fee))) reasons.push(`${item.leg.side === "buy" ? "P買い" : "P売り"}決済想定手数料 未確認`);
     if (reasons.length > 0) continue;
-    const allocatedFee = fee! * item.remainingContracts / item.leg.quantity;
-    const gross = price! * validation.contractSize * item.remainingContracts;
-    closeNetProceedsUSD += item.leg.side === "buy" ? gross - allocatedFee : -(gross + allocatedFee);
+    if (item.leg.closePlan?.commissionContracts !== undefined && item.leg.closePlan.commissionContracts !== item.remainingContracts) { reasons.push("決済想定手数料の対象数量が一致していません"); continue; }
+    const allocatedFee = fee!;
+    const gross = moneyProduct(price!, validation.contractSize, item.remainingContracts);
+    closeNetProceedsUSD = moneySum(closeNetProceedsUSD, item.leg.side === "buy" ? gross : -gross, -allocatedFee);
     const entry = item.leg.id === validation.longPut.id ? longEntry : shortEntry;
-    remainingEntryBasisUSD += item.leg.side === "buy" ? entry.perContract * item.remainingContracts : -entry.perContract * item.remainingContracts;
+    const closedBasis = activeSpreadCloses(simulation).filter(close => close.legId === item.leg.id).map(close => spreadCloseMoney(simulation, close)?.entryDebitUSD);
+    if (closedBasis.some(value => value === undefined)) { reasons.push("開始ロット割当 未確認"); continue; }
+    remainingEntryBasisUSD = moneySum(remainingEntryBasisUSD, item.leg.side === "buy" ? entry.total : -entry.total, ...closedBasis.map(value => -value!));
     evaluatedLegs.push({ legId: item.leg.id, label: item.leg.side === "buy" ? "高ストライクP買い" : "低ストライクP売り", remainingContracts: item.remainingContracts, closePriceUSD: price!, closeFeeUSD: allocatedFee });
   }
-  if (reasons.length > 0) return { kind: "missing", lifecycle, reasons: Array.from(new Set(reasons)) };
-  const remainingEstimatedPnlUSD = closeNetProceedsUSD - remainingEntryBasisUSD;
-  const totalEstimatedPnlUSD = realizedPnlUSD + remainingEstimatedPnlUSD;
-  const periodReturnPct = totalEstimatedPnlUSD / entryAllInDebitUSD * 100;
-  const days = holdingDays(simulation.entryDate, asOfDate);
+  if (reasons.length > 0) return { kind: "missing", lifecycle, entryAllInDebitUSD, realizedPnlUSD, reasons: Array.from(new Set(reasons)) };
+  const remainingEstimatedPnlUSD = moneySum(closeNetProceedsUSD, -remainingEntryBasisUSD);
+  const totalEstimatedPnlUSD = moneySum(realizedPnlUSD, remainingEstimatedPnlUSD);
+  const periodReturnPct = entryAllInDebitUSD > 0 ? totalEstimatedPnlUSD / entryAllInDebitUSD * 100 : Number.NaN;
+  const entryDates = simulation.optionLegs.flatMap(leg => activeSpreadEntries(simulation, leg).map(entry => entry.tradeDate));
+  const closes = activeSpreadCloses(simulation);
+  const singleCohort = entryDates.length === 2 && entryDates.every(date => date && date === entryDates[0]);
+  const simultaneousClose = lifecycle.state === "closed" && closes.length === 2 && closes.every(close => close.closeDate === closes[0].closeDate);
+  const days = singleCohort && (lifecycle.state === "open" || simultaneousClose) ? holdingDays(entryDates[0], simultaneousClose ? closes[0].closeDate : asOfDate) : undefined;
   return { kind: "available", lifecycle, currency: "USD", entryAllInDebitUSD, remainingEntryBasisUSD, closeNetProceedsUSD, remainingEstimatedPnlUSD, realizedPnlUSD, totalEstimatedPnlUSD, periodReturnPct, annualizedReturnPct: days ? periodReturnPct * 365 / days : undefined, holdingDays: days, evaluatedLegs };
 }

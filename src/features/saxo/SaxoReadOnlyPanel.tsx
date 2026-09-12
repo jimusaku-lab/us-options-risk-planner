@@ -1,4 +1,7 @@
 import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { SpreadStrategyCandidates } from "./SpreadStrategyCandidates";
+import { reconcileStrategyCandidates } from "./spreadStrategyImport";
+import { emptyStrategyLedger, type PreparedStrategyImport, type StrategyCoverage, type StrategyLedger } from "@/domain/strategyLedger";
 import { Ban, Cable, CheckCircle2, Clipboard, Download, Eye, FilePlus2, Link2, LogOut, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import {
   disableSaxoPersistence,
@@ -158,6 +161,8 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft,
   onCreateAssignmentDraft,
   onCreatePositionDraft,
+  strategyLedger,
+  onCommitSpread,
   onCreateSyntheticForwardDraft,
   onRecoverSyntheticForwardDraft,
   onLinkPositionToExisting,
@@ -186,6 +191,8 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[], historyFetchState?: OpeningHistoryFetchState) => void;
+  strategyLedger?: StrategyLedger;
+  onCommitSpread?: (prepared: PreparedStrategyImport, requestRevision: number) => Promise<{ reasons?: string[] }>;
   onCreateSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[], options?: { forceEntryConfirmation?: boolean }) => void;
   onRecoverSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[]) => void;
   onLinkPositionToExisting?: (position: SaxoApiPositionSnapshot, simulation: TradeSimulation, historyItems?: SaxoHistoryDiscoveryItem[], historyFetchState?: OpeningHistoryFetchState) => boolean | void;
@@ -221,6 +228,9 @@ export function SaxoReadOnlyPanel({
   const [historyEndpoints, setHistoryEndpoints] = useState<SaxoHistoryDiscoveryEndpoint[]>([]);
   const [historyFetchedAt, setHistoryFetchedAt] = useState("");
   const [historyFetchOutcome, setHistoryFetchOutcome] = useState<"pending" | "ready" | "failed">("pending");
+  const spreadRequest = useRef(0);
+  const [spreadRequestRevision, setSpreadRequestRevision] = useState(0);
+  const [spreadCoverage, setSpreadCoverage] = useState<StrategyCoverage[]>([]);
   const [expandedPositionId, setExpandedPositionId] = useState("");
   const [highlightedPositionId, setHighlightedPositionId] = useState("");
   const [expandedOrderId, setExpandedOrderId] = useState("");
@@ -351,6 +361,12 @@ export function SaxoReadOnlyPanel({
     () => createEffectiveSaxoHistoryCandidates(historyEndpoints.flatMap((endpoint) => endpoint.items ?? [])),
     [historyEndpoints],
   );
+  const spreadCandidates = useMemo(() => reconcileStrategyCandidates({
+    environment: status?.environment ?? "unknown", requestRevision: spreadRequestRevision,
+    positions: mappedPositions, history: historyEndpoints.flatMap(endpoint => endpoint.items ?? []),
+    orders: orders.flatMap(order => order.orderId && order.multiLegOrderId && order.multiLegOrderIdSourceField ? [{ accountKey: order.accountKey, orderId: order.orderId, parentOrderId: order.multiLegOrderId, sourceField: order.multiLegOrderIdSourceField }] : []),
+    coverage: isLoading ? [] : spreadCoverage,
+  }, strategyLedger ?? emptyStrategyLedger(), simulations), [status?.environment, spreadRequestRevision, mappedPositions, historyEndpoints, orders, spreadCoverage, isLoading, strategyLedger, simulations]);
   const effectiveHistoryEndpoints = useMemo(
     () => createEffectiveHistoryEndpoints(historyEndpoints, effectiveHistoryItems),
     [effectiveHistoryItems, historyEndpoints],
@@ -764,6 +780,7 @@ export function SaxoReadOnlyPanel({
   }
 
   async function loadPositions() {
+    spreadRequest.current += 1; setSpreadRequestRevision(spreadRequest.current); setSpreadCoverage([]);
     if (localApiDown) {
       setMessage("SaxoローカルAPIが起動していません。先にローカルAPIを起動してください。");
       return;
@@ -784,6 +801,7 @@ export function SaxoReadOnlyPanel({
   }
 
   async function loadOrders() {
+    spreadRequest.current += 1; setSpreadRequestRevision(spreadRequest.current); setSpreadCoverage([]);
     if (localApiDown) {
       setMessage("SaxoローカルAPIが起動していません。先にローカルAPIを起動してください。");
       return;
@@ -804,6 +822,7 @@ export function SaxoReadOnlyPanel({
   }
 
   async function loadHistoryDiscovery() {
+    spreadRequest.current += 1; setSpreadRequestRevision(spreadRequest.current); setSpreadCoverage([]);
     if (localApiDown) {
       setMessage("SaxoローカルAPIが起動していません。先にローカルAPIを起動してください。");
       return;
@@ -832,6 +851,10 @@ export function SaxoReadOnlyPanel({
       return;
     }
     setIsLoading(true);
+    const requestRevision = ++spreadRequest.current;
+    setSpreadRequestRevision(requestRevision);
+    setSpreadCoverage([]);
+    const coverage: StrategyCoverage[] = [];
     setHistoryFetchOutcome("pending");
     const failures: string[] = [];
     try {
@@ -848,6 +871,8 @@ export function SaxoReadOnlyPanel({
       }
       try {
         const positionsResponse = await fetchSaxoPositionsSnapshot();
+        if (spreadRequest.current !== requestRevision) return;
+        coverage.push({ source: "positions", asOf: positionsResponse.fetchedAt, completedPages: positionsResponse.coverage?.completedPages ?? 0, status: positionsResponse.coverage?.status ?? "partial" });
         setPositions(positionsResponse.positions);
         setPositionsFetchedAt(positionsResponse.fetchedAt);
       } catch (error) {
@@ -855,6 +880,8 @@ export function SaxoReadOnlyPanel({
       }
       try {
         const ordersResponse = await fetchSaxoOrdersSnapshot();
+        if (spreadRequest.current !== requestRevision) return;
+        coverage.push({ source: "orders", asOf: ordersResponse.fetchedAt, completedPages: ordersResponse.coverage?.completedPages ?? 0, status: ordersResponse.coverage?.status ?? "partial" });
         setOrders(ordersResponse.orders);
         setOrdersFetchedAt(ordersResponse.fetchedAt);
       } catch (error) {
@@ -862,6 +889,9 @@ export function SaxoReadOnlyPanel({
       }
       try {
         const historyResponse = await fetchSaxoHistoryDiscovery();
+        if (spreadRequest.current !== requestRevision) return;
+        const tradesSources = historyResponse.endpoints.filter(endpoint => /trades/i.test(endpoint.endpoint));
+        coverage.push(...tradesSources.map(endpoint => ({ source: endpoint.endpoint, asOf: historyResponse.fetchedAt, requestedFrom: historyResponse.fromDate, requestedTo: historyResponse.toDate, completedPages: endpoint.coverage?.completedPages ?? 0, status: endpoint.coverage?.status ?? "partial" as const })));
         const mappedEndpoints = enrichHistoryEndpointsWithAccountMappings(historyResponse.endpoints, mappings);
         setHistoryEndpoints(mappedEndpoints);
         setHistoryFetchedAt(historyResponse.fetchedAt);
@@ -871,12 +901,15 @@ export function SaxoReadOnlyPanel({
         failures.push(`履歴候補: ${error instanceof Error ? error.message : "失敗"}`);
       }
       await refreshStatus();
+      if (spreadRequest.current !== requestRevision) return;
+      if (coverage.length < 3 || coverage.some(source => source.status !== "complete")) failures.push("スプレッド照合に必要な取得ページが未完了です。まとめて取得を再実行してください");
+      setSpreadCoverage(coverage.length >= 3 && failures.length === 0 ? coverage : []);
       setMessage(
         failures.length > 0
           ? `まとめて取得は一部失敗しました。${failures.join(" / ")}。成功した取得値は保持しています。`
           : "まとめて取得が完了しました。反映待ちサマリーを確認してください。",
       );
-      window.setTimeout(() => pendingSummaryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      window.setTimeout(() => (document.querySelector('[aria-label="スプレッドの組み合わせ確認"]') ?? pendingSummaryRef.current)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } finally {
       setIsLoading(false);
     }
@@ -1193,6 +1226,10 @@ export function SaxoReadOnlyPanel({
               onLoadHistory={loadHistoryDiscovery}
               bulkFetchButtonRef={bulkFetchButtonRef}
             />
+            {onCommitSpread && spreadCandidates.length ? <div>
+              <p className="mb-2 text-sm font-bold text-indigo-900">次にすること: 下の2本を確認して、1つの戦略にまとめます。</p>
+              <SpreadStrategyCandidates candidates={spreadCandidates} ledger={strategyLedger ?? emptyStrategyLedger()} simulations={simulations} onCommit={onCommitSpread} />
+            </div> : null}
             <ReflectionPendingSummary
               ref={pendingSummaryRef}
               summary={reflectionSummary}
