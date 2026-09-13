@@ -76,7 +76,7 @@ it("counts an OCO pair as one actionable exit-rule review and exposes its direct
     ...sampleAmznSimulation,
     id: "anonymous-exit-rule", ticker: "SAMPLE", status: "open", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD",
     strategyType: "short_put",
-    optionLegs: [{ ...sampleAmznSimulation.optionLegs[0], id: "put-leg", type: "put", side: "sell", strikeUSD: 400, expiryDate: "2026-10-16", quantity: 1 }],
+    optionLegs: [{ ...sampleAmznSimulation.optionLegs[0], id: "put-leg", type: "put", side: "sell", saxoAccountKey: "anonymous", strikeUSD: 400, expiryDate: "2026-10-16", quantity: 1 }],
   };
   const base = {
     accountKey: "anonymous", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "SAMPLE/16V26P400:XCBF",
@@ -102,12 +102,12 @@ it("counts an OCO pair as one actionable exit-rule review and exposes its direct
 });
 
 it("classifies a working sell against one long call as an exit candidate, not a covered call", () => {
-  const position = { ...callPosition, uic: 55001, accountAssignment: "N" as const, symbol: "SAMPLE", underlyingSymbol: "SAMPLE", quantity: 1 };
+  const position = { ...callPosition, accountKey: "account", uic: 55001, accountAssignment: "N" as const, symbol: "SAMPLE", underlyingSymbol: "SAMPLE", quantity: 1 };
   const order: SaxoApiOrderSnapshot = { id: "TEST-order", accountKey: "account", accountAssignment: "N", assetType: "StockOption", uic: 55001, optionType: "call", side: "sell", quantity: 1, orderType: "StopIfTraded", status: "Working", openClose: "unknown", missingFields: [], fetchedAt: "2026-09-13T00:00:00Z" };
   expect(getSaxoOrderDisplayCategory(order, [position])).toBe("exit");
 });
 it("does not call an unproven call sell a covered call and blocks excess close quantity", () => {
-  const position = { ...callPosition, uic: 55001, accountAssignment: "N" as const, symbol: "SAMPLE", underlyingSymbol: "SAMPLE", quantity: 1 };
+  const position = { ...callPosition, accountKey: "account", uic: 55001, accountAssignment: "N" as const, symbol: "SAMPLE", underlyingSymbol: "SAMPLE", quantity: 1 };
   const base: SaxoApiOrderSnapshot = { id: "TEST-order", accountKey: "account", accountAssignment: "N", assetType: "StockOption", uic: 55001, optionType: "call", side: "sell", quantity: 1, orderType: "Limit", status: "Working", openClose: "unknown", missingFields: [], fetchedAt: "2026-09-13T00:00:00Z" };
   expect(getSaxoOrderDisplayCategory(base, [])).toBe("working");
   expect(getSaxoOrderDisplayCategory({ ...base, quantity: 2 }, [position])).toBe("exit_quantity_excess");

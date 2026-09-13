@@ -404,7 +404,7 @@ describe("SimulationEditor", () => {
     const initial: TradeSimulation = {
       ...buildAvoidAssignmentShortPutSimulation(),
       id: "anonymous-oco", ticker: "SAMPLE", status: "open", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD",
-      optionLegs: [{ id: "oco-put", type: "put", side: "sell", strikeUSD: 400, premiumUSD: 7.9, quantity: 1, expiryDate: "2026-10-16", putIntent: "avoid_assignment", assignmentPolicy: "avoid" }],
+      optionLegs: [{ id: "oco-put", type: "put", side: "sell", strikeUSD: 400, premiumUSD: 7.9, quantity: 1, expiryDate: "2026-10-16", putIntent: "avoid_assignment", assignmentPolicy: "avoid", saxoAccountKey: "anonymous-account" }],
     };
     const baseOrder = {
       accountKey: "anonymous-account", accountAssignment: "N" as const, accountCode: "N" as const, symbol: "SAMPLE/16V26P400:XCBF", assetType: "StockOption" as const,

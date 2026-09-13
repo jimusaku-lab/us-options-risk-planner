@@ -8,6 +8,7 @@ import type {
   StockAcquisition,
   TradeSimulation,
 } from "@/types/domain";
+import { getOptionLegCloseProgress } from "@/domain/optionCloseExecutions";
 
 export type SaxoEnvironment = "sim" | "live";
 export type SaxoMappedCode = SaxoAccountCode | "ignore" | "unmapped";
@@ -144,6 +145,7 @@ export type SaxoApiPositionSnapshot = {
   displayName?: string;
   accountAssignment: SaxoPositionAccountAssignment;
   accountCode?: SaxoAccountCode;
+  environment?: SaxoEnvironment;
   symbol?: string;
   underlyingName?: string;
   underlyingSymbol?: string;
@@ -750,6 +752,7 @@ export type SaxoApiOrderSnapshot = {
   displayName?: string;
   accountAssignment: SaxoPositionAccountAssignment;
   accountCode?: SaxoAccountCode;
+  environment?: SaxoEnvironment;
   symbol?: string;
   assetType?: string;
   quantity?: number;
@@ -1344,19 +1347,74 @@ export function findOrderCandidatesForLeg(
   leg: OptionLeg,
   orders: SaxoApiOrderSnapshot[],
 ): SaxoApiOrderSnapshot[] {
-  return orders.filter((order) => {
-    if (order.accountAssignment !== simulation.accountCode) return false;
-    const orderTicker = resolveSaxoOrderUnderlyingSymbol(order);
-    if (!orderTicker || orderTicker !== normalizeSymbol(simulation.ticker)) return false;
-    if (order.optionType !== leg.type) return false;
-    if (order.strike === undefined || Math.abs(order.strike - leg.strikeUSD) > 0.001) return false;
-    if (!order.expiry || normalizeDate(order.expiry) !== normalizeDate(leg.expiryDate)) return false;
-    const expectedCloseSide = leg.side === "sell" ? "buy" : "sell";
-    if (order.side !== expectedCloseSide) return false;
-    if (order.quantity === undefined || !Number.isFinite(order.quantity) || order.quantity <= 0 || order.quantity > leg.quantity) return false;
-    if (order.status?.toLowerCase() !== "working") return false;
-    return true;
+  if (orders.length === 0 || orders.every((order) => order.openClose === "open")) return [];
+  const progress = getOptionLegCloseProgress(simulation).legs.find((item) => item.legId === leg.id);
+  const accountKey = leg.saxoAccountKey ?? (simulation.optionLegs.length === 1 ? simulation.fixtureMeta?.saxoAccountKey : undefined);
+  const uic = leg.saxoUic ?? (simulation.optionLegs.length === 1 ? simulation.fixtureMeta?.saxoUic : undefined);
+  return orders.filter((order) => classifySaxoOrderRole(order, [{
+    id: leg.id,
+    accountAssignment: simulation.accountCode,
+    accountKey,
+    environment: simulation.fixtureMeta?.source === "live" ? "live" : simulation.fixtureMeta?.source === "demo" ? "sim" : undefined,
+    uic,
+    ticker: normalizeSymbol(simulation.ticker),
+    optionType: leg.type,
+    strike: leg.strikeUSD,
+    expiry: leg.expiryDate,
+    side: leg.side === "buy" ? "long" : "short",
+    remainingQuantity: progress?.remainingContracts,
+  }]).role === "exit");
+}
+
+export type SaxoOrderRoleTarget = {
+  id: string;
+  accountAssignment: SaxoPositionAccountAssignment;
+  accountKey?: string;
+  environment?: SaxoEnvironment | string;
+  uic?: number;
+  ticker?: string;
+  optionType?: "call" | "put" | "unknown";
+  strike?: number;
+  expiry?: string;
+  side: SaxoPositionSide;
+  remainingQuantity?: number;
+};
+
+export type SaxoOrderRoleResolution = {
+  role: "opening" | "exit" | "exit_quantity_excess" | "unknown";
+  matchedTargetId?: string;
+  evidence: "explicit_open" | "explicit_close" | "holding_match" | "insufficient";
+};
+
+/** One source of truth for display, counts and actionable exit reviews. */
+export function classifySaxoOrderRole(order: SaxoApiOrderSnapshot, targets: SaxoOrderRoleTarget[]): SaxoOrderRoleResolution {
+  const status = order.status?.toLowerCase() ?? "";
+  if (!status.includes("working")) return { role: "unknown", evidence: "insufficient" };
+  if (order.openClose === "open") return { role: "opening", evidence: "explicit_open" };
+  const orderTicker = resolveSaxoOrderUnderlyingSymbol(order);
+  const matching = targets.filter((target) => {
+    if (!order.accountKey || !target.accountKey || order.accountKey !== target.accountKey) return false;
+    if (order.accountAssignment !== target.accountAssignment || order.accountAssignment === "unassigned" || order.accountAssignment === "ignored") return false;
+    if (order.environment && target.environment && order.environment.toLowerCase() !== target.environment.toLowerCase()) return false;
+    if (order.uic !== undefined && target.uic !== undefined && order.uic !== target.uic) return false;
+    const uicConfirmed = order.uic !== undefined && target.uic !== undefined && order.uic === target.uic;
+    if (order.optionType !== target.optionType) return false;
+    if (!uicConfirmed) {
+      if (!orderTicker || !target.ticker || orderTicker !== normalizeSymbol(target.ticker)) return false;
+      if (!Number.isFinite(order.strike) || !Number.isFinite(target.strike) || Math.abs((order.strike ?? 0) - (target.strike ?? 0)) > 0.001) return false;
+      if (!order.expiry || !target.expiry || normalizeDate(order.expiry) !== normalizeDate(target.expiry)) return false;
+    }
+    const expectedCloseSide = target.side === "short" ? "buy" : target.side === "long" ? "sell" : undefined;
+    return expectedCloseSide !== undefined && order.side === expectedCloseSide;
   });
+  if (matching.length !== 1) return { role: order.openClose === "close" ? "exit_quantity_excess" : "unknown", evidence: "insufficient" };
+  const target = matching[0];
+  const orderQuantity = Math.abs(order.quantity ?? Number.NaN);
+  const remainingQuantity = target.remainingQuantity;
+  if (!Number.isFinite(orderQuantity) || orderQuantity <= 0 || !Number.isFinite(remainingQuantity) || (remainingQuantity ?? 0) <= 0 || orderQuantity > (remainingQuantity ?? 0)) {
+    return { role: "exit_quantity_excess", matchedTargetId: target.id, evidence: "insufficient" };
+  }
+  return { role: "exit", matchedTargetId: target.id, evidence: order.openClose === "close" ? "explicit_close" : "holding_match" };
 }
 
 /**

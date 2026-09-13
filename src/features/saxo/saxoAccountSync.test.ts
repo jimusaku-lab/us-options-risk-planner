@@ -888,7 +888,9 @@ describe("Saxo read-only account sync", () => {
   });
 
   it("finds Saxo exit order candidates for the matching option leg only", () => {
-    const simulation = createOpenPutSimulation();
+    const simulation = createOpenPutSimulation({
+      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], saxoAccountKey: "p-key" }],
+    });
     const orders: SaxoApiOrderSnapshot[] = [
       {
         id: "order-1",
@@ -942,7 +944,7 @@ describe("Saxo read-only account sync", () => {
       ticker: "SPGI",
       accountCode: "N" as const,
       accountEnvironment: "PROD_N_USD_SETTLEMENT" as const,
-      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], strikeUSD: 400, expiryDate: "2026-10-16", quantity: 1 }],
+      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], saxoAccountKey: "n-key", strikeUSD: 400, expiryDate: "2026-10-16", quantity: 1 }],
     };
     const base = {
       accountKey: "n-key",
@@ -977,7 +979,7 @@ describe("Saxo read-only account sync", () => {
       ticker: "SPGI",
       accountCode: "N" as const,
       accountEnvironment: "PROD_N_USD_SETTLEMENT" as const,
-      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], strikeUSD: 400, expiryDate: "2026-10-16", quantity: 1 }],
+      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], saxoAccountKey: "n-key", strikeUSD: 400, expiryDate: "2026-10-16", quantity: 1 }],
     };
     const base = {
       accountKey: "n-key", accountAssignment: "N" as const, accountCode: "N" as const,
@@ -1018,10 +1020,10 @@ describe("Saxo read-only account sync", () => {
       ticker: "ABC",
       accountCode: "N" as const,
       accountEnvironment: "PROD_N_USD_SETTLEMENT" as const,
-      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], id: "long-call", side: "buy" as const, type: "call" as const, strikeUSD: 55, expiryDate: "2026-10-16", quantity: 1 }],
+      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], id: "long-call", side: "buy" as const, type: "call" as const, saxoAccountKey: "fictional-n-key", strikeUSD: 55, expiryDate: "2026-10-16", quantity: 1 }],
     };
     const order: SaxoApiOrderSnapshot = {
-      id: "are-stop",
+      id: "fictional-stop",
       accountKey: "fictional-n-key",
       accountAssignment: "N",
       accountCode: "N",
@@ -1046,7 +1048,7 @@ describe("Saxo read-only account sync", () => {
         simulationId: simulation.id,
         legId: "long-call",
         status: "pending",
-        upperExitOrder: expect.objectContaining({ id: "are-stop" }),
+        upperExitOrder: expect.objectContaining({ id: "fictional-stop" }),
       }),
     ]);
   });

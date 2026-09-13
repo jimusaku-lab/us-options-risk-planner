@@ -24,6 +24,7 @@ import {
   getSaxoAccountReflectionBlockReason,
   applyPositionAccountMappings,
   applyOrderAccountMappings,
+  classifySaxoOrderRole,
   createSaxoPositionDraftSummary,
   createEffectiveSaxoHistoryCandidates,
   findEntryHistoryMatches,
@@ -791,7 +792,7 @@ export function SaxoReadOnlyPanel({
     setIsLoading(true);
     try {
       const response = await fetchSaxoPositionsSnapshot();
-      setPositions(response.positions);
+      setPositions(response.positions.map((position) => ({ ...position, environment: response.environment })));
       setPositionsFetchedAt(response.fetchedAt);
       setMessage(`${response.positions.length}件の現在建玉を取得しました。P/N割当済み口座だけを照合対象にしています。`);
       await refreshStatus();
@@ -812,7 +813,7 @@ export function SaxoReadOnlyPanel({
     setIsLoading(true);
     try {
       const response = await fetchSaxoOrdersSnapshot();
-      setOrders(response.orders);
+      setOrders(response.orders.map((order) => ({ ...order, environment: response.environment })));
       setOrdersFetchedAt(response.fetchedAt);
       setMessage(`${response.orders.length}件の未約定注文を取得しました。約定するまでは建玉・決済実績・成績へ正式反映しません。`);
       await refreshStatus();
@@ -876,7 +877,7 @@ export function SaxoReadOnlyPanel({
         const positionsResponse = await fetchSaxoPositionsSnapshot();
         if (spreadRequest.current !== requestRevision) return;
         coverage.push({ source: "positions", asOf: positionsResponse.fetchedAt, completedPages: positionsResponse.coverage?.completedPages ?? 0, status: positionsResponse.coverage?.status ?? "partial" });
-        setPositions(positionsResponse.positions);
+        setPositions(positionsResponse.positions.map((position) => ({ ...position, environment: positionsResponse.environment })));
         setPositionsFetchedAt(positionsResponse.fetchedAt);
       } catch (error) {
         failures.push(`建玉: ${error instanceof Error ? error.message : "失敗"}`);
@@ -885,7 +886,7 @@ export function SaxoReadOnlyPanel({
         const ordersResponse = await fetchSaxoOrdersSnapshot();
         if (spreadRequest.current !== requestRevision) return;
         coverage.push({ source: "orders", asOf: ordersResponse.fetchedAt, completedPages: ordersResponse.coverage?.completedPages ?? 0, status: ordersResponse.coverage?.status ?? "partial" });
-        setOrders(ordersResponse.orders);
+        setOrders(ordersResponse.orders.map((order) => ({ ...order, environment: ordersResponse.environment })));
         setOrdersFetchedAt(ordersResponse.fetchedAt);
       } catch (error) {
         failures.push(`注文: ${error instanceof Error ? error.message : "失敗"}`);
@@ -4492,24 +4493,22 @@ export type SaxoOrderDisplayCategory = "covered_call_open" | "opening" | "exit" 
 
 export function getSaxoOrderDisplayCategory(order: SaxoApiOrderSnapshot, positions: SaxoApiPositionSnapshot[] = []): SaxoOrderDisplayCategory {
   if (isInactiveSaxoOrder(order)) return "inactive";
-  const matchingPositions = positions.filter((position) => {
-    if (position.accountAssignment !== order.accountAssignment || position.accountAssignment === "unassigned" || position.accountAssignment === "ignored") return false;
-    if (position.kind !== "option" || position.optionType !== order.optionType) return false;
-    if (position.uic && order.uic) return position.uic === order.uic;
-    return Boolean(position.strike !== undefined && order.strike !== undefined && Math.abs(position.strike - order.strike) < 0.000001 && position.expiry === order.expiry && normalizeStockTicker(position.underlyingSymbol ?? position.symbol) === normalizeStockTicker(order.symbol));
-  }).filter(position => (position.side === "long" && order.side === "sell") || (position.side === "short" && order.side === "buy"));
-  const uniqueClose = matchingPositions.length === 1;
-  const closeQuantity = Math.abs(order.quantity ?? Number.NaN);
-  const remainingQuantity = Math.abs(matchingPositions[0]?.quantity ?? Number.NaN);
-  if (order.openClose === "close" || (order.openClose !== "open" && uniqueClose)) {
-    if (!uniqueClose || !Number.isFinite(closeQuantity) || closeQuantity <= 0 || closeQuantity > remainingQuantity) return "exit_quantity_excess";
-    return "exit";
-  }
-  if (order.openClose === "open") {
-    // The order DTO has no explicit contract multiplier, so covered status
-    // cannot be established using a fixed 100 multiplier or ticker proximity.
-    return "opening";
-  }
+  const resolution = classifySaxoOrderRole(order, positions.filter((position) => position.kind === "option").map((position) => ({
+    id: position.id,
+    accountAssignment: position.accountAssignment,
+    accountKey: position.accountKey,
+    environment: position.environment,
+    uic: position.uic,
+    ticker: normalizeStockTicker(position.underlyingSymbol ?? position.symbol),
+    optionType: position.optionType,
+    strike: position.strike,
+    expiry: position.expiry,
+    side: position.side,
+    remainingQuantity: position.quantity === undefined ? undefined : Math.abs(position.quantity),
+  })));
+  if (resolution.role === "exit") return "exit";
+  if (resolution.role === "exit_quantity_excess") return "exit_quantity_excess";
+  if (resolution.role === "opening") return "opening";
   if (isWorkingSaxoOrder(order)) return "working";
   return "other";
 }
