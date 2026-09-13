@@ -38,11 +38,13 @@ describe("R7 spread copy and hierarchy", () => {
     expect(screen.getByText("ベア・プット")).toBeInTheDocument();
     expect(screen.getByText("P100買い／P90売り・1組")).toBeInTheDocument();
     expect(screen.queryByText(/契約仕様未照合/)).not.toBeInTheDocument();
-    const result = screen.getByText(/決済した場合の参考損益/);
+    const result = screen.getByText(/概算損益/);
     expect(result).toHaveTextContent("-$82.96");
     expect(result.className).toContain("text-[11px]");
+    expect(result.className).toContain("font-semibold");
     expect(result.className).not.toContain("text-base");
     expect(result.className).not.toContain("text-sm");
+    expect(screen.getByText("現在決済年率")).toBeInTheDocument();
   });
 
   it("reveals one concise calculation instead of three cards", () => {

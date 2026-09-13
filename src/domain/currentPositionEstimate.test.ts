@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySyntheticPutAssignmentPolicy, calculateCurrentPositionEstimate, getSyntheticPutAssignmentPolicy, getSyntheticRemainingLegMoneySummary } from "./currentPositionEstimate";
+import { applySyntheticPutAssignmentPolicy, calculateCurrentPositionEstimate, getSyntheticPutAssignmentPolicy, getSyntheticRemainingLegMoneySummary, resolveCurrentPositionEstimateDenominator } from "./currentPositionEstimate";
 import type { TradeSimulation } from "@/types/domain";
 
 function synthetic(): TradeSimulation {
@@ -84,6 +84,18 @@ describe("current position estimate", () => {
     expect(calculateCurrentPositionEstimate(value, new Date("2026-08-11"), quote)).toMatchObject({ kind: "available", currency: "JPY", fx: { source: "readonly_current_quote", rateJPYPerUSD: 150 } });
     expect(value.fxRateJPY).toBe(0);
     expect(value.referenceFxRateJPY).toBeUndefined();
+  });
+  it("exposes canonical denominators and keeps known basis when the exit quote is missing", () => {
+    const n=standalone("long_call"); n.optionEntryExecutions![0]={...n.optionEntryExecutions![0],fillPriceUSD:2.2,commissionUSD:2.24};
+    expect(resolveCurrentPositionEstimateDenominator(n)).toEqual({amount:222.24,currency:"USD",label:"確認済み開始支払額"});
+    n.optionLegs[0].closeCostUSD=undefined;
+    expect(calculateCurrentPositionEstimate(n)).toMatchObject({kind:"missing",denominator:{amount:222.24,currency:"USD"}});
+    const p=standalone("long_call"); p.accountEnvironment="PROD_P_JPY_SETTLEMENT"; p.accountCode="P"; p.accountCurrency="JPY"; p.referenceFxRateJPY=999; p.optionEntryExecutions![0]={...p.optionEntryExecutions![0],settlementCurrency:"JPY",brokerBookedAmountJPY:-383_934};
+    expect(resolveCurrentPositionEstimateDenominator(p)).toEqual({amount:383_934,currency:"JPY",label:"確認済み開始記帳額"});
+  });
+  it("uses only the remaining short put's assignment capital after a partial synthetic close", () => {
+    const value=synthetic(); value.optionLegs[1].strikeUSD=210; value.optionCloseExecutions=[{id:"closed-call",legId:"call",closeKind:"buyback",confirmed:true,closeDate:"2026-08-10",contracts:1,settlementCurrency:"USD",source:"manual"}];
+    expect(resolveCurrentPositionEstimateDenominator(value)).toMatchObject({amount:21_000,currency:"USD",label:"残存P売り割当資金",evaluationScope:"remaining_leg",evaluatedLegId:"put"});
   });
   it("does not infer policy from historical defaults or assignment confirmation", () => {
     const value = synthetic(); value.syntheticForwardTicket!.assignmentAccepted = true;

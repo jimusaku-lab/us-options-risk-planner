@@ -72,6 +72,26 @@ afterEach(() => {
 });
 
 describe("synthetic leg history", () => {
+  it("renders four current strategies with one metric order and canonical denominators", () => {
+    const spread=createSimulation({id:"spread",ticker:"SPRD",strategyType:"bear_put_spread",entryDate:"2026-09-01",expiryDate:"2026-10-02",optionLegs:[
+      {id:"spread-long",type:"put",side:"buy",strikeUSD:100,premiumUSD:4.92,quantity:1,contractSize:100,expiryDate:"2026-10-02",closeCostUSD:4.05,closePlan:{enabled:true,closePriceUSD:4.05,commissionUSD:2.24,priceType:"OldIndicative"}},
+      {id:"spread-short",type:"put",side:"sell",strikeUSD:90,premiumUSD:0.92,quantity:1,contractSize:100,expiryDate:"2026-10-02",closeCostUSD:0.79,closePlan:{enabled:true,closePriceUSD:0.79,commissionUSD:2.24,priceType:"OldIndicative"}}],optionEntryExecutions:[
+      {id:"spread-entry-long",legId:"spread-long",tradeDate:"2026-09-01",contracts:1,fillPriceUSD:4.92,settlementCurrency:"USD",commissionUSD:2.24,source:"manual",confirmed:true},
+      {id:"spread-entry-short",legId:"spread-short",tradeDate:"2026-09-01",contracts:1,fillPriceUSD:0.92,settlementCurrency:"USD",commissionUSD:2.24,source:"manual",confirmed:true}]});
+    const nLong=createSimulation({id:"n-long",ticker:"NBUY",strategyType:"long_call",entryDate:"2026-09-01",optionLegs:[{...createSimulation().optionLegs[0],id:"n-long-leg",type:"call",side:"buy",premiumUSD:2.2,closeCostUSD:3,closePlan:{enabled:true,commissionUSD:2.24}}],optionEntryExecutions:[{id:"n-long-entry",legId:"n-long-leg",tradeDate:"2026-09-01",contracts:1,fillPriceUSD:2.2,settlementCurrency:"USD",commissionUSD:2.24,source:"manual",confirmed:true}]});
+    const pLong=createSimulation({id:"p-long",ticker:"PJPY",strategyType:"long_call",entryDate:"2026-09-01",accountCode:"P",accountEnvironment:"PROD_P_JPY_SETTLEMENT",accountCurrency:"JPY",referenceFxRateJPY:999,optionLegs:[{...createSimulation().optionLegs[0],id:"p-long-leg",type:"call",side:"buy",premiumUSD:23.85,closeCostUSD:20,closePlan:{enabled:true,commissionUSD:2.24}}],optionEntryExecutions:[{id:"p-long-entry",legId:"p-long-leg",tradeDate:"2026-09-01",contracts:1,fillPriceUSD:23.85,settlementCurrency:"JPY",brokerBookedAmountJPY:-383_934,source:"manual",confirmed:true}]});
+    const partial=createSimulation({id:"partial",ticker:"PART",strategyType:"synthetic_forward",entryDate:"2026-09-01",optionLegs:[
+      {id:"partial-call",type:"call",side:"buy",strikeUSD:210,premiumUSD:26.25,quantity:1,expiryDate:"2026-12-18",closeCostUSD:8,closePlan:{enabled:true,commissionUSD:2.24}},
+      {id:"partial-put",type:"put",side:"sell",strikeUSD:210,premiumUSD:21.05,quantity:1,expiryDate:"2026-12-18",closeCostUSD:2,closePlan:{enabled:true,commissionUSD:2.24}}],optionEntryExecutions:[
+      {id:"partial-call-entry",legId:"partial-call",tradeDate:"2026-09-01",contracts:1,fillPriceUSD:26.25,settlementCurrency:"USD",commissionUSD:2.24,source:"manual",confirmed:true},
+      {id:"partial-put-entry",legId:"partial-put",tradeDate:"2026-09-01",contracts:1,fillPriceUSD:21.05,settlementCurrency:"USD",commissionUSD:2.24,source:"manual",confirmed:true}],optionCloseExecutions:[{id:"partial-call-close",legId:"partial-call",closeKind:"buyback",closeDate:"2026-09-10",contracts:1,settlementCurrency:"USD",source:"manual",confirmed:true}]});
+    const {container}=render(createElement(Dashboard,{simulations:[spread,nLong,pLong,partial],selectedId:spread.id,onSelect:vi.fn(),onEdit:vi.fn(),onDelete:vi.fn(),workspace:"live",accountInputs,historyOpen:false,onHistoryOpenChange:vi.fn(),currentEstimateFxQuote:{pair:"USDJPY",rate:160,date:"2026-09-13",fetchedAt:"2026-09-13T00:00:00Z",source:"frankfurter"}}));
+    const rows=["SPRD","NBUY","PJPY","PART"].map((ticker)=>container.querySelector(`tr[aria-label="${ticker}の詳細を表示する"]`)!);
+    for (const row of rows) { const metric=row.querySelector<HTMLElement>('td:nth-child(9) [data-testid="current-estimate-metric"]')!; expect(metric.children[0]?.textContent).toMatch(/現在決済年率/); expect(metric.children[1]?.textContent).toMatch(/[+-].*%/); expect(metric.children[2]?.textContent).toMatch(/概算損益/); }
+    expect(rows[0].children[7].textContent).toContain("$404.48"); expect(rows[1].children[7].textContent).toContain("$222.24"); expect(rows[2].children[7].textContent).toContain("383,934円"); expect(rows[3].children[7].textContent).toContain("$21,000.00");
+    expect(container.textContent).not.toContain("開始支払額は左列に表示"); expect(container.textContent).not.toContain("支払総額は左列に表示");
+  });
+
   it("shows bear put spread P/L and period return as the primary dashboard decision", () => {
     const simulation = createSimulation({
       ticker: "TEST", strategyType: "bear_put_spread", entryDate: "2026-09-01", expiryDate: "2026-10-02",
@@ -85,10 +105,12 @@ describe("synthetic leg history", () => {
       ],
     });
     const onPositionFocus = vi.fn();
-    const { rerender } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onPositionFocus }));
+    const { container, rerender } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onPositionFocus }));
     expect(screen.getByText("ベア・プット")).toBeTruthy();
     expect(screen.getByText("P100買い／P90売り・1組")).toBeTruthy();
-    expect(screen.getByText(/決済した場合の参考損益/)).toHaveTextContent("-$28.96 / -7.2%");
+    expect(screen.getByText(/概算損益 -\$28\.96/)).toHaveTextContent("-$28.96 / -7.2%");
+    expect(screen.getByText("現在決済年率")).toBeTruthy();
+    expect(container.querySelector('tr[aria-label="TESTの詳細を表示する"]')?.children[7].textContent).toContain("$404.48");
     expect(screen.getAllByText(/期間損益率/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "戦略の決済を確認" })).toBeTruthy();
     fireEvent.click(screen.getByLabelText("TESTの詳細を表示する"));
@@ -332,12 +354,12 @@ describe("Dashboard close decision actions", () => {
     });
   }
 
-  it.each(["accept", "unknown"] as const)("keeps premium annual return and adds current buyback P/L for %s", (policy) => {
+  it.each(["accept", "unknown"] as const)("uses the common current-close rate and P/L order for %s", (policy) => {
     const simulation = currentShortPut(policy);
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn() }));
-    expect(screen.getByText("プレミアム年率")).toBeTruthy();
-    expect(screen.getByText(/現在買戻し概算損益 [+-]\$/)).toBeTruthy();
-    expect(screen.queryByText("現在決済年率")).toBeNull();
+    expect(screen.getByText("現在決済年率")).toBeTruthy();
+    expect(screen.getByText(/概算損益 [+-]\$/)).toBeTruthy();
+    expect(screen.queryByText("プレミアム年率")).toBeNull();
   });
 
   it("keeps avoid on current close annual return plus the existing P/L label", () => {
@@ -352,7 +374,7 @@ describe("Dashboard close decision actions", () => {
     const action = vi.fn();
     const simulation = currentShortPut("accept", false);
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onCurrentEstimateAction: action }));
-    expect(screen.getByText("現在買戻し概算損益 未計算 / 買戻し価格 未取得")).toBeTruthy();
+    expect(screen.getByText("買戻し価格 未取得")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "不足情報を確認" }));
     expect(action).toHaveBeenCalledWith("sim", "leg", "exit_price");
   });
