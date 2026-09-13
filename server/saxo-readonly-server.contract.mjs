@@ -27,6 +27,32 @@ test("R3 InstrumentDetails resolves effective currency and contract size, while 
   assert.deepEqual(enriched.missingFields.filter(field => ["currency", "contractSize"].includes(field)), []);
   assert.deepEqual(enriched.sourceMissingFields.filter(field => ["currency", "contractSize"].includes(field)), ["currency", "contractSize"]);
 });
+
+test("R3 keeps direct specification provenance for direct-only, matching-detail, and conflicting-detail cases", async () => {
+  const raw = { PositionBase: { AccountKey: "TEST-N", PositionId: "TEST-direct", AssetType: "StockOption", Amount: 1, Uic: 990002, Strike: 100, ExpiryDate: "2026-10-02", PutCall: "Put", Currency: "EUR", ContractSize: 50 } };
+  const normalized = normalizePosition(raw, new Map(), "2026-09-13T00:00:00Z", 0);
+  assert.equal(normalized.currency, "EUR");
+  assert.equal(normalized.currencySourceField, "PositionBase.Currency");
+  assert.equal(normalized.contractSize, 50);
+  assert.equal(normalized.contractSizeSourceField, "PositionBase.ContractSize");
+
+  const [directOnly] = await enrichPositionUnderlyingIdentities([normalized], "TEST", async () => ({}));
+  assert.equal(directOnly.currencySourceField, "PositionBase.Currency");
+  assert.equal(directOnly.contractSizeSourceField, "PositionBase.ContractSize");
+  assert.deepEqual(directOnly.specificationConflicts, []);
+
+  const [matching] = await enrichPositionUnderlyingIdentities([normalized], "TEST", async () => ({ CurrencyCode: "EUR", ContractSize: 50 }));
+  assert.equal(matching.currencySourceField, "PositionBase.Currency");
+  assert.equal(matching.contractSizeSourceField, "PositionBase.ContractSize");
+  assert.deepEqual(matching.specificationConflicts, []);
+
+  const [conflicting] = await enrichPositionUnderlyingIdentities([normalized], "TEST", async () => ({ CurrencyCode: "USD", ContractSize: 100 }));
+  assert.equal(conflicting.currency, "EUR");
+  assert.equal(conflicting.currencySourceField, "PositionBase.Currency");
+  assert.equal(conflicting.contractSize, 50);
+  assert.equal(conflicting.contractSizeSourceField, "PositionBase.ContractSize");
+  assert.deepEqual(conflicting.specificationConflicts, ["currency", "contractSize"]);
+});
 test("R3 rejects conflicting direct and detail specification evidence without overwriting it", async () => {
   const position = { kind: "option", uic: 990001, assetType: "StockOption", accountKey: "TEST-N", currency: "EUR", currencySourceField: "PositionBase.Currency", contractSize: 10, contractSizeSourceField: "PositionBase.ContractSize", missingFields: [] };
   const [enriched] = await enrichPositionUnderlyingIdentities([position], "TEST", async () => ({ CurrencyCode: "USD", ContractSize: 100 }));

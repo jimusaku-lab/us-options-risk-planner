@@ -1519,7 +1519,6 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     quantity,
     currentPrice,
     currency,
-    currencySourceField: currencyMatch?.matchedName,
   })) {
     if (value === undefined || value === "") missingFields.push(field);
   }
@@ -1556,6 +1555,7 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     marketValue,
     marketValueCurrency: currency,
     currency,
+    currencySourceField: currencyMatch?.matchedName,
     optionType,
     strike,
     expiry,

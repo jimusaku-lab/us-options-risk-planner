@@ -3174,7 +3174,8 @@ function OrdersPreview({
   const assignedN = orders.filter((order) => order.accountAssignment === "N").length;
   const unassigned = orders.filter((order) => order.accountAssignment === "unassigned").length;
   const coveredCallOpenOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, positions) === "covered_call_open").length;
-  const exitCandidates = orders.filter((order) => getSaxoOrderDisplayCategory(order, positions) === "exit").length;
+  const explicitExitOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, positions) === "exit_explicit").length;
+  const matchedExitCandidates = orders.filter((order) => getSaxoOrderDisplayCategory(order, positions) === "exit_matched").length;
   const inactiveOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, positions) === "inactive").length;
   return (
     <div className="rounded-md border border-slate-200 p-3">
@@ -3193,7 +3194,8 @@ function OrdersPreview({
         <StatChip label="N口座" value={`${assignedN}件`} />
         <StatChip label="未割当" value={`${unassigned}件`} />
         <StatChip label="未約定C売り" value={`${coveredCallOpenOrders}件`} />
-        <StatChip label="決済・出口注文" value={`${exitCandidates}件`} />
+        <StatChip label="明示決済・出口" value={`${explicitExitOrders}件`} />
+        <StatChip label="保有照合の決済候補" value={`${matchedExitCandidates}件`} />
         <StatChip label="取消済み・失効" value={`${inactiveOrders}件`} />
       </div>
       <p className="mt-2 text-xs text-slate-500">最終取得: {fetchedAt ? new Date(fetchedAt).toLocaleString("ja-JP") : "未取得"}</p>
@@ -4489,7 +4491,7 @@ function formatOrderLabel(order: SaxoApiOrderSnapshot): string {
   return `${order.symbol ?? "未取得"} / ${order.side ?? "unknown"}`;
 }
 
-export type SaxoOrderDisplayCategory = "covered_call_open" | "opening" | "exit" | "exit_quantity_excess" | "inactive" | "working" | "other";
+export type SaxoOrderDisplayCategory = "covered_call_open" | "opening" | "exit_explicit" | "exit_matched" | "exit_quantity_excess" | "inactive" | "working" | "other";
 
 export function getSaxoOrderDisplayCategory(order: SaxoApiOrderSnapshot, positions: SaxoApiPositionSnapshot[] = []): SaxoOrderDisplayCategory {
   if (isInactiveSaxoOrder(order)) return "inactive";
@@ -4506,7 +4508,7 @@ export function getSaxoOrderDisplayCategory(order: SaxoApiOrderSnapshot, positio
     side: position.side,
     remainingQuantity: position.quantity === undefined ? undefined : Math.abs(position.quantity),
   })));
-  if (resolution.role === "exit") return "exit";
+  if (resolution.role === "exit") return resolution.evidence === "explicit_close" ? "exit_explicit" : "exit_matched";
   if (resolution.role === "exit_quantity_excess") return "exit_quantity_excess";
   if (resolution.role === "opening") return "opening";
   if (isWorkingSaxoOrder(order)) return "working";
@@ -4523,12 +4525,14 @@ function isInactiveSaxoOrder(order: SaxoApiOrderSnapshot): boolean {
   return ["cancel", "cancelled", "canceled", "expired", "rejected", "done for day"].some((keyword) => status.includes(keyword));
 }
 
-function getSaxoOrderCategoryLabel(category: SaxoOrderDisplayCategory): string {
+export function getSaxoOrderCategoryLabel(category: SaxoOrderDisplayCategory): string {
   switch (category) {
     case "covered_call_open":
       return "未約定カバードコール売り注文";
-    case "exit":
+    case "exit_explicit":
       return "決済・出口注文";
+    case "exit_matched":
+      return "決済候補（既存建玉と照合）";
     case "exit_quantity_excess":
       return "決済数量を確認";
     case "opening":
@@ -4546,7 +4550,8 @@ function getSaxoOrderCategoryBadgeClass(category: SaxoOrderDisplayCategory): str
   switch (category) {
     case "covered_call_open":
       return "bg-amber-100 text-amber-900";
-    case "exit":
+    case "exit_explicit":
+    case "exit_matched":
       return "bg-sky-100 text-sky-800";
     case "exit_quantity_excess":
       return "bg-amber-100 text-amber-900";
@@ -4561,7 +4566,8 @@ function getSaxoOrderCategoryNoticeClass(category: SaxoOrderDisplayCategory): st
   switch (category) {
     case "covered_call_open":
       return "border-amber-200 bg-amber-50 text-amber-950";
-    case "exit":
+    case "exit_explicit":
+    case "exit_matched":
       return "border-sky-200 bg-sky-50 text-sky-950";
     case "exit_quantity_excess":
       return "border-amber-200 bg-amber-50 text-amber-950";
@@ -4576,7 +4582,10 @@ function getSaxoOrderCategoryNotice(order: SaxoApiOrderSnapshot, category: SaxoO
   if (category === "covered_call_open") {
     return "まだ約定していません。約定するまでは建玉・実績には反映しません。約定後にまとめて取得を実行し、建玉開始候補として確認してください。";
   }
-  if (category === "exit") {
+  if (category === "exit_explicit") {
+    return "Saxoが決済注文として明示した未約定注文です。約定済み履歴が取得された場合だけ、決済実績確認へ進みます。";
+  }
+  if (category === "exit_matched") {
     return "Saxo側にある決済・出口注文候補です。これはアプリ内の利確/損切りルールとは別物です。約定済み履歴が取得された場合だけ、決済実績確認へ進みます。";
   }
   if (category === "exit_quantity_excess") return "既存建玉との照合候補はありますが、数量または対応先が一意ではありません。決済注文とは確定せず診断に保持します。";
@@ -5197,7 +5206,8 @@ export function createReflectionSummary({
   const unknownPositions = regularPositionRows.filter((row) => row.status === "unknown" || row.status === "quantity_diff" || row.status === "price_diff").length;
   const orderPositions = positionRows.flatMap(row => row.position ? [row.position] : []);
   const coveredCallOpenOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "covered_call_open").length;
-  const exitOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "exit").length;
+  const explicitExitOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "exit_explicit").length;
+  const matchedExitCandidates = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "exit_matched").length;
   const inactiveOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "inactive").length;
   // A limit + stop OCO pair is one review job.  The raw order count remains
   // diagnostic only and must not inflate the reflection-pending count.
@@ -5340,8 +5350,8 @@ export function createReflectionSummary({
         orders.length === 0
           ? "0件"
           : orderActions.length > 0
-            ? `出口ルール確認待ち${orderActions.length}件 / 未約定C売り${coveredCallOpenOrders}件 / 決済・出口${exitOrders}件`
-            : `未約定C売り${coveredCallOpenOrders}件 / 決済・出口${exitOrders}件 / 取消・失効${inactiveOrders}件`,
+            ? `出口ルール確認待ち${orderActions.length}件 / 未約定C売り${coveredCallOpenOrders}件 / 明示決済${explicitExitOrders}件 / 保有照合候補${matchedExitCandidates}件`
+            : `未約定C売り${coveredCallOpenOrders}件 / 明示決済${explicitExitOrders}件 / 保有照合候補${matchedExitCandidates}件 / 取消・失効${inactiveOrders}件`,
       actionable: orderActionable,
       actionLabel: orderActions.length === 1 ? `${orderActions[0].ticker}の出口ルールを確認` : "出口ルールを確認",
     },

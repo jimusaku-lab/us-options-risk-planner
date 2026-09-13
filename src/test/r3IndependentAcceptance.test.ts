@@ -19,7 +19,8 @@ const position = {
 
 describe("R3 independent acceptance: order role consistency", () => {
   it("recognizes only a complete same-account opposite-side match", () => {
-    expect(getSaxoOrderDisplayCategory(order, [position])).toBe("exit");
+    expect(getSaxoOrderDisplayCategory(order, [position])).toBe("exit_matched");
+    expect(getSaxoOrderDisplayCategory({ ...order, openClose: "close" }, [position])).toBe("exit_explicit");
     expect(getSaxoOrderDisplayCategory(order, [{ ...position, accountKey: "fixture-account-b" }])).not.toBe("exit");
     expect(getSaxoOrderDisplayCategory(order, [{ ...position, quantity: undefined }])).not.toBe("exit");
   });
