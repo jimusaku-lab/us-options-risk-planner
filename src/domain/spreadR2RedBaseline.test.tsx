@@ -146,7 +146,11 @@ describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE", () => {
     if (missing === "price") { leg.closeCostUSD = undefined; leg.closePlan!.closePriceUSD = undefined; }
     else leg.closePlan!.commissionUSD = undefined;
     const result = calculateBearPutSpreadEstimate(simulation, "2026-09-10");
-    expect(result.kind).toBe("missing");
+    expect(result.kind).toBe(missing === "price" ? "missing" : "available");
+    if (missing === "fee" && result.kind === "available") {
+      expect(result.evaluatedLegs[0]).toMatchObject({ closeFeeUSD: 2.24, closeFeeSource: "saxo_ticket_confirmed_standard" });
+      expect(leg.closePlan?.commissionUSD).toBeUndefined();
+    }
     render(<Dashboard simulations={[simulation]} selectedId={simulation.id} onSelect={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
       workspace="live" accountInputs={accountInputs} historyOpen={false} onHistoryOpenChange={vi.fn()}
       positionFocusSimulationId={simulation.id} onPositionFocus={vi.fn()} />);

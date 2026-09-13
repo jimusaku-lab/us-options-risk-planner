@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCurrentOptionPricePreview, createCurrentOptionPricePreviewRow, getBulkApplicableTargetIds, getBulkOptionPricePreviewCounts, getCurrentOptionPriceTargets, resolveSaxoOptionLegIdentifiers } from "./bulkOptionPrice";
+import { applyCurrentOptionPricePreview, applyCurrentPricePreview, createCurrentOptionPricePreviewRow, createCurrentStockPricePreviewRow, getBulkApplicableTargetIds, getBulkOptionPricePreviewCounts, getCurrentOptionPriceTargets, getCurrentStockPriceTargets, resolveSaxoOptionLegIdentifiers } from "./bulkOptionPrice";
 import type { CurrentOptionPriceTarget } from "./bulkOptionPrice";
 import type { TradeSimulation } from "@/types/domain";
 import type { SaxoOptionPremiumCandidate } from "@/features/saxo/saxoAccountSync";
@@ -51,5 +51,17 @@ describe("generic bulk option price contract", () => {
   it("excludes a fully closed composite leg and targets only its confirmed remainder", () => {
     const partial = { ...standalone(), id: "partial", strategyType: "synthetic_forward" as const, optionLegs: [{ ...standalone().optionLegs[0], id: "call" }, { ...standalone().optionLegs[0], id: "put", type: "put" as const, side: "sell" as const }], optionCloseExecutions: [{ id: "closed-call", legId: "call", closeKind: "buyback" as const, confirmed: true, closeDate: "2026-08-20", contracts: 1, settlementCurrency: "USD" as const, source: "manual" as const }] };
     expect(getCurrentOptionPriceTargets([partial])).toMatchObject([{ legId: "put", quantity: 1 }]);
+  });
+  it("previews stock separately and does not overwrite edits or new records after preview", () => {
+    const original = standalone();
+    const optionRow = createCurrentOptionPricePreviewRow(getCurrentOptionPriceTargets([original])[0], quote({ bid: 4.05 }));
+    const stockRow = createCurrentStockPricePreviewRow(getCurrentStockPriceTargets([original])[0], { symbol: "ABC", price: 123.45, source: "nasdaq", date: "2026-09-12", fetchedAt: "2026-09-13T01:00:00Z" });
+    const applied = applyCurrentPricePreview([original], [optionRow], [stockRow]);
+    expect(applied[0]).toMatchObject({ currentPriceUSD: 123.45, optionLegs: [{ closeCostUSD: 4.05 }] });
+    const edited = { ...original, currentPriceUSD: 101, optionLegs: [{ ...original.optionLegs[0], closeCostUSD: 3.5 }] };
+    const added = { ...standalone(), id: "added" };
+    const stale = applyCurrentPricePreview([edited, added], [optionRow], [stockRow]);
+    expect(stale[0]).toMatchObject({ currentPriceUSD: 101, optionLegs: [{ closeCostUSD: 3.5 }] });
+    expect(stale[1].currentPriceUSD).toBe(100);
   });
 });

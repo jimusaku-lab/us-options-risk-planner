@@ -43,11 +43,36 @@ describe("bear put spread", () => {
     expect(result.kind === "available" ? result.totalEstimatedPnlUSD : undefined).not.toBe(-34);
   });
 
-  it("keeps missing close fees distinct from explicit zero", () => {
+  it("uses the registered close estimate without persisting it and keeps explicit zero", () => {
     const missing = spread({ optionLegs: spread().optionLegs.map((leg) => leg.id === "short" ? { ...leg, closePlan: { ...leg.closePlan!, commissionUSD: undefined } } : leg) });
-    expect(calculateBearPutSpreadEstimate(missing).kind).toBe("missing");
+    const estimated = calculateBearPutSpreadEstimate(missing);
+    expect(estimated.kind).toBe("available");
+    if (estimated.kind === "available") expect(estimated.evaluatedLegs.find((leg) => leg.legId === "short")).toMatchObject({ closeFeeUSD: 2.24, closeFeeSource: "saxo_ticket_confirmed_standard" });
+    expect(missing.optionLegs[1].closePlan?.commissionUSD).toBeUndefined();
     const zero = spread({ optionLegs: spread().optionLegs.map((leg) => ({ ...leg, closePlan: { ...leg.closePlan!, commissionUSD: 0 } })) });
     expect(calculateBearPutSpreadEstimate(zero).kind).toBe("available");
+  });
+
+  it("calculates the R6 reference case without an underlying stock price", () => {
+    const value = spread({
+      currentPriceUSD: 0,
+      optionLegs: spread().optionLegs.map((leg) => leg.id === "long"
+        ? { ...leg, premiumUSD: 4.02, closeCostUSD: 4.05, closePlan: { enabled: true, closePriceUSD: 4.05 } }
+        : { ...leg, premiumUSD: 0.02, closeCostUSD: 0.79, closePlan: { enabled: true, closePriceUSD: 0.79 } }),
+      optionEntryExecutions: spread().optionEntryExecutions!.map((entry) => entry.legId === "long" ? { ...entry, fillPriceUSD: 4.02 } : { ...entry, fillPriceUSD: 0.02 }),
+    });
+    const result = calculateBearPutSpreadEstimate(value, "2026-09-11");
+    expect(result.kind).toBe("available");
+    if (result.kind !== "available") return;
+    expect(result.entryAllInDebitUSD).toBe(404.48);
+    expect(result.closeNetProceedsUSD).toBe(321.52);
+    expect(result.totalEstimatedPnlUSD).toBe(-82.96);
+    expect(result.periodReturnPct).toBeCloseTo(-20.5103, 3);
+  });
+
+  it("blocks invalid explicit fees instead of replacing them with the registered estimate", () => {
+    const invalid = spread({ optionLegs: spread().optionLegs.map((leg) => leg.id === "short" ? { ...leg, closePlan: { ...leg.closePlan!, commissionUSD: -1 } } : leg) });
+    expect(calculateBearPutSpreadEstimate(invalid)).toMatchObject({ kind: "missing", reasons: expect.arrayContaining(["決済想定手数料の明示値が不正です"]) });
   });
 
   it("uses a non-100 multiplier instead of silently assuming 100", () => {

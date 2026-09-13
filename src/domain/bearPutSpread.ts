@@ -1,6 +1,7 @@
 import type { OptionEntryExecution, OptionLeg, TradeSimulation } from "@/types/domain";
 import { formatLocalDate } from "@/lib/date";
 import { calculateOptionCloseExecutionResult, getOptionLegCloseProgress } from "./optionCloseExecutions";
+import { resolveCloseCommissionUSD, type ResolvedCloseCommission } from "./closeCommissionStandard";
 import { activeSpreadCloses, activeSpreadEntries, moneyProduct, moneySum, spreadCloseMoney, spreadEntryBasis, spreadFinalCashflow } from "./spreadCashflows";
 
 export type BearPutSpreadValidation =
@@ -29,7 +30,7 @@ export type BearPutSpreadEstimate =
       periodReturnPct: number;
       annualizedReturnPct?: number;
       holdingDays?: number;
-      evaluatedLegs: Array<{ legId: string; label: "高ストライクP買い" | "低ストライクP売り"; remainingContracts: number; closePriceUSD: number; closeFeeUSD: number }>;
+      evaluatedLegs: Array<{ legId: string; label: "高ストライクP買い" | "低ストライクP売り"; remainingContracts: number; closePriceUSD: number; closeFeeUSD: number; closeFeeSource: Extract<ResolvedCloseCommission, { kind: "resolved" }>["source"]; closeFeeConfirmedAt?: string }>;
     };
 
 function positiveInteger(value: number | undefined): value is number {
@@ -131,19 +132,17 @@ export function calculateBearPutSpreadEstimate(simulation: TradeSimulation, asOf
   const reasons: string[] = [];
   for (const item of remaining.filter((value) => value.remainingContracts > 0)) {
     const price = item.leg.closePlan?.closePriceUSD ?? item.leg.closeCostUSD;
-    const fee = item.leg.closePlan?.commissionUSD;
-    if (!(price !== undefined && Number.isFinite(price) && price >= 0)) reasons.push(`${item.leg.side === "buy" ? "P買い売却" : "P売り買戻し"}価格 未確認`);
-    if (!(fee !== undefined && Number.isFinite(fee))) reasons.push(`${item.leg.side === "buy" ? "P買い" : "P売り"}決済想定手数料 未確認`);
-    if (reasons.length > 0) continue;
-    if (item.leg.closePlan?.commissionContracts !== undefined && item.leg.closePlan.commissionContracts !== item.remainingContracts) { reasons.push("決済想定手数料の対象数量が一致していません"); continue; }
-    const allocatedFee = fee!;
+    const fee = resolveCloseCommissionUSD(simulation, item.leg, item.remainingContracts);
+    if (!(price !== undefined && Number.isFinite(price) && price >= 0)) { reasons.push(`${item.leg.side === "buy" ? "P買い売却" : "P売り買戻し"}価格 未確認`); continue; }
+    if (fee.kind !== "resolved") { reasons.push(fee.reason ?? `${item.leg.side === "buy" ? "P買い" : "P売り"}決済想定手数料 未確認`); continue; }
+    const allocatedFee = fee.amountUSD;
     const gross = moneyProduct(price!, validation.contractSize, item.remainingContracts);
     closeNetProceedsUSD = moneySum(closeNetProceedsUSD, item.leg.side === "buy" ? gross : -gross, -allocatedFee);
     const entry = item.leg.id === validation.longPut.id ? longEntry : shortEntry;
     const closedBasis = activeSpreadCloses(simulation).filter(close => close.legId === item.leg.id).map(close => spreadCloseMoney(simulation, close)?.entryDebitUSD);
     if (closedBasis.some(value => value === undefined)) { reasons.push("開始ロット割当 未確認"); continue; }
     remainingEntryBasisUSD = moneySum(remainingEntryBasisUSD, item.leg.side === "buy" ? entry.total : -entry.total, ...closedBasis.map(value => -value!));
-    evaluatedLegs.push({ legId: item.leg.id, label: item.leg.side === "buy" ? "高ストライクP買い" : "低ストライクP売り", remainingContracts: item.remainingContracts, closePriceUSD: price!, closeFeeUSD: allocatedFee });
+    evaluatedLegs.push({ legId: item.leg.id, label: item.leg.side === "buy" ? "高ストライクP買い" : "低ストライクP売り", remainingContracts: item.remainingContracts, closePriceUSD: price!, closeFeeUSD: allocatedFee, closeFeeSource: fee.source, closeFeeConfirmedAt: fee.confirmedAt });
   }
   if (reasons.length > 0) return { kind: "missing", lifecycle, entryAllInDebitUSD, realizedPnlUSD, reasons: Array.from(new Set(reasons)) };
   const remainingEstimatedPnlUSD = moneySum(closeNetProceedsUSD, -remainingEntryBasisUSD);

@@ -17,7 +17,7 @@ import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import type { FxQuote } from "@/lib/marketData";
 import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
 import { formatCurrentPriceStrikeDifference, formatCurrentPriceStrikePercent, getCurrentPriceStrikeDisplay } from "@/domain/currentPriceStrikeDisplay";
-import { getBulkApplicableTargetIds, getBulkOptionPricePreviewCounts, type CurrentOptionPricePreviewRow } from "@/domain/bulkOptionPrice";
+import { getBulkApplicableTargetIds, getBulkOptionPricePreviewCounts, type CurrentOptionPricePreviewRow, type CurrentStockPricePreviewRow } from "@/domain/bulkOptionPrice";
 import { getSaxoExitOrderReviews, type SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
 import { calculateBearPutSpreadEstimate, getBearPutSpreadLifecycle } from "@/domain/bearPutSpread";
 
@@ -103,16 +103,18 @@ function ClosedLegHistoryRows({ items, onOpen }: { items: ClosedSyntheticLegHist
     })}</>;
 }
 
-function BulkOptionPricePreview({ rows, simulations, referenceConfirmed, onReferenceConfirmedChange, onApply }: { rows: CurrentOptionPricePreviewRow[]; simulations: TradeSimulation[]; referenceConfirmed: boolean; onReferenceConfirmedChange: (checked: boolean) => void; onApply?: () => void }) {
+function BulkOptionPricePreview({ rows, stockRows, simulations, referenceConfirmed, onReferenceConfirmedChange, onApply }: { rows: CurrentOptionPricePreviewRow[]; stockRows: CurrentStockPricePreviewRow[]; simulations: TradeSimulation[]; referenceConfirmed: boolean; onReferenceConfirmedChange: (checked: boolean) => void; onApply?: () => void }) {
   const counts = getBulkOptionPricePreviewCounts(rows);
   const applicable = getBulkApplicableTargetIds(rows, simulations, referenceConfirmed);
   const ready = applicable.size;
+  const stockReady = stockRows.filter((row) => row.status === "ready").length;
   const applyLabel = counts.ready === 0 && referenceConfirmed
     ? `確認済み参考価格 ${ready}脚を一括反映`
     : referenceConfirmed && counts.confirmableReference > 0
       ? `通常${counts.ready}脚 + 確認済み参考価格${counts.confirmableReference}脚を一括反映`
       : `取得成功分${ready}脚を一括反映`;
   return <div className="mt-3 overflow-x-auto">
+    <div className="mb-3 rounded border border-slate-200 bg-slate-50 p-2"><p className="font-bold">現在株価（オプション価格と別取得）</p>{stockRows.map((row) => <p key={row.ticker} className="mt-1">{row.ticker}: {row.quote ? `${row.quote.price} / ${row.quote.source} / 市場日 ${row.quote.date ?? "未取得"} / 取得 ${row.quote.fetchedAt ?? row.quote.time ?? "未取得"}` : `取得失敗 / ${row.reason}`}</p>)}<p className="mt-1 text-slate-500">日次・遅延値の可能性があります。オプション気配から株価を推定しません。</p></div>
     <table className="w-full min-w-[760px] text-xs">
       <thead><tr className="border-b text-left text-slate-500"><th className="py-1">銘柄 / 脚</th><th>方向</th><th className="text-right">保存中</th><th className="text-right">Bid / Ask / Mid / Last</th><th className="text-right">採用候補</th><th>状態</th></tr></thead>
       <tbody>{rows.map((row) => <tr className="border-b border-slate-100" key={row.target.targetId}>
@@ -126,7 +128,7 @@ function BulkOptionPricePreview({ rows, simulations, referenceConfirmed, onRefer
     </table>
     <p className="mt-2 text-xs text-slate-600">取得成功 {counts.successful}脚 / 通常 {counts.ready}脚 / 参考値・要確認 {counts.confirmableReference}脚 / 反映不可 {counts.unavailable}脚</p>
     {counts.confirmableReference > 0 ? <label className="mt-2 flex items-start gap-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-950"><input type="checkbox" checked={referenceConfirmed} onChange={(event) => onReferenceConfirmedChange(event.target.checked)} /><span>表示中のOldIndicative {counts.confirmableReference}脚を取得時点の参考価格として使用することを確認しました</span></label> : null}
-    <div className="mt-2 flex items-center gap-3"><button type="button" disabled={ready === 0} className="rounded bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300" onClick={onApply}>{applyLabel}</button><span className="text-xs text-slate-500">合成建玉は二脚がそろう場合だけ同時に反映します。</span></div>
+    <div className="mt-2 flex items-center gap-3"><button type="button" disabled={ready + stockReady === 0} className="rounded bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300" onClick={onApply}>{stockReady > 0 ? `株価${stockReady}銘柄・${applyLabel}` : applyLabel}</button><span className="text-xs text-slate-500">合成建玉は二脚がそろう場合だけ同時に反映します。</span></div>
   </div>;
 }
 
@@ -166,6 +168,7 @@ export function Dashboard({
   currentEstimateFxQuote,
   onRefreshFx,
   bulkOptionPricePreview,
+  bulkStockPricePreview = [],
   bulkOptionPriceMessage,
   bulkOptionPriceAvailable = false,
   onFetchBulkOptionPrices,
@@ -205,6 +208,7 @@ export function Dashboard({
   currentEstimateFxQuote?: FxQuote | null;
   onRefreshFx?: () => void;
   bulkOptionPricePreview?: CurrentOptionPricePreviewRow[] | null;
+  bulkStockPricePreview?: CurrentStockPricePreviewRow[] | null;
   bulkOptionPriceMessage?: string;
   bulkOptionPriceAvailable?: boolean;
   onFetchBulkOptionPrices?: () => void;
@@ -309,7 +313,7 @@ export function Dashboard({
         </div>
       </div>
       {bulkOptionPriceMessage && !isBulkDialogOpen ? <p className="mt-2 text-right text-xs text-slate-500">{bulkOptionPriceMessage}</p> : null}
-      {isBulkDialogOpen ? <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 pt-12" role="presentation"><div role="dialog" aria-modal="true" aria-labelledby="bulk-option-price-dialog-title" className="w-full max-w-5xl rounded-lg bg-white p-4 shadow-xl"><div className="flex items-start justify-between gap-3"><div><h3 id="bulk-option-price-dialog-title" className="text-base font-bold">現在オプション価格を一括更新</h3><p className="mt-1 text-xs text-slate-600">取得時点の現在決済候補価格。決済実績・状態・数量は変更しません。</p></div><button ref={bulkDialogCloseRef} type="button" aria-label="現在オプション価格の確認を閉じる" className="rounded border px-2 py-1 text-xs" onClick={() => { setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }}>閉じる</button></div>{bulkOptionPriceLoading ? <p className="mt-4 text-sm">候補価格を取得中...</p> : null}{bulkOptionPriceMessage ? <p className="mt-3 text-xs text-slate-600">{bulkOptionPriceMessage}</p> : null}{bulkOptionPricePreview?.length ? <BulkOptionPricePreview rows={bulkOptionPricePreview} simulations={simulations} referenceConfirmed={bulkOptionPriceReferenceConfirmed} onReferenceConfirmedChange={onBulkOptionPriceReferenceConfirmedChange ?? (() => {})} onApply={() => { onApplyBulkOptionPrices?.(); setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }} /> : null}</div></div> : null}
+      {isBulkDialogOpen ? <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 pt-12" role="presentation"><div role="dialog" aria-modal="true" aria-labelledby="bulk-option-price-dialog-title" className="w-full max-w-5xl rounded-lg bg-white p-4 shadow-xl"><div className="flex items-start justify-between gap-3"><div><h3 id="bulk-option-price-dialog-title" className="text-base font-bold">現在オプション価格を一括更新</h3><p className="mt-1 text-xs text-slate-600">株価と、取得時点の現在決済候補価格を別々に確認します。決済実績・状態・数量は変更しません。</p></div><button ref={bulkDialogCloseRef} type="button" aria-label="現在オプション価格の確認を閉じる" className="rounded border px-2 py-1 text-xs" onClick={() => { setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }}>閉じる</button></div>{bulkOptionPriceLoading ? <p className="mt-4 text-sm">株価と候補価格を取得中...</p> : null}{bulkOptionPriceMessage ? <p className="mt-3 text-xs text-slate-600">{bulkOptionPriceMessage}</p> : null}{bulkOptionPricePreview ? <BulkOptionPricePreview rows={bulkOptionPricePreview} stockRows={bulkStockPricePreview ?? []} simulations={simulations} referenceConfirmed={bulkOptionPriceReferenceConfirmed} onReferenceConfirmedChange={onBulkOptionPriceReferenceConfirmedChange ?? (() => {})} onApply={() => { onApplyBulkOptionPrices?.(); setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }} /> : null}</div></div> : null}
       {simulations.length === 0 ? (
         <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-5 text-sm leading-6 text-slate-600">
           このワークスペースにはまだ建玉がありません。上部の「新規建玉」から、Saxo画面を見ながら建玉を登録できます。
@@ -597,10 +601,12 @@ export function Dashboard({
                   <td className="py-3 pr-3 text-slate-700">{simulation.expiryDate}</td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {bearPutEstimate && !isHistoryRow ? (
-                      bearPutEstimate.kind === "available" ? <>
-                        <span className="block text-[11px] font-bold text-slate-500">建玉時ネット支払額</span>
-                        <span className="block text-slate-950">{formatUSD(bearPutEstimate.entryAllInDebitUSD)}</span>
-                      </> : <><span className="block text-[11px] font-bold text-slate-500">建玉時ネット支払額</span><span className="block text-slate-500">未確認</span></>
+                      <>
+                        <span className="block text-[11px] font-bold text-slate-500">建玉時の手数料込み支払額</span>
+                        <span className={`block ${bearPutEstimate.entryAllInDebitUSD !== undefined ? "text-slate-950" : "text-slate-500"}`}>
+                          {bearPutEstimate.entryAllInDebitUSD !== undefined ? formatUSD(bearPutEstimate.entryAllInDebitUSD) : "未確認"}
+                        </span>
+                      </>
                     ) : longOptionDisplay && !isHistoryRow ? (
                       <>
                         <span className="block text-[11px] font-bold text-slate-500">{premiumDisplay.basis === "confirmed" ? "支払プレミアム" : "予定の支払プレミアム"}</span>
@@ -641,10 +647,7 @@ export function Dashboard({
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {bearPutEstimate && !isHistoryRow ? (
-                      bearPutEstimate.kind === "available" ? <>
-                        <span className="block text-[11px] font-bold text-slate-500">戦略開始支払（費用込み）</span>
-                        <span className="block">{formatUSD(bearPutEstimate.entryAllInDebitUSD)}</span>
-                      </> : <span className="text-slate-500">未計算</span>
+                      <span className="text-xs font-normal text-slate-400">開始支払額は左列に表示</span>
                     ) : longOptionDisplay && !isHistoryRow ? (
                       <>
                         <span className="block text-xs font-normal text-slate-400">支払総額は左列に表示</span>

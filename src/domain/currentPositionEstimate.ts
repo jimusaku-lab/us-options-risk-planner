@@ -40,7 +40,7 @@ function calculateRemainingLegEstimate(simulation: TradeSimulation, leg: OptionL
   if (!exit) return missing(leg.side === "buy" ? "現在売却価格 未取得" : "買戻し価格 未取得", [{ legId: leg.id, field: "exit_price" }]);
   const entry=getCanonicalOptionEntryExecutions(simulation).find((item)=>item.legId===leg.id&&item.confirmed);
   if (!entry || entry.settlementCurrency!=="USD" || !Number.isFinite(entry.fillPriceUSD) || entry.fillPriceUSD<=0 || !Number.isFinite(entry.contracts) || entry.contracts<=0 || entry.contracts<remaining || !isExplicitFee(entry.commissionUSD)) return missing("建玉時実績 未確認", [{ legId: leg.id, field: "entry_execution" }]);
-  const close=resolveCloseCommissionUSD(simulation,leg); if (close.kind==="missing") return missing("決済想定手数料 未確認", [{ legId: leg.id, field: "close_fee" }]);
+  const close=resolveCloseCommissionUSD(simulation,leg); if (close.kind!=="resolved") return missing(close.reason??"決済想定手数料 未確認", [{ legId: leg.id, field: "close_fee" }]);
   const ratio=remaining/entry.contracts; const entryCashflow=(leg.side === "sell" ? entry.fillPriceUSD * remaining * 100 : -entry.fillPriceUSD * remaining * 100) - entry.commissionUSD * ratio;
   const profitUSD=(leg.side === "buy" ? exit : -exit)*remaining*100 + entryCashflow - close.amountUSD*(remaining/leg.quantity);
   const denominatorUSD=leg.side === "buy" ? Math.max(0,-entryCashflow) : leg.strikeUSD*100*remaining;
@@ -93,7 +93,7 @@ export function calculateCurrentPositionEstimate(simulation: TradeSimulation, no
     if (!callExit || !putExit) return missing(!callExit && !putExit ? "C売却価格・P買戻し価格 未取得" : !callExit ? "C売却価格 未取得" : "P買戻し価格 未取得", [!callExit ? { legId: call?.id, field: "exit_price" as const } : null, !putExit ? { legId: put?.id, field: "exit_price" as const } : null].filter(Boolean) as CurrentPositionEstimateRequirement[]);
     const entryCashflow = getConfirmedEntryNetCashflowUSD(simulation,[call,put]); const callClose=resolveCloseCommissionUSD(simulation,call); const putClose=resolveCloseCommissionUSD(simulation,put);
     if (entryCashflow===undefined) return missing("建玉時実績 未確認", [{ legId: call.id, field: "entry_execution" }, { legId: put.id, field: "entry_execution" }]);
-    if (callClose.kind==="missing" || putClose.kind==="missing") return missing("決済想定手数料 未確認", [callClose.kind==="missing" ? { legId: call.id, field: "close_fee" as const } : null, putClose.kind==="missing" ? { legId: put.id, field: "close_fee" as const } : null].filter(Boolean) as CurrentPositionEstimateRequirement[]);
+    if (callClose.kind!=="resolved" || putClose.kind!=="resolved") { const reason=callClose.kind!=="resolved"?callClose.reason:putClose.kind!=="resolved"?putClose.reason:undefined; return missing(reason??"決済想定手数料 未確認", [callClose.kind!=="resolved" ? { legId: call.id, field: "close_fee" as const } : null, putClose.kind!=="resolved" ? { legId: put.id, field: "close_fee" as const } : null].filter(Boolean) as CurrentPositionEstimateRequirement[]); }
     const closeFees=callClose.amountUSD+putClose.amountUSD;
     const profitUSD = callExit * call.quantity * 100 - putExit * put.quantity * 100 + entryCashflow - closeFees;
     const denominatorUSD = calculatePutAssignmentCapitalTotalUSD(simulation) + Math.max(0, -entryCashflow);
@@ -110,7 +110,7 @@ export function calculateCurrentPositionEstimate(simulation: TradeSimulation, no
     const entry=getCanonicalOptionEntryExecutions(simulation).find((item)=>item.legId===leg.id&&item.confirmed&&item.settlementCurrency==="JPY");
     if (!entry || entry.brokerBookedAmountJPY===undefined || !Number.isFinite(entry.brokerBookedAmountJPY)) return missing("建玉時実績 未確認", [{ legId: leg.id, field: "entry_execution" }]);
     const close=resolveCloseCommissionUSD(simulation,leg);
-    if (close.kind==="missing") return missing("決済想定手数料 未確認", [{ legId: leg.id, field: "close_fee" }]);
+    if (close.kind!=="resolved") return missing(close.reason??"決済想定手数料 未確認", [{ legId: leg.id, field: "close_fee" }]);
     const fx=resolveCurrentEstimateFx(simulation,currentFxQuote);
     if (fx.kind === "missing") return missing("為替レート 未確認", [{ field: "denominator" }]);
     const closeProceedsJPY=(exit*leg.quantity*100-close.amountUSD)*fx.rateJPYPerUSD; const denominatorJPY=Math.abs(entry.brokerBookedAmountJPY);
@@ -121,7 +121,7 @@ export function calculateCurrentPositionEstimate(simulation: TradeSimulation, no
   if (simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT") return { kind: "not_applicable" };
   const entryCashflow = getConfirmedEntryNetCashflowUSD(simulation,[leg]); if (entryCashflow===undefined) return missing("建玉時実績 未確認", [{ legId: leg.id, field: "entry_execution" }]);
   const close=resolveCloseCommissionUSD(simulation,leg);
-  if (close.kind==="missing") return missing("決済想定手数料 未確認", [{ legId: leg.id, field: "close_fee" }]);
+  if (close.kind!=="resolved") return missing(close.reason??"決済想定手数料 未確認", [{ legId: leg.id, field: "close_fee" }]);
   const profitUSD = (long ? exit : -exit) * leg.quantity * 100 + entryCashflow - close.amountUSD;
   const denominatorUSD = long ? Math.max(0, -entryCashflow) : calculatePutAssignmentCapitalTotalUSD(simulation);
   if (!isPositiveFinite(denominatorUSD)) return missing("正本分母 未確認", [{ field: "denominator" }]);

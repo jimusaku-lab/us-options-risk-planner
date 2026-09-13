@@ -85,6 +85,7 @@ import { RiskPanel } from "@/components/results/RiskPanel";
 import { ScenarioCards } from "@/components/results/ScenarioCards";
 import { SummaryCards } from "@/components/results/SummaryCards";
 import { SpreadPerformancePreview } from "@/components/results/SpreadPerformancePreview";
+import { calculateBearPutSpreadEstimate } from "@/domain/bearPutSpread";
 import { StockHoldingEvaluationCard } from "@/components/results/StockHoldingEvaluationCard";
 import { TaxComparisonCard } from "@/components/results/TaxComparisonCard";
 import { BackToTopButton } from "@/components/ui/BackToTopButton";
@@ -92,7 +93,7 @@ import { SimulationEditor } from "@/components/wizard/SimulationEditor";
 import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker, type FxQuote } from "@/lib/marketData";
-import { applyCurrentOptionPricePreview, createCurrentOptionPricePreviewRow, getCurrentOptionPriceTargets, type CurrentOptionPricePreviewRow } from "@/domain/bulkOptionPrice";
+import { applyCurrentPricePreview, createCurrentOptionPricePreviewRow, createCurrentStockPricePreviewRow, getCurrentOptionPriceTargets, getCurrentStockPriceTargets, type CurrentOptionPricePreviewRow, type CurrentStockPricePreviewRow } from "@/domain/bulkOptionPrice";
 import { fetchSaxoOptionPremiumCandidatesPreview, fetchSaxoStatus } from "@/features/saxo/saxoApiClient";
 import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
@@ -287,6 +288,9 @@ export default function App() {
   const [sameDayUsdJpyQuote, setSameDayUsdJpyQuote] = useState<FxQuote | null>(null);
   const [saxoHistoryFetchState, setSaxoHistoryFetchState] = useState<OpeningHistoryFetchState>("not_fetched");
   const [bulkOptionPricePreview, setBulkOptionPricePreview] = useState<CurrentOptionPricePreviewRow[] | null>(null);
+  const [bulkStockPricePreview, setBulkStockPricePreview] = useState<CurrentStockPricePreviewRow[] | null>(null);
+  const [bulkPricePreviewWorkspace, setBulkPricePreviewWorkspace] = useState<string | null>(null);
+  const bulkPriceRequestIdRef = useRef(0);
   const [bulkOptionPriceMessage, setBulkOptionPriceMessage] = useState("");
   const [bulkOptionPriceLoading, setBulkOptionPriceLoading] = useState(false);
   const [bulkOptionPriceCapability, setBulkOptionPriceCapability] = useState<"available" | "unavailable" | "checking">("checking");
@@ -575,47 +579,82 @@ export default function App() {
       return;
     }
     setBulkOptionPriceReferenceConfirmed(false);
+    setBulkOptionPricePreview(null);
+    setBulkStockPricePreview(null);
     const targets = getCurrentOptionPriceTargets(simulations);
-    if (targets.length === 0) {
+    const stockTargets = getCurrentStockPriceTargets(simulations);
+    const requestId = ++bulkPriceRequestIdRef.current;
+    const requestWorkspace = activeWorkspace;
+    setBulkPricePreviewWorkspace(requestWorkspace);
+    if (targets.length === 0 && stockTargets.length === 0) {
       setBulkOptionPricePreview([]);
+      setBulkStockPricePreview([]);
       setBulkOptionPriceMessage("取得対象の建玉中Stock Option脚はありません。");
       return;
     }
-    setBulkOptionPriceProgress({ total: targets.length, completed: 0 });
-    setBulkOptionPriceMessage("候補価格をread-onlyで取得中...");
+    setBulkOptionPriceProgress({ total: targets.length + stockTargets.length, completed: 0 });
+    setBulkOptionPriceMessage("株価とオプション候補価格をread-onlyで取得中...");
     setBulkOptionPriceLoading(true);
     try {
-      const response = await fetchSaxoOptionPremiumCandidatesPreview(targets.map((target) => ({
-        targetId: target.targetId, symbol: target.ticker, expiry: target.expiry, strike: target.strike, optionType: target.optionType,
-        accountKey: target.accountKey, uic: target.uic, assetType: "StockOption", positionId: target.positionId, instrumentCode: target.instrumentCode,
-      })));
-      const resultByTarget = new Map(response.results.map((result) => [result.targetId, result]));
+      const [optionSettled, stockResults] = await Promise.all([
+        targets.length > 0
+          ? Promise.allSettled([fetchSaxoOptionPremiumCandidatesPreview(targets.map((target) => ({
+            targetId: target.targetId, symbol: target.ticker, expiry: target.expiry, strike: target.strike, optionType: target.optionType,
+            accountKey: target.accountKey, uic: target.uic, assetType: "StockOption", positionId: target.positionId, instrumentCode: target.instrumentCode,
+          })))])
+          : Promise.resolve([]),
+        Promise.allSettled(stockTargets.map(async (target) => ({ target, quote: await fetchStooqQuote(target.ticker) }))),
+      ]);
+      if (requestId !== bulkPriceRequestIdRef.current || requestWorkspace !== useOptionsStore.getState().activeWorkspace) return;
+      const optionResult = optionSettled[0];
+      const resultByTarget = new Map(optionResult?.status === "fulfilled" ? optionResult.value.results.map((result) => [result.targetId, result]) : []);
       const rows = targets.map((target) => {
         const result = resultByTarget.get(target.targetId);
-        return result?.candidate ? createCurrentOptionPricePreviewRow(target, result.candidate) : { target, status: "unavailable" as const, reason: result?.error ?? "対象応答がありません" };
+        const optionError = optionResult?.status === "rejected" ? optionResult.reason instanceof Error ? optionResult.reason.message : "Saxo候補価格を取得できませんでした" : undefined;
+        return result?.candidate ? createCurrentOptionPricePreviewRow(target, result.candidate) : { target, status: "unavailable" as const, reason: result?.error ?? optionError ?? "対象応答がありません" };
       });
+      const stockRows = stockResults.map((result, index) => result.status === "fulfilled"
+        ? createCurrentStockPricePreviewRow(result.value.target, result.value.quote)
+        : createCurrentStockPricePreviewRow(stockTargets[index], undefined, result.reason instanceof Error ? result.reason.message : "取得理由不明"));
       setBulkOptionPricePreview(rows);
-      setBulkOptionPriceProgress({ total: targets.length, completed: rows.length });
-      setBulkOptionPriceMessage(`候補を${rows.length}脚取得しました。確認後に成功分だけ一括反映できます。`);
+      setBulkStockPricePreview(stockRows);
+      setBulkOptionPriceProgress({ total: targets.length + stockTargets.length, completed: rows.length + stockRows.length });
+      setBulkOptionPriceMessage(`株価${stockRows.filter((row) => row.status === "ready").length}銘柄・オプション${rows.filter((row) => row.status !== "unavailable").length}脚を取得。内容確認後に成功分だけ一括反映できます。`);
     } catch (error) {
       setBulkOptionPricePreview(null);
+      setBulkStockPricePreview(null);
       const message = error instanceof Error ? error.message : "Saxo候補価格を取得できませんでした。";
       setBulkOptionPriceMessage(/not_found|実装していません|404/i.test(message) ? "SaxoローカルAPIが旧版です。ローカルAPIを更新して再起動してください。個別取得は利用できます。" : `${message} 既存価格は変更していません。`);
     } finally {
-      setBulkOptionPriceLoading(false);
+      if (requestId === bulkPriceRequestIdRef.current) setBulkOptionPriceLoading(false);
     }
   };
   const applyBulkOptionPrices = () => {
-    if (!bulkOptionPricePreview) return;
-    const next = applyCurrentOptionPricePreview(simulations, bulkOptionPricePreview, { includeConfirmedReferences: bulkOptionPriceReferenceConfirmed });
-    const changed = next.filter((simulation, index) => simulation !== simulations[index]).length;
+    if (!bulkOptionPricePreview || !bulkStockPricePreview || bulkPricePreviewWorkspace !== activeWorkspace) {
+      setBulkOptionPriceMessage("取得後にワークスペースが変わりました。再取得してください。");
+      return;
+    }
+    const latest = useOptionsStore.getState().simulations;
+    const next = applyCurrentPricePreview(latest, bulkOptionPricePreview, bulkStockPricePreview, { includeConfirmedReferences: bulkOptionPriceReferenceConfirmed });
+    const changed = next.filter((simulation, index) => simulation !== latest[index]).length;
     if (changed === 0) {
       setBulkOptionPriceMessage("反映できる候補はありません。Mid/Lastのみや片脚欠損は個別に確認してください。");
       return;
     }
     applySimulationBatch(next);
     setBulkOptionPriceReferenceConfirmed(false);
-    setBulkOptionPriceMessage(`取得成功分を一回の保存で反映しました。現在決済見込みは再計算済みです。`);
+    const spreads = next.filter((simulation) => simulation.strategyType === "bear_put_spread" && simulation.status === "open");
+    const available = spreads.filter((simulation) => calculateBearPutSpreadEstimate(simulation).kind === "available").length;
+    const reasons = Array.from(new Set(spreads.flatMap((simulation) => {
+      const estimate = calculateBearPutSpreadEstimate(simulation);
+      return estimate.kind === "missing" ? estimate.reasons : [];
+    })));
+    setBulkOptionPriceMessage(`${changed}建玉の取得成功分を一回の保存で反映しました。現在見込み計算可能 ${available}件${reasons.length ? ` / 未計算: ${reasons.join(" / ")}` : ""}`);
+  };
+  const closeBulkOptionPriceDialog = () => {
+    bulkPriceRequestIdRef.current += 1;
+    setBulkOptionPriceReferenceConfirmed(false);
+    setBulkOptionPriceLoading(false);
   };
 
   const downloadCsv = () => {
@@ -2112,12 +2151,13 @@ export default function App() {
                 currentEstimateFxQuote={sameDayUsdJpyQuote}
                 onRefreshFx={refreshAllFx}
                 bulkOptionPricePreview={bulkOptionPricePreview}
+                bulkStockPricePreview={bulkStockPricePreview}
                 bulkOptionPriceMessage={bulkOptionPriceMessage}
                 bulkOptionPriceLoading={bulkOptionPriceLoading}
                 bulkOptionPriceProgress={bulkOptionPriceProgress}
                 bulkOptionPriceReferenceConfirmed={bulkOptionPriceReferenceConfirmed}
                 onBulkOptionPriceReferenceConfirmedChange={setBulkOptionPriceReferenceConfirmed}
-                onBulkOptionPriceDialogClose={() => setBulkOptionPriceReferenceConfirmed(false)}
+                onBulkOptionPriceDialogClose={closeBulkOptionPriceDialog}
                 bulkOptionPriceAvailable={bulkOptionPriceAvailable}
                 onFetchBulkOptionPrices={previewBulkOptionPrices}
                 onApplyBulkOptionPrices={applyBulkOptionPrices}
@@ -2396,12 +2436,13 @@ export default function App() {
               currentEstimateFxQuote={sameDayUsdJpyQuote}
               onRefreshFx={refreshAllFx}
               bulkOptionPricePreview={bulkOptionPricePreview}
+              bulkStockPricePreview={bulkStockPricePreview}
               bulkOptionPriceMessage={bulkOptionPriceMessage}
               bulkOptionPriceLoading={bulkOptionPriceLoading}
               bulkOptionPriceProgress={bulkOptionPriceProgress}
               bulkOptionPriceReferenceConfirmed={bulkOptionPriceReferenceConfirmed}
               onBulkOptionPriceReferenceConfirmedChange={setBulkOptionPriceReferenceConfirmed}
-              onBulkOptionPriceDialogClose={() => setBulkOptionPriceReferenceConfirmed(false)}
+              onBulkOptionPriceDialogClose={closeBulkOptionPriceDialog}
               bulkOptionPriceAvailable={bulkOptionPriceAvailable}
               onFetchBulkOptionPrices={previewBulkOptionPrices}
               onApplyBulkOptionPrices={applyBulkOptionPrices}

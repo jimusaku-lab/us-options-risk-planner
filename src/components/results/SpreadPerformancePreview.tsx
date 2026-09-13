@@ -1,6 +1,7 @@
 import type { OptionLeg, TradeSimulation } from "@/types/domain";
 import { calculateBearPutSpreadEstimate } from "@/domain/bearPutSpread";
 import { getOptionLegCloseProgress } from "@/domain/optionCloseExecutions";
+import { resolveCloseCommissionUSD, SAXO_CLOSE_COMMISSION_CONFIRMED_AT, SAXO_CLOSE_COMMISSION_SOURCE } from "@/domain/closeCommissionStandard";
 import { formatPct, formatUSD } from "@/lib/format";
 
 const amount = (value: number | undefined) => value !== undefined && Number.isFinite(value) ? formatUSD(value) : "未確認";
@@ -16,7 +17,7 @@ export function SpreadPerformancePreview({ simulation, editable = false, onChang
   const partial = ["partial_pairs", "one_leg_remaining", "imbalanced"].includes(estimate.lifecycle.state);
   const patch = (leg: OptionLeg, field: "price" | "fee", text: string, remaining: number) => {
     const value = text.trim() === "" ? undefined : Number(text);
-    if (value !== undefined && (!Number.isFinite(value) || field === "price" && value < 0)) return;
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) return;
     const at = new Date().toISOString();
     onChange?.({ ...simulation, optionLegs: simulation.optionLegs.map(item => item.id !== leg.id ? item : {
       ...item, ...(field === "price" ? { closeCostUSD: value } : {}), closePlan: { ...item.closePlan, enabled: true,
@@ -34,12 +35,14 @@ export function SpreadPerformancePreview({ simulation, editable = false, onChang
     </div>
     {partial ? <p className="mt-2 text-sm">確定損益 {amount(estimate.realizedPnlUSD)} / 残り見込み {amount(available?.remainingEstimatedPnlUSD)} / 累計見込み {amount(available?.totalEstimatedPnlUSD)}</p> : null}
     {estimate.kind === "missing" ? <p className="mt-2 text-sm text-amber-800">{estimate.reasons.join(" / ")}</p> : null}
-    <details className="mt-2" open={editable}><summary className="cursor-pointer text-xs font-bold">2本の明細・費用対象数量</summary>
+    {available?.evaluatedLegs.some((leg) => leg.closeFeeSource === SAXO_CLOSE_COMMISSION_SOURCE) ? <p className="mt-2 text-xs text-slate-600">決済費用は想定手数料（登録料金表）を使用 / 根拠日 {SAXO_CLOSE_COMMISSION_CONFIRMED_AT}。Saxo実費ではありません。</p> : null}
+    <details className="mt-2"><summary className="cursor-pointer text-xs font-bold">2本の明細・手入力・決済実績下書き（任意）</summary>
       <div className="mt-2 grid gap-2 md:grid-cols-2">{simulation.optionLegs.map(leg => {
         const remaining = progress.legs.find(item => item.legId === leg.id)?.remainingContracts;
         const price = leg.closePlan?.closePriceUSD ?? leg.closeCostUSD;
+        const resolvedFee = remaining !== undefined && remaining > 0 ? resolveCloseCommissionUSD(simulation, leg, remaining) : undefined;
         return <div key={leg.id} className="min-w-0 rounded bg-white p-2 text-xs"><p className="font-bold">{leg.side === "buy" ? "高ストライクP買い" : "低ストライクP売り"} {leg.strikeUSD} / {leg.expiryDate}</p><p>残り{remaining ?? "未確認"}枚 / 開始価格 {amount(leg.premiumUSD)}</p>
-          {remaining === 0 ? <p>決済済み（現値は再評価しません）</p> : <><p>決済参考価格 {amount(price)} / 費用対象{remaining ?? "未確認"}枚・合計 {amount(leg.closePlan?.commissionUSD)}</p><p className="break-words text-slate-500">{spreadPriceEvidenceLabel(leg)}{price === 0 ? " / 明示ゼロ参考・売却可能の保証なし" : ""}</p>
+          {remaining === 0 ? <p>決済済み（現値は再評価しません）</p> : <><p>決済参考価格 {amount(price)} / 費用対象{remaining ?? "未確認"}枚・合計 {resolvedFee?.kind === "resolved" ? amount(resolvedFee.amountUSD) : "未確認"}</p><p className="break-words text-slate-500">{resolvedFee?.kind === "resolved" && resolvedFee.source === SAXO_CLOSE_COMMISSION_SOURCE ? `想定手数料（登録料金表） / 根拠日 ${resolvedFee.confirmedAt ?? SAXO_CLOSE_COMMISSION_CONFIRMED_AT} / ` : ""}{spreadPriceEvidenceLabel(leg)}{price === 0 ? " / 明示ゼロ参考・売却可能の保証なし" : ""}</p>
             {editable && remaining !== undefined && remaining > 0 ? <div className="mt-2 grid gap-2"><label>決済参考価格 USD<input aria-label={`${leg.side === "buy" ? "P買い" : "P売り"} 決済参考価格 USD`} type="number" step="any" min="0" className="ml-2 w-24 rounded border p-1" value={price ?? ""} onChange={event => patch(leg, "price", event.target.value, remaining)} /></label><label>残り{remaining}枚の決済費用合計 USD<input aria-label={`${leg.side === "buy" ? "P買い" : "P売り"} 決済費用合計 USD`} type="number" step="any" className="ml-2 w-24 rounded border p-1" value={leg.closePlan?.commissionUSD ?? ""} onChange={event => patch(leg, "fee", event.target.value, remaining)} /></label>{onDraft ? <button type="button" disabled={price === undefined} onClick={() => onDraft({ ...leg, quantity: remaining })} className="rounded border p-1">この脚の決済実績下書きを作成</button> : null}</div> : null}</>}
         </div>;
       })}</div>
