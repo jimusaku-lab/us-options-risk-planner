@@ -1,28 +1,30 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { TradeSimulation } from "@/types/domain";
 import { prepareStrategyImport, resolveStrategyFillExecution, strategyContractState, type PreparedStrategyImport, type StrategyCandidate, type StrategyLedger } from "@/domain/strategyLedger";
 
-export function SpreadStrategyCandidates({ candidates, ledger, simulations, onCommit }: { candidates: StrategyCandidate[]; ledger: StrategyLedger; simulations: TradeSimulation[]; onCommit: (prepared: PreparedStrategyImport, requestRevision: number) => Promise<{ reasons?: string[] }> }) {
+type Props = { candidates: StrategyCandidate[]; ledger: StrategyLedger; simulations: TradeSimulation[]; onCommit: (prepared: PreparedStrategyImport, requestRevision: number) => Promise<{ reasons?: string[] }> };
+
+export function SpreadStrategyCandidates({ candidates, ledger, simulations, onCommit }: Props) {
+  const [selectedCandidateId, setSelectedCandidateId] = useState(candidates[0]?.id ?? "");
   const [prepared, setPrepared] = useState<PreparedStrategyImport>();
   const [reasons, setReasons] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  if (!candidates.length) return null;
-  return <section aria-label="スプレッドの組み合わせ確認" className="rounded border border-indigo-200 p-3">
-    <h3 className="text-sm font-bold">スプレッドの組み合わせ確認</h3>
-    <p className="text-xs text-slate-600">既存約定への参照をまとめます。注文・現金反映は行いません。</p>
-    {candidates.map(candidate => <div key={candidate.id} className="mt-2 rounded border p-2">
-      <p className="text-sm font-bold">{candidate.fills[0].contract.ticker} / {strategyContractState(candidate) === "unknown" ? "2脚の組み合わせ" : "Bear Put Spread"} / {candidate.contracts}組</p>
-      {strategyContractState(candidate) === "unknown" ? <p className="text-xs">ベア・プットとして管理／契約仕様未照合</p> : null}
-      <dl className="grid gap-2 text-xs sm:grid-cols-2">{candidate.fills.map(fill => { const execution = resolveStrategyFillExecution(fill, simulations); const feeSource = execution?.commissionSource === "saxo_derived_same_currency_booked_difference" ? "Saxo同一通貨の記帳差額（導出）" : execution?.commissionSource === "saxo_actual" ? "Saxo明示費用" : "費用出所未確認"; return <div key={fill.key}><dt>{fill.contract.side === "buy" ? "P買い" : "P売り"} {fill.contract.strike} / {fill.contract.expiry}</dt><dd>{execution?.tradeDate ?? "約定日未取得"} / {execution?.contracts ?? "数量未取得"}枚 / 単価 {execution?.fillPriceUSD ?? "未取得"} USD / 開始費用 {execution?.commissionUSD ?? "未取得"} USD（{execution?.commissionUSD === undefined ? "未取得" : feeSource}） / {fill.existing ? "既存記録を参照" : "取得済み約定"}</dd></div>; })}</dl>
-      <button type="button" className="mt-2 rounded bg-indigo-700 px-3 py-2 text-xs font-bold text-white" disabled={saving} onClick={() => { const result = prepareStrategyImport(candidate, ledger, simulations); if ("reasons" in result) { setPrepared(undefined); setReasons(result.reasons); } else { setPrepared(result); setReasons([]); } }}>組み合わせを確認</button>
-    </div>)}
-    {reasons.length ? <p role="alert" className="mt-2 text-sm text-amber-800">{reasons.join(" / ")}</p> : null}
-    {prepared ? <div className="mt-2 rounded bg-indigo-50 p-3"><p className="text-sm">この2本を1つの戦略として管理します。開始実績は上記の明示値を使い、欠損は補いません。</p><button type="button" disabled={saving} className="mt-2 rounded bg-emerald-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-50" onClick={async () => {
-      const current = candidates.find(candidate => candidate.id === prepared.candidate.id);
-      if (!current) { setPrepared(undefined); setReasons(["取得状態が変わりました。組み合わせを再確認してください"]); return; }
-      setSaving(true);
-      try { const result = await onCommit(prepared, current.requestRevision); if (result.reasons) setReasons(result.reasons); else { setPrepared(undefined); setReasons([]); } }
-      finally { setSaving(false); }
-    }}>このスプレッドを反映</button></div> : null}
+  const [savedCandidateId, setSavedCandidateId] = useState<string>();
+  const selectedCandidate = useMemo(() => candidates.find((candidate) => candidate.id === selectedCandidateId) ?? candidates[0], [candidates, selectedCandidateId]);
+  useEffect(() => { if (candidates.length > 0 && !candidates.some((candidate) => candidate.id === selectedCandidateId)) { setSelectedCandidateId(candidates[0].id); setPrepared(undefined); setReasons([]); setSavedCandidateId(undefined); } }, [candidates, selectedCandidateId]);
+  if (!selectedCandidate) return null;
+  const ticker = selectedCandidate.fills[0].contract.ticker;
+  const isPrepared = prepared?.candidate.id === selectedCandidate.id;
+  const isSaved = savedCandidateId === selectedCandidate.id;
+  const selectCandidate = (candidateId: string) => { setSelectedCandidateId(candidateId); setPrepared(undefined); setReasons([]); setSavedCandidateId(undefined); };
+  const prepareSelected = () => { const result = prepareStrategyImport(selectedCandidate, ledger, simulations); if ("reasons" in result) { setPrepared(undefined); setReasons(result.reasons); } else { setPrepared(result); setReasons([]); } };
+  return <section aria-label="現在の建玉取込" className="rounded-md border border-teal-300 bg-teal-50 p-3">
+    <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-xs font-bold text-teal-800">現在の作業</p><h3 className="mt-0.5 text-base font-bold text-slate-950">次にすること：{ticker}の2脚を確認</h3><p className="mt-1 text-xs leading-5 text-slate-700">取得済みの2脚を1つの戦略として確認します。注文・現金反映は行いません。</p></div><span className={`rounded-full px-2 py-1 text-xs font-bold ${isSaved ? "bg-emerald-100 text-emerald-800" : isPrepared ? "bg-amber-100 text-amber-900" : "bg-white text-slate-700"}`} aria-live="polite">{isSaved ? "保存しました" : isPrepared ? "内容確認済み／まだ未保存" : "まだ未保存"}</span></div>
+    {candidates.length > 1 ? <fieldset className="mt-3 rounded border border-teal-200 bg-white p-2"><legend className="px-1 text-xs font-bold text-slate-700">確認する候補を選択</legend><div className="flex flex-wrap gap-2">{candidates.map((candidate) => <label key={candidate.id} className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs"><input type="radio" name="spread-candidate" checked={candidate.id === selectedCandidate.id} onChange={() => selectCandidate(candidate.id)} />{candidate.fills[0].contract.ticker} / 2脚</label>)}</div></fieldset> : null}
+    <div className="mt-3 rounded-md border border-teal-200 bg-white p-3"><p className="text-sm font-bold">{ticker} / {strategyContractState(selectedCandidate) === "unknown" ? "2脚の組み合わせ" : "Bear Put Spread"} / {selectedCandidate.contracts}組</p>{strategyContractState(selectedCandidate) === "unknown" ? <p className="mt-1 text-xs text-amber-900">ベア・プットとして管理／契約仕様未照合</p> : null}<dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2">{selectedCandidate.fills.map((fill) => { const execution = resolveStrategyFillExecution(fill, simulations); const feeSource = execution?.commissionSource === "saxo_derived_same_currency_booked_difference" ? "Saxo同一通貨の記帳差額（導出）" : execution?.commissionSource === "saxo_actual" ? "Saxo明示費用" : "費用出所未確認"; return <div key={fill.key}><dt className="font-bold">{fill.contract.side === "buy" ? "P買い" : "P売り"} {fill.contract.strike} / {fill.contract.expiry}</dt><dd className="mt-0.5 text-slate-700">{execution?.tradeDate ?? "約定日未取得"} / {execution?.contracts ?? "数量未取得"}枚 / 単価 {execution?.fillPriceUSD ?? "未取得"} USD / 開始費用 {execution?.commissionUSD ?? "未取得"} USD（{execution?.commissionUSD === undefined ? "未取得" : feeSource}） / {fill.existing ? "既存記録を参照" : "取得済み約定"}</dd></div>; })}</dl></div>
+    {reasons.length ? <p role="alert" className="mt-2 text-sm font-bold text-amber-900">まだ保存していません：{reasons.join(" / ")}</p> : null}
+    {!isPrepared && !isSaved ? <button type="button" className="mt-3 rounded-md bg-teal-700 px-4 py-2 text-sm font-bold text-white hover:bg-teal-800 disabled:opacity-50" disabled={saving} onClick={prepareSelected}>この2脚を確認する</button> : null}
+    {isPrepared && !isSaved ? <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3"><p className="text-sm font-bold text-slate-900">内容確認済み／まだ未保存</p><p className="mt-1 text-xs text-slate-700">この2脚を1つの戦略として保存します。開始実績は上記の明示値を使い、欠損は補いません。</p><div className="mt-2 flex flex-wrap gap-2"><button type="button" disabled={saving} className="rounded-md bg-teal-700 px-4 py-2 text-sm font-bold text-white hover:bg-teal-800 disabled:opacity-50" onClick={async () => { const current = candidates.find((candidate) => candidate.id === prepared.candidate.id); if (!current) { setPrepared(undefined); setReasons(["取得状態が変わりました。2脚を再確認してください"]); return; } setSaving(true); try { const result = await onCommit(prepared, current.requestRevision); if (result.reasons) setReasons(result.reasons); else { setSavedCandidateId(current.id); setPrepared(undefined); setReasons([]); } } finally { setSaving(false); } }}>このスプレッドを保存して表示</button><button type="button" disabled={saving} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700" onClick={() => { setPrepared(undefined); setReasons([]); }}>内容を修正する</button></div></div> : null}
+    {isSaved ? <p className="mt-3 rounded-md bg-emerald-100 px-3 py-2 text-sm font-bold text-emerald-900" role="status">保存しました。建玉ダッシュボードに表示します。</p> : null}
   </section>;
 }

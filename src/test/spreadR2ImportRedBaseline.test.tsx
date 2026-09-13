@@ -142,10 +142,12 @@ describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE production import", () => {
     expect(screen.queryByRole("button", { name: "確認して建玉入力へ" })).toBeNull();
     // A production confirmation route must exist before testing parent commit,
     // re-fetch, reload, and partial/full history. No fake handler is substituted.
-    const confirmations = screen.queryAllByRole("button", { name: /このスプレッドを反映|この2本を1つの戦略として管理|組み合わせを確認/ });
+    const confirmations = screen.queryAllByRole("button", { name: /この2脚を確認する/ });
     expect(confirmations.filter((button) => !(button as HTMLButtonElement).disabled)).toHaveLength(1);
     fireEvent.click(confirmations[0]);
-    const apply = await screen.findByRole("button", { name: "このスプレッドを反映" });
+    expect(screen.getAllByText("内容確認済み／まだ未保存").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "この2脚を確認する" })).toBeNull();
+    const apply = await screen.findByRole("button", { name: "このスプレッドを保存して表示" });
     expect(JSON.stringify(useOptionsStore.getState().simulationsByWorkspace)).toBe(before);
     const persistence = vi.spyOn(Storage.prototype, "setItem");
     fireEvent.click(apply);
@@ -182,7 +184,7 @@ describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE production import", () => {
     fireEvent.click(fetchAgain);
     await waitFor(() => expect(fetchAgain).toBeEnabled());
     expect(useOptionsStore.getState().simulations).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "組み合わせを確認" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "この2脚を確認する" })).toBeNull();
     // Feed confirmed fixture executions through the production persistence
     // action (broker operations are never made). Partial then closed history.
     const closedLong = { id: "TEST-close-long", legId: reloaded.optionLegs[0].id, confirmed: true, closeDate: "2026-09-10", contracts: 1, closePriceUSD: 4.5, commissionUSD: 2.24, settlementCurrency: "USD" as const, source: "manual" as const };

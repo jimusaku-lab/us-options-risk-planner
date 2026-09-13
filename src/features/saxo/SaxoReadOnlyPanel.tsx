@@ -1234,7 +1234,6 @@ export function SaxoReadOnlyPanel({
               bulkFetchButtonRef={bulkFetchButtonRef}
             />
             {onCommitSpread && spreadCandidates.length ? <div id="saxo-spread-candidates">
-              <p className="mb-2 text-sm font-bold text-indigo-900">次にすること: 下の2本を確認して、1つの戦略にまとめます。</p>
               <SpreadStrategyCandidates candidates={spreadCandidates} ledger={strategyLedger ?? emptyStrategyLedger()} simulations={simulations} onCommit={onCommitSpread} />
             </div> : null}
             {onCommitSpread && spreadIssues.length ? <section id={spreadCandidates.length ? undefined : "saxo-spread-candidates"} aria-label="スプレッドにまとめなかった明細" className="rounded border border-amber-200 bg-amber-50 p-3 text-sm">
@@ -2157,6 +2156,21 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
   ref,
 ) {
   const orderActions = summary.orderActions ?? [];
+  const hasFocusedSpread = summary.primaryAction?.kind === "spread";
+  const otherActionCount = Math.max(0, summary.requiredActionCount - (hasFocusedSpread ? 1 : 0));
+  const otherConfirmations = (
+    <>
+      {!hasFocusedSpread && summary.nextActionDetail ? <div className={`mt-2 rounded-md border px-3 py-2 text-sm font-bold ${summary.hasNewPositionCandidates ? "border-teal-300 bg-white text-teal-900" : "border-slate-200 bg-white text-slate-800"}`}>{summary.nextActionDetail}</div> : null}
+      <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
+        {summary.accountLines.map((line) => <PendingLine key={line.key} label={line.label} detail={line.detail} actionLabel={line.actionLabel} disabled={!line.actionable} onClick={line.target === "mapping" ? onShowMapping : onShowSnapshot} />)}
+        {!hasFocusedSpread ? <PendingLine label="建玉候補" detail={summary.positionLine.detail} actionLabel={summary.positionLine.actionLabel} disabled={!summary.positionLine.actionable} tone={summary.positionLine.tone} onClick={onShowPositions} /> : null}
+        <PendingLine label="注文候補" detail={summary.orderLine.detail} actionLabel={summary.orderLine.actionLabel ?? "注文候補を確認"} disabled={!summary.orderLine.actionable || orderActions.length > 0} onClick={onShowOrders} />
+        <PendingLine label="履歴候補" detail={summary.historyLine.detail} actionLabel={summary.historyLine.actionLabel} disabled={!summary.historyLine.actionable} tone={summary.historyIsSupplemental ? "muted" : undefined} onClick={onShowHistory} />
+      </div>
+      {summary.historyActions.length > 0 ? <div className="mt-2 space-y-2 rounded-md border border-white/70 bg-white p-2">{summary.historyActions.map((action) => <HistorySummaryActionRow key={action.item.id} action={action} onOpen={() => onOpenHistoryAction(action.item)} onShowHistory={onShowHistory} />)}</div> : null}
+      {orderActions.length > 0 ? <div className="mt-2 space-y-2 rounded-md border border-white/70 bg-white p-2">{orderActions.map((action) => <ExitOrderSummaryActionRow key={`${action.simulationId}:${action.legId}`} action={action} hideAction={summary.primaryAction?.kind === "order" && summary.primaryAction.action === action} onOpen={() => onOpenOrderAction?.(action)} />)}</div> : null}
+    </>
+  );
   return (
     <div ref={ref} className={`rounded-md border p-3 ${summary.hasPending ? "border-teal-200 bg-teal-50" : "border-slate-200 bg-slate-50"}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2168,7 +2182,7 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
         <div><span className="font-bold text-slate-900">次にすること:</span> {summary.progress.next}</div>
         <div><span className="font-bold text-slate-900">完了まで:</span> {summary.progress.remaining}</div>
       </div>
-      {summary.primaryAction ? (
+      {summary.primaryAction && !hasFocusedSpread ? (
         <button
           type="button"
           className="mt-2 rounded-md bg-teal-700 px-3 py-2 text-sm font-bold text-white hover:bg-teal-800"
@@ -2177,63 +2191,8 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
           {summary.primaryAction.actionLabel}
         </button>
       ) : null}
-      {summary.nextActionDetail ? (
-        <div
-          className={`mt-2 rounded-md border px-3 py-2 text-sm font-bold ${
-            summary.hasNewPositionCandidates
-              ? "border-teal-300 bg-white text-teal-900"
-              : "border-slate-200 bg-white text-slate-800"
-          }`}
-        >
-          {summary.nextActionDetail}
-        </div>
-      ) : null}
-      <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
-        {summary.accountLines.map((line) => (
-          <PendingLine
-            key={line.key}
-            label={line.label}
-            detail={line.detail}
-            actionLabel={line.actionLabel}
-            disabled={!line.actionable}
-            onClick={line.target === "mapping" ? onShowMapping : onShowSnapshot}
-          />
-        ))}
-        <PendingLine
-          label="建玉候補"
-          detail={summary.positionLine.detail}
-          actionLabel={summary.positionLine.actionLabel}
-          disabled={!summary.positionLine.actionable}
-          tone={summary.positionLine.tone}
-          onClick={onShowPositions}
-        />
-        <PendingLine label="注文候補" detail={summary.orderLine.detail} actionLabel={summary.orderLine.actionLabel ?? "注文候補を確認"} disabled={!summary.orderLine.actionable || orderActions.length > 0} onClick={onShowOrders} />
-        <PendingLine
-          label="履歴候補"
-          detail={summary.historyLine.detail}
-          actionLabel={summary.historyLine.actionLabel}
-          disabled={!summary.historyLine.actionable}
-          tone={summary.historyIsSupplemental ? "muted" : undefined}
-          onClick={onShowHistory}
-        />
-      </div>
-      {summary.historyActions.length > 0 ? (
-        <div className="mt-2 space-y-2 rounded-md border border-white/70 bg-white p-2">
-          {summary.historyActions.map((action) => (
-            <HistorySummaryActionRow
-              key={action.item.id}
-              action={action}
-              onOpen={() => onOpenHistoryAction(action.item)}
-              onShowHistory={onShowHistory}
-            />
-          ))}
-        </div>
-      ) : null}
-      {orderActions.length > 0 ? (
-        <div className="mt-2 space-y-2 rounded-md border border-white/70 bg-white p-2">
-          {orderActions.map((action) => <ExitOrderSummaryActionRow key={`${action.simulationId}:${action.legId}`} action={action} hideAction={summary.primaryAction?.kind === "order" && summary.primaryAction.action === action} onOpen={() => onOpenOrderAction?.(action)} />)}
-        </div>
-      ) : null}
+      {hasFocusedSpread ? <button type="button" className="mt-2 text-xs font-bold text-teal-800 underline underline-offset-2" onClick={() => onPrimaryAction?.(summary.primaryAction!)}>2脚の確認欄へ</button> : null}
+      {hasFocusedSpread ? <details className="mt-3 rounded-md border border-slate-200 bg-white/70 p-2"><summary className="cursor-pointer text-sm font-bold text-slate-700">その他の確認（この建玉の保存とは別）{otherActionCount > 0 ? ` ${otherActionCount}件` : ""}</summary>{otherConfirmations}</details> : otherConfirmations}
     </div>
   );
 });
