@@ -679,13 +679,20 @@ async function getTrades({ fromDate, toDate }, accounts = []) {
     $top: 100,
   });
   const rawItems = Array.isArray(payload.Data) ? payload.Data : Array.isArray(payload.Trades) ? payload.Trades : [];
+  const fetchedAt = new Date().toISOString();
+  const items = await normalizeHistoryItemsWithInstrumentDetails(rawItems, "trade", {
+    accounts,
+    environment: getEnvironment(),
+    clientKey,
+    fetchedAt,
+  });
   return {
     endpoint: "cs/v1/reports/trades/{ClientKey}",
     status: "available",
     fromDate,
     toDate,
-    fetchedAt: new Date().toISOString(),
-    items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "trade", index, { accounts, environment: getEnvironment() })),
+    fetchedAt,
+    items,
     coverage: payload.coverage,
     raw: payload,
   };
@@ -1763,6 +1770,37 @@ export function resolveHistoryAccountIdentity(raw, accounts = [], environment) {
   return { status: accountId || accountNumber ? "unmatched" : "missing", sourceField: accountId ? "AccountId" : accountNumber ? "AccountNumber" : undefined };
 }
 
+export async function normalizeHistoryItemsWithInstrumentDetails(rawItems, kind, context = {}, fetchDetails = getSaxoInstrumentDetails) {
+  const detailsByIdentity = new Map();
+  return Promise.all(rawItems.map(async (raw, index) => {
+    const accountIdentity = resolveHistoryAccountIdentity(raw, context.accounts ?? [], context.environment);
+    const uic = firstNumber(raw, ["Uic", "UIC"]);
+    const assetType = firstString(raw, ["AssetType", "InstrumentType", "ProductType"]);
+    let instrumentDetails;
+    let instrumentDetailsError;
+    if (kind === "trade" && Number.isFinite(uic) && assetType && accountIdentity.brokerAccountKey) {
+      const key = `${context.environment ?? "unknown"}:${accountIdentity.brokerAccountKey}:${uic}:${assetType}`;
+      if (!detailsByIdentity.has(key)) {
+        detailsByIdentity.set(key, fetchDetails({
+          uic,
+          assetType,
+          accountKey: accountIdentity.brokerAccountKey,
+          clientKey: context.clientKey,
+        }).catch(() => ({ __fetchError: "instrument_details_unavailable" })));
+      }
+      const resolved = await detailsByIdentity.get(key);
+      if (resolved?.__fetchError) instrumentDetailsError = resolved.__fetchError;
+      else instrumentDetails = resolved;
+    }
+    return normalizeHistoryItem(raw, kind, index, {
+      ...context,
+      instrumentDetails,
+      instrumentDetailsFetchedAt: context.fetchedAt,
+      instrumentDetailsError,
+    });
+  }));
+}
+
 export function normalizeHistoryItem(raw, kind, index, context = {}) {
   const accountKey = firstString(raw, ["AccountKey"]);
   const accountId = firstString(raw, ["AccountId"]);
@@ -1777,6 +1815,14 @@ export function normalizeHistoryItem(raw, kind, index, context = {}) {
   const accountIdentity = resolveHistoryAccountIdentity(raw, context.accounts ?? [], context.environment);
   const directAccountCurrency = firstString(raw, ["AccountCurrency"]);
   const accountCurrency = directAccountCurrency ?? accountIdentity.account?.currency;
+  const directInstrumentCurrencyMatch = firstStringMatch(raw, ["Currency", "TradeCurrency", "InstrumentCurrency"]);
+  const directInstrumentCurrency = directInstrumentCurrencyMatch?.value;
+  const detailInstrumentCurrency = firstString(context.instrumentDetails, ["CurrencyCode"]);
+  const instrumentCurrencyConflict = Boolean(
+    directInstrumentCurrency && detailInstrumentCurrency &&
+    directInstrumentCurrency.toUpperCase() !== detailInstrumentCurrency.toUpperCase()
+  );
+  const instrumentCurrency = instrumentCurrencyConflict ? undefined : directInstrumentCurrency ?? detailInstrumentCurrency;
   const optionTypeRaw = firstString(raw, ["PutCall", "CallPut", "OptionType", "OptionRootType"]);
   const instrumentForOption = firstString(raw, ["Symbol", "DisplayAndFormat.Symbol", "InstrumentSymbol", "InstrumentCode", "Description", "InstrumentDescription"]);
   const inferredContract = parseSaxoOptionContract(instrumentForOption);
@@ -1794,10 +1840,12 @@ export function normalizeHistoryItem(raw, kind, index, context = {}) {
   const premiumAmountMatch = firstNumberMatch(raw, premiumAmountAliases);
   const explicitTransactionCostMatch = firstNumberMatch(raw, transactionCostAliases);
   const explicitTransactionCostValues = transactionCostAliases.map((name) => firstNumber(raw, [name])).filter(Number.isFinite);
-  const transactionCostConflict = explicitTransactionCostValues.some((value) => Math.abs(value - explicitTransactionCostValues[0]) > 0.005);
+  const transactionCostConflict = instrumentCurrencyConflict || explicitTransactionCostValues.some((value) => Math.abs(value - explicitTransactionCostValues[0]) > 0.005);
   // An explicit zero is evidence, not absence. Only infer when no numeric
   // transaction-cost field was supplied by the broker.
-  const inferredTransactionCostMatch = kind === "trade" ? inferTransactionCostFromTradeValue(raw, accountCurrency) : undefined;
+  const inferredTransactionCostMatch = kind === "trade" && !instrumentCurrencyConflict
+    ? inferTransactionCostFromTradeValue(raw, accountCurrency, instrumentCurrency)
+    : undefined;
   const transactionCostMatch = explicitTransactionCostMatch ?? inferredTransactionCostMatch;
   const exchangeRateMatch = firstNumberMatch(raw, exchangeRateAliases);
   return {
@@ -1830,7 +1878,15 @@ export function normalizeHistoryItem(raw, kind, index, context = {}) {
     // Only the latter is admissible for a close candidate.
     price: firstNumber(raw, kind === "order_activity" ? ["ExecutionPrice", "AveragePrice", "AverageExecutionPrice"] : ["ClosePrice", "Price", "OpenPrice", "TradePrice"]),
     tradeDate: normalizeSaxoDate(firstString(raw, ["TradeDateClose", "TradeDate", "ExecutionTime", "ActivityTime", "ValueDate", "Date"])),
-    currency: firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency"]),
+    currency: instrumentCurrency,
+    currencySourceField: directInstrumentCurrencyMatch
+      ? `trade.${directInstrumentCurrencyMatch.matchedName}`
+      : detailInstrumentCurrency
+        ? "InstrumentDetails.CurrencyCode"
+        : undefined,
+    currencyEvidenceFetchedAt: detailInstrumentCurrency ? context.instrumentDetailsFetchedAt : undefined,
+    currencyEvidenceError: context.instrumentDetailsError,
+    currencyConflict: instrumentCurrencyConflict,
     accountCurrency,
     accountCurrencySourceField: directAccountCurrency ? "AccountCurrency" : accountIdentity.account?.currency ? `accounts.${accountIdentity.sourceField}.Currency` : undefined,
     profitLoss,
@@ -1873,10 +1929,10 @@ export function normalizeHistoryItem(raw, kind, index, context = {}) {
   };
 }
 
-export function inferTransactionCostFromTradeValue(raw, resolvedAccountCurrency) {
+export function inferTransactionCostFromTradeValue(raw, resolvedAccountCurrency, resolvedInstrumentCurrency) {
   const tradedValue = firstNumber(raw, ["TradedValue"]);
   const accountCurrency = String(firstString(raw, ["AccountCurrency"]) ?? resolvedAccountCurrency ?? "").toUpperCase();
-  const instrumentCurrency = String(firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency"]) ?? "").toUpperCase();
+  const instrumentCurrency = String(firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency"]) ?? resolvedInstrumentCurrency ?? "").toUpperCase();
   if (accountCurrency !== "USD" || instrumentCurrency !== "USD") return undefined;
   const classification = String(firstString(raw, ["TradeType", "ActivityType", "EventType", "Status", "Reason"]) ?? "").toLowerCase();
   if (firstBoolean(raw, ["IsCorrection", "Correction", "IsReversal"]) || /(correction|adjustment|reversal|cancel)/.test(classification)) return undefined;

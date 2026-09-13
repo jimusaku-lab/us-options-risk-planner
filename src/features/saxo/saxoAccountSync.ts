@@ -816,6 +816,10 @@ export type SaxoHistoryDiscoveryItem = {
   price?: number;
   tradeDate?: string;
   currency?: Currency | string;
+  currencySourceField?: string;
+  currencyEvidenceFetchedAt?: string;
+  currencyEvidenceError?: string;
+  currencyConflict?: boolean;
   accountCurrency?: Currency | string;
   accountCurrencySourceField?: string;
   profitLoss?: number;

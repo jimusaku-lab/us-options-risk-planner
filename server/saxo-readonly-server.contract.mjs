@@ -3,7 +3,7 @@ import test from "node:test";
 
 process.env.SAXO_READONLY_SERVER_TEST = "1";
 
-const { enrichPositionUnderlyingIdentities, normalizePosition, normalizeOrder, normalizeHistoryItem, fetchSaxoPages, resolveHistoryAccountIdentity, inferTransactionCostFromTradeValue } = await import("./saxo-readonly-server.mjs");
+const { enrichPositionUnderlyingIdentities, normalizePosition, normalizeOrder, normalizeHistoryItem, normalizeHistoryItemsWithInstrumentDetails, fetchSaxoPages, resolveHistoryAccountIdentity, inferTransactionCostFromTradeValue } = await import("./saxo-readonly-server.mjs");
 
 test("R2 documented specification fields enrich existing underlying without fabricating deliverable", async () => {
   const position = { kind: "option", uic: 990001, assetType: "StockOption", accountKey: "TEST-N", underlyingIdentity: "uic:990000:stock" };
@@ -119,6 +119,32 @@ test("R4 derives only a positive signed USD same-currency booked difference and 
   assert.equal(inferTransactionCostFromTradeValue({ Currency: "USD", AccountCurrency: "JPY", TradedValue: -510, BookedAmountAccountCurrency: -512.24 }, "JPY"), undefined);
   assert.equal(inferTransactionCostFromTradeValue({ Currency: "USD", AccountCurrency: "USD", TradedValue: -512.24, BookedAmountAccountCurrency: -510 }, "USD"), undefined);
   assert.equal(inferTransactionCostFromTradeValue({ Currency: "USD", AccountCurrency: "USD", TradedValue: -510, BookedAmountAccountCurrency: -512.24, IsCorrection: true }, "USD"), undefined);
+});
+
+test("R4 resolves missing trade currency from same-identity InstrumentDetails without mutating raw", async () => {
+  const accounts = [{ accountKey: "TEST-N-key", accountId: "TEST-N-id", currency: "USD", environment: "sim" }];
+  const raw = { TradeId: "TEST-fill", AccountId: "TEST-N-id", AssetType: "StockOption", Uic: 710001, ClientCurrency: "JPY", TradedValue: -510, BookedAmountAccountCurrency: -512.24 };
+  const [item] = await normalizeHistoryItemsWithInstrumentDetails([raw], "trade", { accounts, environment: "sim", clientKey: "TEST-client", fetchedAt: "2026-09-13T00:00:00.000Z" }, async ({ uic, assetType, accountKey }) => {
+    assert.deepEqual({ uic, assetType, accountKey }, { uic: 710001, assetType: "StockOption", accountKey: "TEST-N-key" });
+    return { CurrencyCode: "USD" };
+  });
+  assert.equal("Currency" in raw, false);
+  assert.equal(item.currency, "USD");
+  assert.equal(item.currencySourceField, "InstrumentDetails.CurrencyCode");
+  assert.equal(item.currencyEvidenceFetchedAt, "2026-09-13T00:00:00.000Z");
+  assert.equal(item.transactionCost, 2.24);
+});
+
+test("R4 blocks missing or conflicting InstrumentDetails currency evidence", async () => {
+  const accounts = [{ accountKey: "TEST-N-key", accountId: "TEST-N-id", currency: "USD", environment: "sim" }];
+  const base = { TradeId: "TEST-fill", AccountId: "TEST-N-id", AssetType: "StockOption", Uic: 710001, TradedValue: -510, BookedAmountAccountCurrency: -512.24 };
+  const [missing] = await normalizeHistoryItemsWithInstrumentDetails([base], "trade", { accounts, environment: "sim" }, async () => ({}));
+  assert.equal(missing.transactionCost, undefined);
+  assert.equal(missing.currency, undefined);
+  const [conflict] = await normalizeHistoryItemsWithInstrumentDetails([{ ...base, Currency: "EUR" }], "trade", { accounts, environment: "sim" }, async () => ({ CurrencyCode: "USD" }));
+  assert.equal(conflict.currencyConflict, true);
+  assert.equal(conflict.transactionCostConflict, true);
+  assert.equal(conflict.transactionCost, undefined);
 });
 
 test("R4 explicit transaction cost including zero wins over derived evidence", () => {
