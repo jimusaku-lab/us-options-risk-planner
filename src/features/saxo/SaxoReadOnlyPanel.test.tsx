@@ -101,6 +101,35 @@ it("counts an OCO pair as one actionable exit-rule review and exposes its direct
   expect(onPrimaryAction).toHaveBeenCalledWith(expect.objectContaining({ kind: "order", action: expect.objectContaining({ simulationId: "anonymous-exit-rule", legId: "put-leg" }) }));
 });
 
+it("R4 counts one ready spread instead of two raw positions and exposes its direct CTA", () => {
+  const candidate = {
+    id: "TEST-spread",
+    fills: [
+      { contract: { ticker: "SAMPLE", side: "buy" } },
+      { contract: { ticker: "SAMPLE", side: "sell" } },
+    ],
+  } as never;
+  const rows = [
+    { position: { id: "TEST-long" }, status: "app_missing" },
+    { position: { id: "TEST-short" }, status: "app_missing" },
+  ] as never;
+  const summary = createReflectionSummary({ mappedSnapshots: [], accountInputs: { P: { cashBalance: 0 } as never, N: { cashBalance: 0 } as never }, positionRows: rows, simulations: [], stockTransfers: [], orders: [], historyEndpoints: [], historyReflectionStates: {}, spreadCandidates: [candidate], spreadPositionIds: new Set(["TEST-long", "TEST-short"]) });
+  expect(summary.requiredActionCount).toBe(1);
+  expect(summary.positionLine.detail).toContain("ベア・プット候補1件");
+  expect(summary.primaryAction).toMatchObject({ kind: "spread", actionLabel: "SAMPLE ベア・プット：2脚を確認" });
+});
+
+it("R4 keeps a blocked spread visible as a stop reason without inventing a resolution action", () => {
+  const rows = [
+    { position: { id: "TEST-long" }, status: "app_missing" },
+    { position: { id: "TEST-short" }, status: "app_missing" },
+  ] as never;
+  const summary = createReflectionSummary({ mappedSnapshots: [], accountInputs: { P: { cashBalance: 0 } as never, N: { cashBalance: 0 } as never }, positionRows: rows, simulations: [], stockTransfers: [], orders: [], historyEndpoints: [], historyReflectionStates: {}, spreadIssues: [{ code: "account_identity", label: "SAMPLE", reason: "口座を一意に照合できません" }], spreadPositionIds: new Set(["TEST-long", "TEST-short"]) });
+  expect(summary.requiredActionCount).toBe(0);
+  expect(summary.positionLine.detail).toContain("取込停止1件");
+  expect(summary.primaryAction).toBeUndefined();
+});
+
 it("classifies a working sell against one long call as an exit candidate, not a covered call", () => {
   const position = { ...callPosition, accountKey: "account", uic: 55001, accountAssignment: "N" as const, symbol: "SAMPLE", underlyingSymbol: "SAMPLE", quantity: 1 };
   const order: SaxoApiOrderSnapshot = { id: "TEST-order", accountKey: "account", accountAssignment: "N", assetType: "StockOption", uic: 55001, optionType: "call", side: "sell", quantity: 1, orderType: "StopIfTraded", status: "Working", openClose: "unknown", missingFields: [], fetchedAt: "2026-09-13T00:00:00Z" };

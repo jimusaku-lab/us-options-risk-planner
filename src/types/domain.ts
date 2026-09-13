@@ -495,7 +495,7 @@ export type OptionEntryExecution = {
   brokerTaxIncludedFeeJPY?: number;
   commissionUSD?: number;
   /** Origin of the N-account USD option entry fee. */
-  commissionSource?: "standard_default" | "saxo_ticket_confirmed_standard" | "saxo_actual" | "manual";
+  commissionSource?: "standard_default" | "saxo_ticket_confirmed_standard" | "saxo_actual" | "saxo_derived_same_currency_booked_difference" | "manual";
   commissionJPY?: number;
   referenceFxRateJPY?: number;
   inputMode?: "P_JPY_BROKER_STATEMENT" | "USD_EXECUTION_CALC";

@@ -789,6 +789,8 @@ export type SaxoHistoryDiscoveryEndpoint = {
 export type SaxoHistoryDiscoveryItem = {
   /** Local-only canonical reconciliation identity, never rendered. */
   brokerAccountKey?: string;
+  brokerAccountIdentityStatus?: "direct" | "resolved" | "unmatched" | "ambiguous" | "conflict" | "environment_mismatch" | "missing";
+  brokerAccountKeySourceField?: string;
   brokerHistoryId?: string;
   id: string;
   tradeId?: string;
@@ -815,6 +817,7 @@ export type SaxoHistoryDiscoveryItem = {
   tradeDate?: string;
   currency?: Currency | string;
   accountCurrency?: Currency | string;
+  accountCurrencySourceField?: string;
   profitLoss?: number;
   profitLossBase?: number;
   profitLossAccountCurrency?: number;
@@ -825,6 +828,9 @@ export type SaxoHistoryDiscoveryItem = {
   bookedAmountUSD?: number;
   premiumAmount?: number;
   transactionCost?: number;
+  transactionCostSource?: "direct" | "derived_same_currency_booked_difference";
+  transactionCostSourceField?: string;
+  transactionCostConflict?: boolean;
   feeAmount?: number;
   exchangeFee?: number;
   spreadCostAccountCurrency?: number;

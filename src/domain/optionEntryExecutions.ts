@@ -26,7 +26,7 @@ export function applySaxoActualEntryCommission(
   ) {
     return execution;
   }
-  if (execution.commissionUSD !== undefined && execution.commissionSource !== "standard_default" && execution.commissionSource !== "saxo_ticket_confirmed_standard") return execution;
+  if (execution.commissionUSD !== undefined && execution.commissionSource !== "standard_default" && execution.commissionSource !== "saxo_ticket_confirmed_standard" && execution.commissionSource !== "saxo_derived_same_currency_booked_difference") return execution;
   return {
     ...execution,
     commissionUSD: Math.abs(transactionCostUSD),
@@ -57,7 +57,8 @@ export function ensureNOptionEntryStandardCommission(
     simulation.accountEnvironment !== "PROD_N_USD_SETTLEMENT" ||
     execution.commissionUSD !== undefined ||
     execution.commissionSource === "manual" ||
-    execution.commissionSource === "saxo_actual"
+    execution.commissionSource === "saxo_actual" ||
+    execution.commissionSource === "saxo_derived_same_currency_booked_difference"
   ) {
     return execution;
   }

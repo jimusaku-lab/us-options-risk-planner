@@ -6,11 +6,12 @@ import { strategyIdentityKey, strategyViewKey, type StrategyCandidate, type Stra
 export type SpreadOrderRelation = { accountKey: string; orderId: string; parentOrderId: string; sourceField: string };
 export type SpreadImportSnapshot = { environment: string; requestRevision: number; positions: SaxoApiPositionSnapshot[]; history: SaxoHistoryDiscoveryItem[]; orders: SpreadOrderRelation[]; coverage: StrategyCoverage[] };
 
-export type SpreadImportIssue = { code: "specification_missing" | "specification_conflict" | "unsupported_currency" | "duplicate_positions" | "lifecycle_history" | "opening_identity" | "multiple_opening_lots" | "quantity_mismatch" | "existing_source"; label: string; reason: string };
+export type SpreadImportIssue = { code: "specification_missing" | "specification_conflict" | "unsupported_currency" | "duplicate_positions" | "lifecycle_history" | "account_identity" | "opening_identity" | "multiple_opening_lots" | "quantity_mismatch" | "existing_source"; label: string; reason: string };
 const instrumentKey = (position: SaxoApiPositionSnapshot) => JSON.stringify([position.accountKey, position.uic]);
+const positionIssueLabel = (position: SaxoApiPositionSnapshot) => `${position.underlyingSymbol ?? position.symbol ?? "オプション"} P${position.strike} / ${position.expiry}`;
 const potential = (position: SaxoApiPositionSnapshot) => position.kind === "option" && position.assetType === "StockOption" && position.optionType === "put" && ["long", "short"].includes(position.side ?? "") && position.accountAssignment === "N" && Boolean(position.accountKey && position.uic && position.underlyingIdentity && position.expiry) && position.strike !== undefined;
 const eligible = (position: SaxoApiPositionSnapshot) => potential(position) && position.currency === "USD" && Number.isFinite(position.contractSize) && position.contractSize! > 0 && !(position.specificationConflicts?.length);
-const matchingHistory = (snapshot: SpreadImportSnapshot, position: SaxoApiPositionSnapshot) => snapshot.history.filter(item => item.kind === "trade" && (item.brokerAccountKey ?? item.accountKey) === position.accountKey && item.uic === position.uic);
+const matchingHistory = (snapshot: SpreadImportSnapshot, position: SaxoApiPositionSnapshot) => snapshot.history.filter(item => item.kind === "trade" && item.brokerAccountKey === position.accountKey && item.uic === position.uic);
 const fillIdentity = (snapshot: SpreadImportSnapshot, position: SaxoApiPositionSnapshot, trade: SaxoHistoryDiscoveryItem) => trade.tradeId || trade.brokerHistoryId ? strategyIdentityKey({ environment: snapshot.environment, broker: "saxo", accountKey: position.accountKey, kind: trade.tradeId ? "fill" : "history", id: (trade.tradeId ?? trade.brokerHistoryId)! }) : undefined;
 
 export function getPotentialSpreadPositionIds(snapshot: SpreadImportSnapshot): Set<string> {
@@ -30,14 +31,20 @@ function currentLotIssues(snapshot: SpreadImportSnapshot, simulations: TradeSimu
   for (const position of snapshot.positions.filter(potential)) {
     const key = instrumentKey(position);
     const history = matchingHistory(snapshot, position);
-    const label = `${position.underlyingSymbol ?? position.symbol ?? "オプション"} P${position.strike} / ${position.expiry}`;
+    const label = positionIssueLabel(position);
     const issue = (code: SpreadImportIssue["code"], reason: string) => issues.set(key, { code, label, reason: `${reason}。今回は新しいスプレッドにまとめません。取得明細と既存記録は保持しています。` });
     if (position.specificationConflicts?.length) { issue("specification_conflict", `商品詳細と建玉情報が競合しています（${position.specificationConflicts.join(" / ")}）`); continue; }
     if (!position.currency || !Number.isFinite(position.contractSize) || position.contractSize! <= 0) { issue("specification_missing", `商品詳細の${[!position.currency && "通貨", !Number.isFinite(position.contractSize) && "契約倍率"].filter(Boolean).join("・")}を取得できません`); continue; }
     if (position.currency !== "USD") { issue("unsupported_currency", `商品通貨 ${position.currency} はN/USDスプレッド取込の対象外です`); continue; }
     if (snapshot.positions.filter(item => instrumentKey(item) === key).length !== 1) { issue("duplicate_positions", "同じ商品の現在建玉が複数行あり、開始約定との数量対応が一意ではありません"); continue; }
     const side = position.side === "long" ? "buy" : "sell";
-    if (history.some(item => item.openClose !== "open" || item.buySell !== side || item.duplicateResolution)) { issue("lifecycle_history", "この商品には決済済み・売買方向違い・未照合の履歴があり、現在保有する購入分を確定できません"); continue; }
+    const sameInstrumentUnresolved = snapshot.history.filter(item => item.kind === "trade" && item.uic === position.uic && !item.brokerAccountKey);
+    if (!history.length && sameInstrumentUnresolved.length) {
+      const states = [...new Set(sameInstrumentUnresolved.map(item => item.brokerAccountIdentityStatus ?? "missing"))].join(" / ");
+      issue("account_identity", `取引履歴の口座を現在建玉と一意に照合できません（${states}）`);
+      continue;
+    }
+    if (history.some(item => item.openClose !== "open" || item.buySell !== side || item.duplicateResolution || item.transactionCostConflict)) { issue("lifecycle_history", "この商品には決済済み・売買方向違い・未照合または費用競合の履歴があり、現在保有する購入分を確定できません"); continue; }
     const identities = history.map(trade => fillIdentity(snapshot, position, trade));
     if (!history.length || identities.some(identity => !identity)) { issue("opening_identity", "現在保有分に対応する開始約定の識別情報が不足しています"); continue; }
     const unique = new Map<string, SaxoHistoryDiscoveryItem>();
@@ -81,6 +88,27 @@ export function getSpreadImportIssues(snapshot: SpreadImportSnapshot, ledger?: S
   return [...visible.values()];
 }
 
+/** Presents one blocked strategy family, while preserving per-leg diagnostics
+ * in the pure issue resolver above. The two current rows are not two user jobs. */
+export function getSpreadImportIssueGroups(snapshot: SpreadImportSnapshot, ledger?: StrategyLedger, simulations: TradeSimulation[] = []): SpreadImportIssue[] {
+  const issues = getSpreadImportIssues(snapshot, ledger, simulations);
+  const byLabel = new Map(issues.map(issue => [issue.label, issue]));
+  const groups = new Map<string, SpreadImportIssue>();
+  const positions = snapshot.positions.filter(potential);
+  for (const position of positions) {
+    const peers = positions.filter(other => other.accountKey === position.accountKey && other.underlyingIdentity === position.underlyingIdentity && other.expiry === position.expiry);
+    if (!peers.some(other => other.id !== position.id && other.side !== position.side && (position.side === "long" ? position.strike! > other.strike! : other.strike! > position.strike!))) continue;
+    const familyIssues = peers.map(peer => byLabel.get(positionIssueLabel(peer))).filter((issue): issue is SpreadImportIssue => Boolean(issue));
+    if (!familyIssues.length) continue;
+    const key = JSON.stringify([position.accountKey, position.underlyingIdentity, position.expiry]);
+    const ticker = position.underlyingSymbol ?? position.symbol ?? "オプション";
+    const legs = [...new Set(peers.map(peer => `P${peer.strike}`))].sort().join(" / ");
+    const reasons = [...new Set(familyIssues.map(issue => issue.reason))];
+    groups.set(key, { code: familyIssues[0].code, label: `${ticker} ベア・プット（${legs}）`, reason: reasons.join(" / ") });
+  }
+  return [...groups.values()];
+}
+
 export function reconcileStrategyCandidates(snapshot: SpreadImportSnapshot, ledger: StrategyLedger, simulations: TradeSimulation[]): StrategyCandidate[] {
   const fills: StrategyFill[] = [];
   const unsafe = currentLotIssues(snapshot, simulations);
@@ -88,7 +116,7 @@ export function reconcileStrategyCandidates(snapshot: SpreadImportSnapshot, ledg
     if (!eligible(position) || unsafe.has(instrumentKey(position))) continue;
     if (position.strike === undefined || position.contractSize === undefined || !position.underlyingIdentity || !position.expiry || !position.uic) continue;
     const side = position.side === "long" ? "buy" : "sell";
-    const trades = snapshot.history.filter(item => item.kind === "trade" && item.openClose === "open" && item.buySell === side && (item.brokerAccountKey ?? item.accountKey) === position.accountKey && item.uic === position.uic && item.optionType === "put" && item.strike === position.strike && item.expiry === position.expiry && item.accountCurrency === "USD" && !item.duplicateResolution);
+    const trades = snapshot.history.filter(item => item.kind === "trade" && item.openClose === "open" && item.buySell === side && item.brokerAccountKey === position.accountKey && item.uic === position.uic && item.optionType === "put" && item.strike === position.strike && item.expiry === position.expiry && item.accountCurrency === "USD" && !item.duplicateResolution && !item.transactionCostConflict);
     for (const trade of trades) {
       if (!(trade.tradeId || trade.brokerHistoryId) || !trade.tradeDate || trade.price === undefined || !Number.isFinite(trade.price) || trade.quantity === undefined || !Number.isInteger(Math.abs(trade.quantity)) || Math.abs(trade.quantity) <= 0) continue;
       const identity = { environment: snapshot.environment, broker: "saxo", accountKey: position.accountKey, kind: trade.tradeId ? "fill" as const : "history" as const, id: (trade.tradeId ?? trade.brokerHistoryId)! };
@@ -103,7 +131,7 @@ export function reconcileStrategyCandidates(snapshot: SpreadImportSnapshot, ledg
         contract: { underlying: position.underlyingIdentity, instrument: String(position.uic), ticker: position.underlyingSymbol ?? position.symbol ?? "", optionType: "put", side, strike: position.strike, expiry: position.expiry, multiplier: position.contractSize, currency: "USD", settlement: position.settlementType ?? "", deliverable: position.deliverableIdentity ?? "", underlyingCategory: position.underlyingTypeCategory, specificationSource: position.contractSpecificationSource },
         brokerPositionId: position.positionId,
         existing: existing[0],
-        execution: existing.length ? undefined : { id: key, legId: String(position.uic), saxoFillId: trade.tradeId, historyCandidateIds: [identity.id], tradeDate: trade.tradeDate, contracts: Math.abs(trade.quantity), fillPriceUSD: trade.price, commissionUSD: trade.transactionCost, commissionSource: trade.transactionCost === undefined ? undefined : "saxo_actual", settlementCurrency: "USD", source: "broker_statement", confirmed: true },
+        execution: existing.length ? undefined : { id: key, legId: String(position.uic), saxoFillId: trade.tradeId, historyCandidateIds: [identity.id], tradeDate: trade.tradeDate, contracts: Math.abs(trade.quantity), fillPriceUSD: trade.price, commissionUSD: trade.transactionCost, commissionSource: trade.transactionCost === undefined ? undefined : trade.transactionCostSource === "derived_same_currency_booked_difference" ? "saxo_derived_same_currency_booked_difference" : "saxo_actual", settlementCurrency: "USD", source: "broker_statement", confirmed: true },
         parentOrderKey: parentOrderId ? idKey("parent_order", parentOrderId) : undefined,
         legOrderKey: trade.orderId ? idKey("order", trade.orderId) : undefined,
         positionKey: position.positionId ? idKey("position", position.positionId) : undefined });

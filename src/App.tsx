@@ -790,7 +790,7 @@ export default function App() {
           ? Math.abs(bestHistory.transactionCost)
           : getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD)
         : undefined,
-      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "saxo_ticket_confirmed_standard") : undefined,
+      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? (bestHistory.transactionCostSource === "derived_same_currency_booked_difference" ? "saxo_derived_same_currency_booked_difference" : "saxo_actual") : "saxo_ticket_confirmed_standard") : undefined,
       referenceFxRateJPY: isNAccount ? undefined : bestHistory?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
       inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
       source: "saxo_api_estimate",
@@ -922,7 +922,7 @@ export default function App() {
             ? Math.abs(history!.transactionCost!)
             : getNOptionStandardCommissionUSD(contracts, standardNOptionCommissionUSD)
           : undefined,
-        commissionSource: pair.accountCode === "N" ? (hasSaxoActualCommission ? "saxo_actual" : "saxo_ticket_confirmed_standard") : undefined,
+        commissionSource: pair.accountCode === "N" ? (hasSaxoActualCommission ? (history?.transactionCostSource === "derived_same_currency_booked_difference" ? "saxo_derived_same_currency_booked_difference" : "saxo_actual") : "saxo_ticket_confirmed_standard") : undefined,
         referenceFxRateJPY: pair.accountCode === "N" ? undefined : history?.exchangeRate ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
         inputMode: pair.accountCode === "N" ? "USD_EXECUTION_CALC" as const : "P_JPY_BROKER_STATEMENT" as const,
         source: "saxo_api_estimate" as const,
@@ -1122,7 +1122,7 @@ export default function App() {
           ? Math.abs(bestHistory.transactionCost)
           : getNOptionStandardCommissionUSD(actualQuantity, standardNOptionCommissionUSD)
         : undefined,
-      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? "saxo_actual" : "saxo_ticket_confirmed_standard") : undefined,
+      commissionSource: isNAccount ? (bestHistory?.transactionCost !== undefined ? (bestHistory.transactionCostSource === "derived_same_currency_booked_difference" ? "saxo_derived_same_currency_booked_difference" : "saxo_actual") : "saxo_ticket_confirmed_standard") : undefined,
       referenceFxRateJPY: bestHistory?.exchangeRate ?? target.referenceFxRateJPY ?? target.fxRateJPY ?? selected?.referenceFxRateJPY ?? selected?.fxRateJPY,
       inputMode: isNAccount ? "USD_EXECUTION_CALC" : "P_JPY_BROKER_STATEMENT",
       source: "saxo_api_estimate",

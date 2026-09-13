@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { SpreadStrategyCandidates } from "./SpreadStrategyCandidates";
-import { getPotentialSpreadPositionIds, getSpreadImportIssues, reconcileStrategyCandidates } from "./spreadStrategyImport";
-import { emptyStrategyLedger, type PreparedStrategyImport, type StrategyCoverage, type StrategyLedger } from "@/domain/strategyLedger";
+import { getPotentialSpreadPositionIds, getSpreadImportIssueGroups, reconcileStrategyCandidates, type SpreadImportIssue } from "./spreadStrategyImport";
+import { emptyStrategyLedger, type PreparedStrategyImport, type StrategyCandidate, type StrategyCoverage, type StrategyLedger } from "@/domain/strategyLedger";
 import { Ban, Cable, CheckCircle2, Clipboard, Download, Eye, FilePlus2, Link2, LogOut, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import {
   disableSaxoPersistence,
@@ -369,7 +369,7 @@ export function SaxoReadOnlyPanel({
     coverage: isLoading ? [] : spreadCoverage,
   }), [status?.environment, spreadRequestRevision, mappedPositions, historyEndpoints, orders, spreadCoverage, isLoading]);
   const spreadCandidates = useMemo(() => reconcileStrategyCandidates(spreadSnapshot, strategyLedger ?? emptyStrategyLedger(), simulations), [spreadSnapshot, strategyLedger, simulations]);
-  const spreadIssues = useMemo(() => isLoading ? [] : getSpreadImportIssues(spreadSnapshot, strategyLedger, simulations), [spreadSnapshot, isLoading, strategyLedger, simulations]);
+  const spreadIssues = useMemo(() => isLoading ? [] : getSpreadImportIssueGroups(spreadSnapshot, strategyLedger, simulations), [spreadSnapshot, isLoading, strategyLedger, simulations]);
   const spreadPositionIds = useMemo(() => getPotentialSpreadPositionIds(spreadSnapshot), [spreadSnapshot]);
   const effectiveHistoryEndpoints = useMemo(
     () => createEffectiveHistoryEndpoints(historyEndpoints, effectiveHistoryItems),
@@ -481,8 +481,11 @@ export function SaxoReadOnlyPanel({
       orders: mappedOrders,
       historyEndpoints: effectiveHistoryEndpoints,
       historyReflectionStates,
+      spreadCandidates,
+      spreadIssues,
+      spreadPositionIds,
     }),
-    [accountInputs, effectiveHistoryEndpoints, historyReflectionStates, mappedOrders, mappedSnapshots, positionRows, simulations, stockTransfers],
+    [accountInputs, effectiveHistoryEndpoints, historyReflectionStates, mappedOrders, mappedSnapshots, positionRows, simulations, spreadCandidates, spreadIssues, spreadPositionIds, stockTransfers],
   );
 
   useEffect(() => {
@@ -1230,11 +1233,11 @@ export function SaxoReadOnlyPanel({
               onLoadHistory={loadHistoryDiscovery}
               bulkFetchButtonRef={bulkFetchButtonRef}
             />
-            {onCommitSpread && spreadCandidates.length ? <div>
+            {onCommitSpread && spreadCandidates.length ? <div id="saxo-spread-candidates">
               <p className="mb-2 text-sm font-bold text-indigo-900">次にすること: 下の2本を確認して、1つの戦略にまとめます。</p>
               <SpreadStrategyCandidates candidates={spreadCandidates} ledger={strategyLedger ?? emptyStrategyLedger()} simulations={simulations} onCommit={onCommitSpread} />
             </div> : null}
-            {onCommitSpread && spreadIssues.length ? <section aria-label="スプレッドにまとめなかった明細" className="rounded border border-amber-200 bg-amber-50 p-3 text-sm">
+            {onCommitSpread && spreadIssues.length ? <section id={spreadCandidates.length ? undefined : "saxo-spread-candidates"} aria-label="スプレッドにまとめなかった明細" className="rounded border border-amber-200 bg-amber-50 p-3 text-sm">
               <h3 className="font-bold">一部の明細は、新しいスプレッドにまとめていません</h3>
               <p className="mt-1 text-xs">現在の保有分を特定できないためです。元の明細は残しています。重複を削除したり、数量を書き換えたりする必要はありません。</p>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">{spreadIssues.map(issue => <li key={`${issue.code}:${issue.label}`}>{issue.label}: {issue.reason}</li>)}</ul>
@@ -1257,6 +1260,10 @@ export function SaxoReadOnlyPanel({
                 }
                 if (action.kind === "position") {
                   showPositionCandidatesFromSummary();
+                  return;
+                }
+                if (action.kind === "spread") {
+                  document.getElementById("saxo-spread-candidates")?.scrollIntoView({ behavior: "smooth", block: "start" });
                   return;
                 }
                 if (action.kind === "order") {
@@ -1433,6 +1440,8 @@ export function SaxoReadOnlyPanel({
                 historyItems={effectiveHistoryItems}
                 historyReady={historyFetchOutcome !== "pending"}
                 spreadPositionIds={spreadPositionIds}
+                spreadCandidateCount={spreadCandidates.length}
+                spreadIssueCount={spreadIssues.length}
                 resolveLinkedSimulation={resolveLinkedSimulation}
                 positionActionErrors={positionActionErrors}
                 positionActionNotices={positionActionNotices}
@@ -2111,6 +2120,7 @@ type HistorySummaryAction = {
 export type ReflectionPendingAction =
   | { kind: "account"; accountCode: SaxoAccountCode; target: "mapping" | "snapshot"; label: string; actionLabel: string }
   | { kind: "position"; label: string; actionLabel: string }
+  | { kind: "spread"; label: string; actionLabel: string }
   | { kind: "order"; action: SaxoExitOrderReview; label: string; actionLabel: string }
   | { kind: "history"; action: HistorySummaryAction; label: string; actionLabel: string };
 
@@ -2675,6 +2685,8 @@ function PositionsPreview({
   historyItems,
   historyReady,
   spreadPositionIds,
+  spreadCandidateCount,
+  spreadIssueCount,
   resolveLinkedSimulation,
   positionActionErrors,
   positionActionNotices,
@@ -2712,6 +2724,8 @@ function PositionsPreview({
   historyItems: SaxoHistoryDiscoveryItem[];
   historyReady: boolean;
   spreadPositionIds: Set<string>;
+  spreadCandidateCount: number;
+  spreadIssueCount: number;
   resolveLinkedSimulation: (row: SaxoPositionReconciliationRow) => LinkedSimulationResolution;
   positionActionErrors: Record<string, string>;
   positionActionNotices: Record<string, string>;
@@ -2766,7 +2780,7 @@ function PositionsPreview({
       .map((pair) => pair.id),
   );
   const displaySyntheticForwardPairs = syntheticForwardPairs.filter((pair) => !existingSyntheticPairIds.has(pair.id));
-  const actionRequiredRows = actionRequiredRegularRows.length + displaySyntheticForwardPairs.length + syntheticForwardHolds.length + pendingStockTransferRows.length;
+  const actionRequiredRows = actionRequiredRegularRows.length + displaySyntheticForwardPairs.length + syntheticForwardHolds.length + pendingStockTransferRows.length + spreadCandidateCount;
   const confirmedCurrentHoldingRows = linkedRegularRows.length + recordedStockTransferRows.length + existingSyntheticPairIds.size;
   const draft = draftPosition ? createSaxoPositionDraftSummary(draftPosition, simulations) : null;
   useEffect(() => {
@@ -2808,7 +2822,9 @@ function PositionsPreview({
         >
           {actionRequiredRows > 0
             ? `今回処理が必要なのは、Saxoで約定済みまたは未反映の建玉${actionRequiredRows}件です。`
-            : "今回追加で反映が必要なSaxo建玉はありません。"}
+            : spreadIssueCount > 0
+              ? `今回追加で反映できるSaxo建玉はありません。ベア・プット候補${spreadIssueCount}件は取得証拠を一意に確認できないため停止しています。`
+              : "今回追加で反映が必要なSaxo建玉はありません。"}
           {displaySyntheticForwardPairs.length > 0
             ? " C買い/P売りのペアは、個別には反映せず「2脚をシンセティックとして下書き反映」から3-Aへ進んでください。"
             : syntheticForwardHolds.length > 0
@@ -2837,7 +2853,7 @@ function PositionsPreview({
       <div className="mt-3 overflow-x-auto">
           {actionRequiredRegularRows.length === 0 && displaySyntheticForwardPairs.length === 0 && syntheticForwardHolds.length === 0 ? (
           <p className="text-sm text-slate-500">
-            {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : "通常のオプション建玉候補はありません。N口座の現物株確認は下の専用カードで確認してください。"}
+            {rows.length === 0 ? "Saxo接続後に現在建玉を取得してください。" : spreadCandidateCount > 0 ? "2脚のベア・プット候補は上の組み合わせ確認に表示しています。" : spreadIssueCount > 0 ? "2脚のベア・プット候補は上の停止理由を確認してください。" : "通常のオプション建玉候補はありません。N口座の現物株確認は下の専用カードで確認してください。"}
           </p>
         ) : (
           <table className="min-w-full text-sm">
@@ -5157,6 +5173,9 @@ export function createReflectionSummary({
   orders,
   historyEndpoints,
   historyReflectionStates,
+  spreadCandidates = [],
+  spreadIssues = [],
+  spreadPositionIds = new Set<string>(),
 }: {
   mappedSnapshots: Array<{ accountCode: SaxoAccountCode; mapping?: SaxoAccountMapping; snapshot?: SaxoApiAccountSnapshot }>;
   accountInputs: AccountInputs;
@@ -5166,6 +5185,9 @@ export function createReflectionSummary({
   orders: SaxoApiOrderSnapshot[];
   historyEndpoints: SaxoHistoryDiscoveryEndpoint[];
   historyReflectionStates: Record<string, HistoryReflectionState>;
+  spreadCandidates?: StrategyCandidate[];
+  spreadIssues?: SpreadImportIssue[];
+  spreadPositionIds?: Set<string>;
 }): ReflectionSummary {
   const accountLines = mappedSnapshots.map(({ accountCode, mapping, snapshot }) => {
     if (!mapping) {
@@ -5197,7 +5219,7 @@ export function createReflectionSummary({
   const recordedStockTransferCandidateRows = stockTransferCandidateRows.filter(
     (row) => row.position && getRecordedStockTransferForPosition(row.position, simulations, stockTransfers),
   );
-  const regularPositionRows = positionRows.filter((row) => !isNAccountStockPosition(row.position));
+  const regularPositionRows = positionRows.filter((row) => !isNAccountStockPosition(row.position) && (!row.position || !spreadPositionIds.has(row.position.id)));
   const stockTransferCandidates = pendingStockTransferCandidateRows.filter((row) =>
     row.position ? findPnTransferSourceSimulations(row.position, simulations).length > 0 : false,
   ).length;
@@ -5262,15 +5284,18 @@ export function createReflectionSummary({
   const anyHistoryReflected = reflectedHistoryCount > 0;
   const orderActionable = orderActions.length > 0;
   const historyActionable = historyRequiredCount > 0;
-  const hasNewPositionCandidates = newPositions > 0;
-  const positionNeedsAction = newPositions > 0 || unknownPositions > 0 || pendingStockTransferCandidateRows.length > 0;
+  const spreadRequiredCount = spreadCandidates.length;
+  const hasNewPositionCandidates = newPositions > 0 || spreadRequiredCount > 0;
+  const positionNeedsAction = newPositions > 0 || unknownPositions > 0 || pendingStockTransferCandidateRows.length > 0 || spreadRequiredCount > 0;
   const positionHasOptionalReview = matchedPositions > 0 || recordedStockTransferCandidateRows.length > 0 || positionRows.length > 0;
   const positionActionable = positionNeedsAction;
   const historyIsSupplemental = positionNeedsAction && historyItems.length > 0;
   const accountActionCount = accountLines.filter((line) => line.actionable).length;
-  const positionRequiredCount = newPositions + unknownPositions + pendingStockTransferCandidateRows.length;
+  const positionRequiredCount = newPositions + unknownPositions + pendingStockTransferCandidateRows.length + spreadRequiredCount;
   const requiredActionCount = accountActionCount + positionRequiredCount + historyRequiredCount + orderActions.length;
-  const primaryAction: ReflectionPendingAction | undefined = hasNewPositionCandidates
+  const primaryAction: ReflectionPendingAction | undefined = spreadCandidates[0]
+    ? { kind: "spread", label: `${spreadCandidates[0].fills[0].contract.ticker} ベア・プットの2脚を確認`, actionLabel: `${spreadCandidates[0].fills[0].contract.ticker} ベア・プット：2脚を確認` }
+    : hasNewPositionCandidates
     ? { kind: "position", label: "建玉候補を確認", actionLabel: "建玉候補を確認して反映へ" }
     : positionNeedsAction
       ? { kind: "position", label: "建玉照合を確認", actionLabel: "建玉照合を確認へ" }
@@ -5278,7 +5303,7 @@ export function createReflectionSummary({
         ? {
             kind: "order",
             action: orderActions[0],
-            label: `${orderActions[0].ticker}のOCO出口注文を確認`,
+            label: `${orderActions[0].ticker}の${orderActions[0].takeProfitOrder && orderActions[0].upperExitOrder ? "OCO出口注文" : "Saxo決済注文"}を確認`,
             actionLabel: `${orderActions[0].ticker}の出口ルールを確認`,
           }
         : historyActions[0]
@@ -5317,7 +5342,9 @@ export function createReflectionSummary({
           next: "確認対象を解決できません",
           remaining: `${requiredActionCount}操作`,
         };
-  const nextActionDetail = hasNewPositionCandidates
+  const nextActionDetail = spreadCandidates.length > 0
+    ? `次はベア・プット候補を確認: 2脚の取得済み約定と費用を確認してから、1つの戦略として反映します。`
+    : hasNewPositionCandidates
     ? `次は建玉候補を反映: 建玉候補を開き、各候補の「建玉入力へ下書き反映」を押してください。履歴候補は建玉反映後の補完確認です。`
     : positionNeedsAction
       ? "次は建玉候補を確認: 既存建玉との照合やP→N移管候補を先に整理してください。履歴候補は補完作業として後で確認します。"
@@ -5336,7 +5363,7 @@ export function createReflectionSummary({
             ? pendingStockTransferCandidateRows.length > 0
               ? `P→N移管候補${stockTransferCandidates}件${recordedStockTransferCandidateRows.length > 0 ? ` / 照合済み現在保有${recordedStockTransferCandidateRows.length}件` : ""}${regularPositionRows.length > 0 ? ` / 通常建玉候補${regularPositionRows.length}件` : ""}`
               : `照合済みの現在保有確認${recordedStockTransferCandidateRows.length}件${regularPositionRows.length > 0 ? ` / 通常建玉候補${regularPositionRows.length}件` : ""}`
-            : `新規${newPositions}件 / 既存候補${matchedPositions}件 / 要確認${unknownPositions}件`,
+            : `新規${newPositions}件 / ベア・プット候補${spreadRequiredCount}件 / 既存候補${matchedPositions}件 / 要確認${unknownPositions}件${spreadIssues.length ? ` / 取込停止${spreadIssues.length}件` : ""}`,
       actionable: positionActionable,
       actionLabel: hasNewPositionCandidates
         ? "建玉候補を確認して反映"

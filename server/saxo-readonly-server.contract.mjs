@@ -3,7 +3,7 @@ import test from "node:test";
 
 process.env.SAXO_READONLY_SERVER_TEST = "1";
 
-const { enrichPositionUnderlyingIdentities, normalizePosition, normalizeOrder, normalizeHistoryItem, fetchSaxoPages } = await import("./saxo-readonly-server.mjs");
+const { enrichPositionUnderlyingIdentities, normalizePosition, normalizeOrder, normalizeHistoryItem, fetchSaxoPages, resolveHistoryAccountIdentity, inferTransactionCostFromTradeValue } = await import("./saxo-readonly-server.mjs");
 
 test("R2 documented specification fields enrich existing underlying without fabricating deliverable", async () => {
   const position = { kind: "option", uic: 990001, assetType: "StockOption", accountKey: "TEST-N", underlyingIdentity: "uic:990000:stock" };
@@ -89,6 +89,48 @@ test("R2 explicit zero transaction fee remains known and beats inference", () =>
   assert.equal(zero.transactionCost, 0);
   const missing = normalizeHistoryItem({ TradeId: "TEST-missing" }, "trade", 1);
   assert.equal(missing.transactionCost, undefined);
+});
+
+test("R4 resolves AccountId-only trade identity through one same-environment account", () => {
+  const accounts = [{ accountKey: "TEST-N-key", accountId: "TEST-N-id", accountNumber: "TEST-N-number", currency: "USD", environment: "sim" }];
+  const item = normalizeHistoryItem({ AccountId: "TEST-N-id", TradeId: "TEST-fill", AccountCurrency: "USD", Currency: "USD" }, "trade", 0, { accounts, environment: "sim" });
+  assert.equal(item.brokerAccountKey, "TEST-N-key");
+  assert.equal(item.brokerAccountIdentityStatus, "resolved");
+  assert.equal(item.brokerAccountKeySourceField, "AccountId");
+  assert.equal(item.accountCurrencySourceField, "AccountCurrency");
+});
+
+test("R4 blocks duplicate, unmatched, conflicting and cross-environment account identities", () => {
+  const duplicate = [{ accountKey: "TEST-A", accountId: "TEST-id", environment: "sim" }, { accountKey: "TEST-B", accountId: "TEST-id", environment: "sim" }];
+  assert.equal(resolveHistoryAccountIdentity({ AccountId: "TEST-id" }, duplicate, "sim").status, "ambiguous");
+  assert.equal(resolveHistoryAccountIdentity({ AccountId: "missing" }, duplicate, "sim").status, "unmatched");
+  assert.equal(resolveHistoryAccountIdentity({ AccountKey: "TEST-A", AccountId: "TEST-other" }, [{ accountKey: "TEST-A", accountId: "TEST-id", environment: "sim" }, { accountKey: "TEST-B", accountId: "TEST-other", environment: "sim" }], "sim").status, "conflict");
+  assert.equal(resolveHistoryAccountIdentity({ AccountKey: "TEST-A", AccountId: "TEST-unknown" }, [{ accountKey: "TEST-A", accountId: "TEST-id", environment: "sim" }], "sim").status, "conflict");
+  assert.equal(resolveHistoryAccountIdentity({ AccountId: "TEST-live" }, [{ accountKey: "TEST-live-key", accountId: "TEST-live", environment: "live" }], "sim").status, "environment_mismatch");
+});
+
+test("R4 derives only a positive signed USD same-currency booked difference and ignores ClientCurrency", () => {
+  const buy = normalizeHistoryItem({ TradeId: "TEST-buy", AccountId: "TEST-id", Currency: "USD", AccountCurrency: "USD", ClientCurrency: "JPY", TradedValue: -510, BookedAmountAccountCurrency: -512.24 }, "trade", 0);
+  const sell = normalizeHistoryItem({ TradeId: "TEST-sell", AccountId: "TEST-id", Currency: "USD", AccountCurrency: "USD", ClientCurrency: "JPY", TradedValue: 110, BookedAmountAccountCurrency: 107.76 }, "trade", 1);
+  assert.equal(buy.transactionCost, 2.24);
+  assert.equal(sell.transactionCost, 2.24);
+  assert.equal(buy.transactionCostSource, "derived_same_currency_booked_difference");
+  assert.equal(buy.transactionCostSourceField, "TradedValue - BookedAmountAccountCurrency");
+  assert.equal(inferTransactionCostFromTradeValue({ Currency: "USD", AccountCurrency: "JPY", TradedValue: -510, BookedAmountAccountCurrency: -512.24 }, "JPY"), undefined);
+  assert.equal(inferTransactionCostFromTradeValue({ Currency: "USD", AccountCurrency: "USD", TradedValue: -512.24, BookedAmountAccountCurrency: -510 }, "USD"), undefined);
+  assert.equal(inferTransactionCostFromTradeValue({ Currency: "USD", AccountCurrency: "USD", TradedValue: -510, BookedAmountAccountCurrency: -512.24, IsCorrection: true }, "USD"), undefined);
+});
+
+test("R4 explicit transaction cost including zero wins over derived evidence", () => {
+  const direct = normalizeHistoryItem({ TradeId: "TEST-direct", Currency: "USD", AccountCurrency: "USD", TradedValue: -510, BookedAmountAccountCurrency: -512.24, TransactionCost: 1.11 }, "trade", 0);
+  const zero = normalizeHistoryItem({ TradeId: "TEST-zero", Currency: "USD", AccountCurrency: "USD", TradedValue: -510, BookedAmountAccountCurrency: -512.24, TransactionCost: 0 }, "trade", 1);
+  assert.equal(direct.transactionCost, 1.11);
+  assert.equal(direct.transactionCostSource, "direct");
+  assert.equal(zero.transactionCost, 0);
+  assert.equal(zero.transactionCostSource, "direct");
+  const conflict = normalizeHistoryItem({ TradeId: "TEST-conflict", Currency: "USD", AccountCurrency: "USD", TransactionCost: 1, TotalTransactionCost: 2 }, "trade", 2);
+  assert.equal(conflict.transactionCost, 1);
+  assert.equal(conflict.transactionCostConflict, true);
 });
 
 test("normalizes an anonymized nested Saxo option payload through PositionBase.Uic to a canonical underlying", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { commitStrategyImport, emptyStrategyLedger, prepareStrategyImport } from "@/domain/strategyLedger";
-import { getSpreadImportIssues, reconcileStrategyCandidates, type SpreadImportSnapshot } from "./spreadStrategyImport";
+import { getSpreadImportIssueGroups, getSpreadImportIssues, reconcileStrategyCandidates, type SpreadImportSnapshot } from "./spreadStrategyImport";
 import type { TradeSimulation } from "@/types/domain";
 
 function fixture(): SpreadImportSnapshot {
@@ -113,5 +113,33 @@ describe("R3 product specification evidence", () => {
     expect(candidates(conflict)).toEqual([]); expect(getSpreadImportIssues(conflict)[0].code).toBe("specification_conflict");
     const unsupported = fixture(); unsupported.positions[0].currency = "EUR";
     expect(candidates(unsupported)).toEqual([]); expect(getSpreadImportIssues(unsupported)[0].code).toBe("unsupported_currency");
+  });
+});
+
+describe("R4 AccountId-only history and derived same-currency fee", () => {
+  it("uses only the resolved AccountKey and preserves derived fee provenance", () => {
+    const snapshot = fixture();
+    snapshot.history.forEach((trade) => {
+      trade.brokerAccountIdentityStatus = "resolved";
+      trade.brokerAccountKeySourceField = "AccountId";
+      trade.transactionCostSource = "derived_same_currency_booked_difference";
+      trade.transactionCostSourceField = "TradedValue - BookedAmountAccountCurrency";
+    });
+    const candidate = candidates(snapshot)[0];
+    expect(candidate.fills.map((fill) => fill.execution?.commissionUSD)).toEqual([2.24, 2.24]);
+    expect(candidate.fills.map((fill) => fill.execution?.commissionSource)).toEqual(["saxo_derived_same_currency_booked_difference", "saxo_derived_same_currency_booked_difference"]);
+  });
+
+  it("does not compare masked display AccountId as an AccountKey fallback", () => {
+    const snapshot = fixture();
+    snapshot.history.forEach((trade) => {
+      delete trade.brokerAccountKey;
+      trade.accountKey = "TEST-N";
+      trade.brokerAccountIdentityStatus = "unmatched";
+    });
+    expect(candidates(snapshot)).toEqual([]);
+    expect(getSpreadImportIssues(snapshot)[0]).toMatchObject({ code: "account_identity" });
+    expect(getSpreadImportIssueGroups(snapshot)).toHaveLength(1);
+    expect(getSpreadImportIssueGroups(snapshot)[0].label).toContain("ベア・プット");
   });
 });

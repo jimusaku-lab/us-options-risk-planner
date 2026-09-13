@@ -3209,6 +3209,7 @@ function formatEntryExecutionSource(execution: OptionEntryExecution): string {
 
 function formatEntryCommissionSource(execution: OptionEntryExecution): string {
   if (execution.commissionSource === "saxo_actual") return "Saxo実費";
+  if (execution.commissionSource === "saxo_derived_same_currency_booked_difference") return "Saxo同一通貨の記帳差額（導出）";
   if (execution.commissionSource === "manual") return "手入力";
   if (execution.commissionSource === "saxo_ticket_confirmed_standard") return "Saxoチケット確認済み開始標準（2026-08-14）";
   if (execution.commissionSource === "standard_default") return "標準取引費用";

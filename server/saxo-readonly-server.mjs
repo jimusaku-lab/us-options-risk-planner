@@ -645,7 +645,7 @@ async function getOrdersSnapshot() {
   };
 }
 
-async function getClosedPositions({ fromDate, toDate }) {
+async function getClosedPositions({ fromDate, toDate }, accounts = []) {
   const client = await getClient();
   const clientKey = getClientKey(client);
   if (!clientKey) {
@@ -661,13 +661,13 @@ async function getClosedPositions({ fromDate, toDate }) {
     fromDate,
     toDate,
     fetchedAt: new Date().toISOString(),
-    items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "closed_position", index)),
+    items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "closed_position", index, { accounts, environment: getEnvironment() })),
     coverage: payload.coverage,
     raw: payload,
   };
 }
 
-async function getTrades({ fromDate, toDate }) {
+async function getTrades({ fromDate, toDate }, accounts = []) {
   const client = await getClient();
   const clientKey = getClientKey(client);
   if (!clientKey) {
@@ -685,13 +685,13 @@ async function getTrades({ fromDate, toDate }) {
     fromDate,
     toDate,
     fetchedAt: new Date().toISOString(),
-    items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "trade", index)),
+    items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "trade", index, { accounts, environment: getEnvironment() })),
     coverage: payload.coverage,
     raw: payload,
   };
 }
 
-async function getOrderActivities({ fromDate, toDate }) {
+async function getOrderActivities({ fromDate, toDate }, accounts = []) {
   const client = await getClient();
   const clientKey = getClientKey(client);
   if (!clientKey) {
@@ -712,16 +712,18 @@ async function getOrderActivities({ fromDate, toDate }) {
     fromDate,
     toDate,
     fetchedAt: new Date().toISOString(),
-    items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "order_activity", index)),
+    items: rawItems.map((raw, index) => normalizeHistoryItem(raw, "order_activity", index, { accounts, environment: getEnvironment() })),
     // Raw payloads intentionally do not cross the helper boundary.
   };
 }
 
 async function getHistoryDiscovery({ fromDate, toDate }) {
+  const accountsResult = await Promise.allSettled([getAccounts()]);
+  const accounts = accountsResult[0].status === "fulfilled" ? accountsResult[0].value.accounts : [];
   const results = await Promise.allSettled([
-    getOrderActivities({ fromDate, toDate }),
-    getClosedPositions({ fromDate, toDate }),
-    getTrades({ fromDate, toDate }),
+    getOrderActivities({ fromDate, toDate }, accounts),
+    getClosedPositions({ fromDate, toDate }, accounts),
+    getTrades({ fromDate, toDate }, accounts),
   ]);
   const endpoints = [
     normalizeDiscoveryResult("cs/v1/audit/orderactivities", "決済約定候補", results[0]),
@@ -1733,7 +1735,35 @@ export function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
   };
 }
 
-export function normalizeHistoryItem(raw, kind, index) {
+export function resolveHistoryAccountIdentity(raw, accounts = [], environment) {
+  const directAccountKey = firstString(raw, ["AccountKey"]);
+  const accountId = firstString(raw, ["AccountId"]);
+  const accountNumber = firstString(raw, ["AccountNumber"]);
+  const environmentAccounts = accounts.filter((account) => !environment || !account.environment || account.environment === environment);
+  const otherEnvironmentMatch = accounts.some((account) => environment && account.environment && account.environment !== environment && (
+    account.accountKey === directAccountKey || account.accountId === accountId || account.accountNumber === accountNumber
+  ));
+  if (otherEnvironmentMatch && !environmentAccounts.some((account) => account.accountKey === directAccountKey || account.accountId === accountId || account.accountNumber === accountNumber)) {
+    return { status: "environment_mismatch", sourceField: directAccountKey ? "AccountKey" : accountId ? "AccountId" : "AccountNumber" };
+  }
+  const idMatches = accountId ? environmentAccounts.filter((account) => account.accountId === accountId) : [];
+  const numberMatches = !accountId && accountNumber ? environmentAccounts.filter((account) => account.accountNumber === accountNumber) : [];
+  const indirectMatches = idMatches.length ? idMatches : numberMatches;
+  if (indirectMatches.length > 1) return { status: "ambiguous", sourceField: accountId ? "AccountId" : "AccountNumber" };
+  const indirect = indirectMatches[0];
+  if (directAccountKey) {
+    if (accountId && idMatches.length === 0 && environmentAccounts.length) return { status: "conflict", sourceField: "AccountKey+AccountId" };
+    if (!accountId && accountNumber && numberMatches.length === 0 && environmentAccounts.length) return { status: "conflict", sourceField: "AccountKey+AccountNumber" };
+    if (indirect && indirect.accountKey !== directAccountKey) return { status: "conflict", sourceField: "AccountKey+AccountId" };
+    const direct = environmentAccounts.find((account) => account.accountKey === directAccountKey);
+    if (accounts.length && !direct && !indirect) return { status: "unmatched", sourceField: "AccountKey" };
+    return { status: "direct", brokerAccountKey: directAccountKey, account: direct ?? indirect, sourceField: "AccountKey" };
+  }
+  if (indirect) return { status: "resolved", brokerAccountKey: indirect.accountKey, account: indirect, sourceField: accountId ? "AccountId" : "AccountNumber" };
+  return { status: accountId || accountNumber ? "unmatched" : "missing", sourceField: accountId ? "AccountId" : accountNumber ? "AccountNumber" : undefined };
+}
+
+export function normalizeHistoryItem(raw, kind, index, context = {}) {
   const accountKey = firstString(raw, ["AccountKey"]);
   const accountId = firstString(raw, ["AccountId"]);
   const accountNumber = firstString(raw, ["AccountNumber"]);
@@ -1744,7 +1774,9 @@ export function normalizeHistoryItem(raw, kind, index) {
   const profitLossClientCurrency = firstNumber(raw, ["PnLClientCurrency"]);
   const profitLossBaseCurrency = firstNumber(raw, ["ClosedProfitLossInBaseCurrency", "ProfitLossOnTradeInBaseCurrency", "PnLBaseCurrency"]);
   const profitLossBase = profitLossBaseCurrency;
-  const accountCurrency = firstString(raw, ["AccountCurrency"]);
+  const accountIdentity = resolveHistoryAccountIdentity(raw, context.accounts ?? [], context.environment);
+  const directAccountCurrency = firstString(raw, ["AccountCurrency"]);
+  const accountCurrency = directAccountCurrency ?? accountIdentity.account?.currency;
   const optionTypeRaw = firstString(raw, ["PutCall", "CallPut", "OptionType", "OptionRootType"]);
   const instrumentForOption = firstString(raw, ["Symbol", "DisplayAndFormat.Symbol", "InstrumentSymbol", "InstrumentCode", "Description", "InstrumentDescription"]);
   const inferredContract = parseSaxoOptionContract(instrumentForOption);
@@ -1761,15 +1793,20 @@ export function normalizeHistoryItem(raw, kind, index) {
   const bookedAmountMatch = firstNumberMatch(raw, bookedAmountAliases);
   const premiumAmountMatch = firstNumberMatch(raw, premiumAmountAliases);
   const explicitTransactionCostMatch = firstNumberMatch(raw, transactionCostAliases);
+  const explicitTransactionCostValues = transactionCostAliases.map((name) => firstNumber(raw, [name])).filter(Number.isFinite);
+  const transactionCostConflict = explicitTransactionCostValues.some((value) => Math.abs(value - explicitTransactionCostValues[0]) > 0.005);
   // An explicit zero is evidence, not absence. Only infer when no numeric
   // transaction-cost field was supplied by the broker.
-  const transactionCostMatch = explicitTransactionCostMatch ?? inferTransactionCostFromTradeValue(raw);
+  const inferredTransactionCostMatch = kind === "trade" ? inferTransactionCostFromTradeValue(raw, accountCurrency) : undefined;
+  const transactionCostMatch = explicitTransactionCostMatch ?? inferredTransactionCostMatch;
   const exchangeRateMatch = firstNumberMatch(raw, exchangeRateAliases);
   return {
     id: `${kind}-${index}`,
     // Scoped runtime identity for strategy reconciliation. Display fields stay
     // masked; array indices and order IDs are never economic fill identities.
-    brokerAccountKey: accountKey,
+    brokerAccountKey: accountIdentity.brokerAccountKey,
+    brokerAccountIdentityStatus: accountIdentity.status,
+    brokerAccountKeySourceField: accountIdentity.sourceField,
     brokerHistoryId: firstString(raw, ["TradeId", "Id"]),
     tradeId: kind === "trade" ? firstString(raw, ["TradeId"]) : undefined,
     orderId,
@@ -1795,6 +1832,7 @@ export function normalizeHistoryItem(raw, kind, index) {
     tradeDate: normalizeSaxoDate(firstString(raw, ["TradeDateClose", "TradeDate", "ExecutionTime", "ActivityTime", "ValueDate", "Date"])),
     currency: firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency"]),
     accountCurrency,
+    accountCurrencySourceField: directAccountCurrency ? "AccountCurrency" : accountIdentity.account?.currency ? `accounts.${accountIdentity.sourceField}.Currency` : undefined,
     profitLoss,
     profitLossBase,
     profitLossAccountCurrency,
@@ -1805,6 +1843,9 @@ export function normalizeHistoryItem(raw, kind, index) {
     bookedAmountUSD,
     premiumAmount: premiumAmountMatch?.value,
     transactionCost: transactionCostMatch?.value,
+    transactionCostSource: explicitTransactionCostMatch ? "direct" : inferredTransactionCostMatch ? "derived_same_currency_booked_difference" : undefined,
+    transactionCostSourceField: transactionCostMatch?.matchedName,
+    transactionCostConflict,
     feeAmount: firstNumber(raw, ["Fee", "Fees", "Commission", "Commissions"]),
     exchangeFee: firstNumber(raw, ["ExchangeFee", "CurrencyConversionFee", "FxConversionCost", "ExchangeCommission"]),
     spreadCostAccountCurrency,
@@ -1832,19 +1873,18 @@ export function normalizeHistoryItem(raw, kind, index) {
   };
 }
 
-function inferTransactionCostFromTradeValue(raw) {
+export function inferTransactionCostFromTradeValue(raw, resolvedAccountCurrency) {
   const tradedValue = firstNumber(raw, ["TradedValue"]);
-  const accountCurrency = firstString(raw, ["AccountCurrency"]);
-  const clientCurrency = firstString(raw, ["ClientCurrency"]);
-  if (accountCurrency === "JPY" || clientCurrency === "JPY") return undefined;
-  const bookedAmount =
-    firstNumber(raw, ["BookedAmountUSD"]) ??
-    (accountCurrency === "USD" ? firstNumber(raw, ["BookedAmountAccountCurrency"]) : undefined);
+  const accountCurrency = String(firstString(raw, ["AccountCurrency"]) ?? resolvedAccountCurrency ?? "").toUpperCase();
+  const instrumentCurrency = String(firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency"]) ?? "").toUpperCase();
+  if (accountCurrency !== "USD" || instrumentCurrency !== "USD") return undefined;
+  const classification = String(firstString(raw, ["TradeType", "ActivityType", "EventType", "Status", "Reason"]) ?? "").toLowerCase();
+  if (firstBoolean(raw, ["IsCorrection", "Correction", "IsReversal"]) || /(correction|adjustment|reversal|cancel)/.test(classification)) return undefined;
+  const bookedAmount = firstNumber(raw, ["BookedAmountAccountCurrency"]);
   if (!Number.isFinite(tradedValue) || !Number.isFinite(bookedAmount)) return undefined;
-  if (Math.abs(bookedAmount) <= 0.0001) return undefined;
-  const inferredCost = Math.abs(Math.abs(tradedValue) - Math.abs(bookedAmount));
+  const inferredCost = Math.round((tradedValue - bookedAmount) * 100) / 100;
   if (!Number.isFinite(inferredCost) || inferredCost <= 0.0001) return undefined;
-  return { value: inferredCost, matchedName: "abs(TradedValue) - abs(BookedAmountUSD)" };
+  return { value: inferredCost, matchedName: "TradedValue - BookedAmountAccountCurrency" };
 }
 
 function inferOptionTypeFromValue(value) {
