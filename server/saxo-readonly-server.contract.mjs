@@ -17,6 +17,22 @@ test("R2 documented specification fields enrich existing underlying without fabr
   assert.equal(missing.contractSize, undefined);
   assert.equal(missing.deliverableIdentity, undefined);
 });
+test("R3 InstrumentDetails resolves effective currency and contract size, while preserving source missing fields", async () => {
+  const raw = { PositionBase: { AccountKey: "TEST-N", PositionId: "TEST-position", AssetType: "StockOption", Amount: 1, Uic: 990001, Strike: 100, ExpiryDate: "2026-10-02", PutCall: "Put" } };
+  const normalized = normalizePosition(raw, new Map(), "2026-09-13T00:00:00Z", 0);
+  assert.deepEqual(normalized.missingFields.filter(field => ["currency", "contractSize"].includes(field)), ["currency", "contractSize"]);
+  const [enriched] = await enrichPositionUnderlyingIdentities([normalized], "TEST", async () => ({ CurrencyCode: "USD", ContractSize: 100, RelatedInstruments: [] }));
+  assert.equal(enriched.currency, "USD"); assert.equal(enriched.currencySourceField, "InstrumentDetails.CurrencyCode");
+  assert.equal(enriched.contractSize, 100); assert.equal(enriched.contractSizeSourceField, "InstrumentDetails.ContractSize");
+  assert.deepEqual(enriched.missingFields.filter(field => ["currency", "contractSize"].includes(field)), []);
+  assert.deepEqual(enriched.sourceMissingFields.filter(field => ["currency", "contractSize"].includes(field)), ["currency", "contractSize"]);
+});
+test("R3 rejects conflicting direct and detail specification evidence without overwriting it", async () => {
+  const position = { kind: "option", uic: 990001, assetType: "StockOption", accountKey: "TEST-N", currency: "EUR", currencySourceField: "PositionBase.Currency", contractSize: 10, contractSizeSourceField: "PositionBase.ContractSize", missingFields: [] };
+  const [enriched] = await enrichPositionUnderlyingIdentities([position], "TEST", async () => ({ CurrencyCode: "USD", ContractSize: 100 }));
+  assert.equal(enriched.currency, "EUR"); assert.equal(enriched.contractSize, 10);
+  assert.deepEqual(enriched.specificationConflicts, ["currency", "contractSize"]);
+});
 test("R2 parent order, fill and masked display identity stay distinct", () => {
   const order = normalizeOrder({ AccountKey: "TEST-N-account", OrderId: "TEST-leg", MultiLegOrderDetails: { MultiLegOrderId: "TEST-parent" } }, new Map(), "TEST-time", 0);
   assert.equal(order.orderId, "TEST-leg"); assert.equal(order.multiLegOrderId, "TEST-parent");
@@ -26,6 +42,12 @@ test("R2 parent order, fill and masked display identity stay distinct", () => {
   assert.notEqual(item.accountKey, item.brokerAccountKey);
   const noFill = normalizeHistoryItem({ AccountKey: "TEST-N-account", OrderId: "TEST-leg" }, "trade", 0);
   assert.equal(noFill.tradeId, undefined); assert.equal(noFill.brokerHistoryId, undefined);
+});
+test("R3 order normalization preserves explicit role and instrument identity separately from order type", () => {
+  const closing = normalizeOrder({ AccountKey: "TEST-N", OrderId: "TEST-order", AssetType: "StockOption", Uic: 55001, Amount: 1, BuySell: "Sell", OpenOrderType: "StopIfTraded", ToOpenClose: "Close", Status: "Working", PutCall: "Call" }, new Map(), "TEST-time", 0);
+  assert.equal(closing.orderType, "StopIfTraded"); assert.equal(closing.openClose, "close"); assert.equal(closing.openCloseSourceField, "ToOpenClose"); assert.equal(closing.uic, 55001);
+  const unknown = normalizeOrder({ AccountKey: "TEST-N", OrderId: "TEST-order-2", AssetType: "StockOption", Amount: 1, BuySell: "Sell", OpenOrderType: "StopIfTraded", Status: "Working", PutCall: "Put" }, new Map(), "TEST-time", 1);
+  assert.equal(unknown.openClose, "unknown");
 });
 test("R2 pagination retains complete, partial and failed coverage", async () => {
   let page = 0;

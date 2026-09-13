@@ -101,3 +101,17 @@ describe("R2 current holding / opening lot safety", () => {
     expect(JSON.stringify(sources)).toBe(before);
   });
 });
+
+describe("R3 product specification evidence", () => {
+  it("keeps a potential pair visible when product currency or multiplier is unavailable", () => {
+    const snapshot = fixture(); delete snapshot.positions[0].currency; delete snapshot.positions[0].contractSize; snapshot.positions[0].missingFields = ["currency", "contractSize"];
+    expect(candidates(snapshot)).toEqual([]);
+    expect(getSpreadImportIssues(snapshot)).toEqual([expect.objectContaining({ code: "specification_missing" })]);
+  });
+  it("does not overwrite a specification conflict or a non-USD product with account defaults", () => {
+    const conflict = fixture(); conflict.positions[0].specificationConflicts = ["currency"];
+    expect(candidates(conflict)).toEqual([]); expect(getSpreadImportIssues(conflict)[0].code).toBe("specification_conflict");
+    const unsupported = fixture(); unsupported.positions[0].currency = "EUR";
+    expect(candidates(unsupported)).toEqual([]); expect(getSpreadImportIssues(unsupported)[0].code).toBe("unsupported_currency");
+  });
+});

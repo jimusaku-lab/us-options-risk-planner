@@ -139,7 +139,7 @@ describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE production import", () => {
     expect(JSON.stringify(useOptionsStore.getState().simulationsByWorkspace)).toBe(before);
     // Both input rows actually reached the rendered Panel. A transport error
     // or an empty/hidden source list must not masquerade as the target RED.
-    expect(screen.getAllByRole("button", { name: "確認して建玉入力へ" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "確認して建玉入力へ" })).toBeNull();
     // A production confirmation route must exist before testing parent commit,
     // re-fetch, reload, and partial/full history. No fake handler is substituted.
     const confirmations = screen.queryAllByRole("button", { name: /このスプレッドを反映|この2本を1つの戦略として管理|組み合わせを確認/ });

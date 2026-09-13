@@ -161,10 +161,14 @@ export type SaxoApiPositionSnapshot = {
   marketValue?: number;
   marketValueCurrency?: Currency | string;
   currency?: Currency | string;
+  currencySourceField?: string;
   optionType?: "call" | "put" | "unknown";
   strike?: number;
   expiry?: string;
   contractSize?: number;
+  contractSizeSourceField?: string;
+  sourceMissingFields?: string[];
+  specificationConflicts?: Array<"currency" | "contractSize">;
   premiumOpenPrice?: number;
   currentOptionPrice?: number;
   instrumentCode?: string;
@@ -758,6 +762,9 @@ export type SaxoApiOrderSnapshot = {
   duration?: string;
   currency?: Currency | string;
   optionType?: "call" | "put" | "unknown";
+  uic?: number;
+  openClose?: "open" | "close" | "unknown";
+  openCloseSourceField?: string;
   strike?: number;
   expiry?: string;
   isExitCandidate?: boolean;
@@ -1380,9 +1387,9 @@ export function getSaxoExitOrderReviews(
   for (const simulation of simulations) {
     if (simulation.status !== "open") continue;
     for (const leg of simulation.optionLegs) {
-      // Exit-rule reconciliation is only meaningful for the short option that
-      // would be bought back. Long-option price candidates remain independent.
-      if (leg.side !== "sell") continue;
+      // Both a short leg's buyback and a long leg's sell-to-close order use
+      // the same strict account/contract/side review path. This only creates
+      // an app-side review link and never changes the broker order.
       const matching = findOrderCandidatesForLeg(simulation, leg, orders);
       const takeProfitOrder = matching.find((order) => order.orderType?.toLowerCase() === "limit");
       const upperExitOrder = matching.find((order) => /stop/.test(order.orderType?.toLowerCase() ?? ""));

@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { SpreadStrategyCandidates } from "./SpreadStrategyCandidates";
-import { getSpreadImportIssues, reconcileStrategyCandidates } from "./spreadStrategyImport";
+import { getPotentialSpreadPositionIds, getSpreadImportIssues, reconcileStrategyCandidates } from "./spreadStrategyImport";
 import { emptyStrategyLedger, type PreparedStrategyImport, type StrategyCoverage, type StrategyLedger } from "@/domain/strategyLedger";
 import { Ban, Cable, CheckCircle2, Clipboard, Download, Eye, FilePlus2, Link2, LogOut, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import {
@@ -369,6 +369,7 @@ export function SaxoReadOnlyPanel({
   }), [status?.environment, spreadRequestRevision, mappedPositions, historyEndpoints, orders, spreadCoverage, isLoading]);
   const spreadCandidates = useMemo(() => reconcileStrategyCandidates(spreadSnapshot, strategyLedger ?? emptyStrategyLedger(), simulations), [spreadSnapshot, strategyLedger, simulations]);
   const spreadIssues = useMemo(() => isLoading ? [] : getSpreadImportIssues(spreadSnapshot, strategyLedger, simulations), [spreadSnapshot, isLoading, strategyLedger, simulations]);
+  const spreadPositionIds = useMemo(() => getPotentialSpreadPositionIds(spreadSnapshot), [spreadSnapshot]);
   const effectiveHistoryEndpoints = useMemo(
     () => createEffectiveHistoryEndpoints(historyEndpoints, effectiveHistoryItems),
     [effectiveHistoryItems, historyEndpoints],
@@ -1430,6 +1431,7 @@ export function SaxoReadOnlyPanel({
                 stockTransfers={stockTransfers}
                 historyItems={effectiveHistoryItems}
                 historyReady={historyFetchOutcome !== "pending"}
+                spreadPositionIds={spreadPositionIds}
                 resolveLinkedSimulation={resolveLinkedSimulation}
                 positionActionErrors={positionActionErrors}
                 positionActionNotices={positionActionNotices}
@@ -1682,6 +1684,7 @@ export function SaxoReadOnlyPanel({
               <div ref={ordersRef} />
               <OrdersPreview
                 orders={mappedOrders}
+                positions={mappedPositions}
                 exitOrderReviews={getSaxoExitOrderReviews(simulations, mappedOrders)}
                 fetchedAt={ordersFetchedAt}
                 isLoading={isLoading}
@@ -2278,7 +2281,7 @@ function ExitOrderSummaryActionRow({ action, hideAction = false, onOpen }: { act
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-sky-200 bg-sky-50 px-2 py-2 text-xs">
       <div className="min-w-0">
-        <div className="font-bold text-slate-900">{action.ticker} / Saxo OCO出口注文 / {prices.join(" / ") || "価格未取得"}</div>
+        <div className="font-bold text-slate-900">{action.ticker} / Saxo {action.takeProfitOrder && action.upperExitOrder ? "OCO出口注文" : "決済注文"} / {prices.join(" / ") || "価格未取得"}</div>
         <div className="mt-1 text-slate-600">Saxoの注文は変更せず、アプリ内の出口ルールとして確認します。</div>
       </div>
       {hideAction ? null : (
@@ -2670,6 +2673,7 @@ function PositionsPreview({
   stockTransfers,
   historyItems,
   historyReady,
+  spreadPositionIds,
   resolveLinkedSimulation,
   positionActionErrors,
   positionActionNotices,
@@ -2706,6 +2710,7 @@ function PositionsPreview({
   stockTransfers: StockTransferEvent[];
   historyItems: SaxoHistoryDiscoveryItem[];
   historyReady: boolean;
+  spreadPositionIds: Set<string>;
   resolveLinkedSimulation: (row: SaxoPositionReconciliationRow) => LinkedSimulationResolution;
   positionActionErrors: Record<string, string>;
   positionActionNotices: Record<string, string>;
@@ -2749,6 +2754,7 @@ function PositionsPreview({
   const linkedRegularRows = standaloneRegularRows.filter((row) => row.position && resolveLinkedSimulation(row).status === "linked");
   const actionRequiredRegularRows = standaloneRegularRows.filter((row) => {
     if (!row.position) return false;
+    if (spreadPositionIds.has(row.position.id)) return false;
     const linked = resolveLinkedSimulation(row);
     const symbolConflict = resolveSaxoPositionSymbolResolution(row.position, simulations).sourceConflict;
     return isActionRequiredRegularPositionRow(row, linked, symbolConflict);
@@ -3144,6 +3150,7 @@ function NStockTransferCandidates({
 
 function OrdersPreview({
   orders,
+  positions,
   exitOrderReviews,
   fetchedAt,
   isLoading,
@@ -3153,6 +3160,7 @@ function OrdersPreview({
   onOpenExitOrderRule,
 }: {
   orders: SaxoApiOrderSnapshot[];
+  positions: SaxoApiPositionSnapshot[];
   exitOrderReviews: SaxoExitOrderReview[];
   fetchedAt: string;
   isLoading: boolean;
@@ -3164,9 +3172,9 @@ function OrdersPreview({
   const assignedP = orders.filter((order) => order.accountAssignment === "P").length;
   const assignedN = orders.filter((order) => order.accountAssignment === "N").length;
   const unassigned = orders.filter((order) => order.accountAssignment === "unassigned").length;
-  const coveredCallOpenOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "covered_call_open").length;
-  const exitCandidates = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "exit").length;
-  const inactiveOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "inactive").length;
+  const coveredCallOpenOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, positions) === "covered_call_open").length;
+  const exitCandidates = orders.filter((order) => getSaxoOrderDisplayCategory(order, positions) === "exit").length;
+  const inactiveOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, positions) === "inactive").length;
   return (
     <div className="rounded-md border border-slate-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3210,9 +3218,10 @@ function OrdersPreview({
                 <OrderRow
                   key={order.id}
                   order={order}
+                  positions={positions}
                   expanded={expandedOrderId === order.id}
                   onToggleDetails={onToggleDetails}
-                  exitOrderReview={exitOrderReviews.find((review) => review.status === "pending" && review.takeProfitOrder?.id === order.id)}
+                  exitOrderReview={exitOrderReviews.find((review) => review.status === "pending" && (review.takeProfitOrder?.id === order.id || review.upperExitOrder?.id === order.id))}
                   onOpenExitOrderRule={onOpenExitOrderRule}
                 />
               ))}
@@ -3226,18 +3235,20 @@ function OrdersPreview({
 
 function OrderRow({
   order,
+  positions,
   expanded,
   onToggleDetails,
   exitOrderReview,
   onOpenExitOrderRule,
 }: {
   order: SaxoApiOrderSnapshot;
+  positions: SaxoApiPositionSnapshot[];
   expanded: boolean;
   onToggleDetails: (id: string) => void;
   exitOrderReview?: SaxoExitOrderReview;
   onOpenExitOrderRule: (action: SaxoExitOrderReview) => void;
 }) {
-  const category = getSaxoOrderDisplayCategory(order);
+  const category = getSaxoOrderDisplayCategory(order, positions);
   return (
     <>
       <tr className="border-b border-slate-100 align-top">
@@ -4477,24 +4488,30 @@ function formatOrderLabel(order: SaxoApiOrderSnapshot): string {
   return `${order.symbol ?? "未取得"} / ${order.side ?? "unknown"}`;
 }
 
-type SaxoOrderDisplayCategory = "covered_call_open" | "exit" | "inactive" | "working" | "other";
+export type SaxoOrderDisplayCategory = "covered_call_open" | "opening" | "exit" | "exit_quantity_excess" | "inactive" | "working" | "other";
 
-function getSaxoOrderDisplayCategory(order: SaxoApiOrderSnapshot): SaxoOrderDisplayCategory {
+export function getSaxoOrderDisplayCategory(order: SaxoApiOrderSnapshot, positions: SaxoApiPositionSnapshot[] = []): SaxoOrderDisplayCategory {
   if (isInactiveSaxoOrder(order)) return "inactive";
-  if (isWorkingCoveredCallSellOrder(order)) return "covered_call_open";
-  if (order.isExitCandidate) return "exit";
+  const matchingPositions = positions.filter((position) => {
+    if (position.accountAssignment !== order.accountAssignment || position.accountAssignment === "unassigned" || position.accountAssignment === "ignored") return false;
+    if (position.kind !== "option" || position.optionType !== order.optionType) return false;
+    if (position.uic && order.uic) return position.uic === order.uic;
+    return Boolean(position.strike !== undefined && order.strike !== undefined && Math.abs(position.strike - order.strike) < 0.000001 && position.expiry === order.expiry && normalizeStockTicker(position.underlyingSymbol ?? position.symbol) === normalizeStockTicker(order.symbol));
+  }).filter(position => (position.side === "long" && order.side === "sell") || (position.side === "short" && order.side === "buy"));
+  const uniqueClose = matchingPositions.length === 1;
+  const closeQuantity = Math.abs(order.quantity ?? Number.NaN);
+  const remainingQuantity = Math.abs(matchingPositions[0]?.quantity ?? Number.NaN);
+  if (order.openClose === "close" || (order.openClose !== "open" && uniqueClose)) {
+    if (!uniqueClose || !Number.isFinite(closeQuantity) || closeQuantity <= 0 || closeQuantity > remainingQuantity) return "exit_quantity_excess";
+    return "exit";
+  }
+  if (order.openClose === "open") {
+    // The order DTO has no explicit contract multiplier, so covered status
+    // cannot be established using a fixed 100 multiplier or ticker proximity.
+    return "opening";
+  }
   if (isWorkingSaxoOrder(order)) return "working";
   return "other";
-}
-
-function isWorkingCoveredCallSellOrder(order: SaxoApiOrderSnapshot): boolean {
-  return (
-    isWorkingSaxoOrder(order) &&
-    order.accountAssignment === "N" &&
-    order.assetType?.toLowerCase().includes("option") === true &&
-    order.optionType === "call" &&
-    order.side === "sell"
-  );
 }
 
 function isWorkingSaxoOrder(order: SaxoApiOrderSnapshot): boolean {
@@ -4513,6 +4530,10 @@ function getSaxoOrderCategoryLabel(category: SaxoOrderDisplayCategory): string {
       return "未約定カバードコール売り注文";
     case "exit":
       return "決済・出口注文";
+    case "exit_quantity_excess":
+      return "決済数量を確認";
+    case "opening":
+      return "新規注文";
     case "inactive":
       return "取消済み・失効注文";
     case "working":
@@ -4528,6 +4549,8 @@ function getSaxoOrderCategoryBadgeClass(category: SaxoOrderDisplayCategory): str
       return "bg-amber-100 text-amber-900";
     case "exit":
       return "bg-sky-100 text-sky-800";
+    case "exit_quantity_excess":
+      return "bg-amber-100 text-amber-900";
     case "inactive":
       return "bg-slate-100 text-slate-700";
     default:
@@ -4541,6 +4564,8 @@ function getSaxoOrderCategoryNoticeClass(category: SaxoOrderDisplayCategory): st
       return "border-amber-200 bg-amber-50 text-amber-950";
     case "exit":
       return "border-sky-200 bg-sky-50 text-sky-950";
+    case "exit_quantity_excess":
+      return "border-amber-200 bg-amber-50 text-amber-950";
     case "inactive":
       return "border-slate-200 bg-slate-50 text-slate-700";
     default:
@@ -4555,6 +4580,8 @@ function getSaxoOrderCategoryNotice(order: SaxoApiOrderSnapshot, category: SaxoO
   if (category === "exit") {
     return "Saxo側にある決済・出口注文候補です。これはアプリ内の利確/損切りルールとは別物です。約定済み履歴が取得された場合だけ、決済実績確認へ進みます。";
   }
+  if (category === "exit_quantity_excess") return "既存建玉との照合候補はありますが、数量または対応先が一意ではありません。決済注文とは確定せず診断に保持します。";
+  if (category === "opening") return "Saxoが新規注文として返した未約定注文です。約定するまで建玉へ反映しません。";
   if (category === "inactive") {
     return "取消済みまたは失効した注文です。建玉・決済実績・成績には反映しません。";
   }
@@ -5169,9 +5196,10 @@ export function createReflectionSummary({
   const newPositions = regularPositionRows.filter((row) => row.status === "app_missing").length;
   const matchedPositions = regularPositionRows.filter((row) => row.status === "matched").length;
   const unknownPositions = regularPositionRows.filter((row) => row.status === "unknown" || row.status === "quantity_diff" || row.status === "price_diff").length;
-  const coveredCallOpenOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "covered_call_open").length;
-  const exitOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "exit").length;
-  const inactiveOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order) === "inactive").length;
+  const orderPositions = positionRows.flatMap(row => row.position ? [row.position] : []);
+  const coveredCallOpenOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "covered_call_open").length;
+  const exitOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "exit").length;
+  const inactiveOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "inactive").length;
   // A limit + stop OCO pair is one review job.  The raw order count remains
   // diagnostic only and must not inflate the reflection-pending count.
   const orderActions = getSaxoExitOrderReviews(simulations, orders).filter((action) => action.status === "pending");

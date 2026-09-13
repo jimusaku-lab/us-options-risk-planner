@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
-import { createEffectiveHistoryEndpoints, createHistoryReflectionStates, createReflectionSummary, getDisplayPositionMissingFields, HistoryDiscoveryPreview, isActionRequiredRegularPositionRow, ReflectionPendingSummary, sanitizePersistedSaxoHistoryKeys, SaxoPanelCloseButton, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
+import { createEffectiveHistoryEndpoints, createHistoryReflectionStates, createReflectionSummary, getDisplayPositionMissingFields, getSaxoOrderDisplayCategory, HistoryDiscoveryPreview, isActionRequiredRegularPositionRow, ReflectionPendingSummary, sanitizePersistedSaxoHistoryKeys, SaxoPanelCloseButton, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
 import type { ReflectionSummary } from "./SaxoReadOnlyPanel";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import type { TradeSimulation } from "@/types/domain";
@@ -99,6 +99,19 @@ it("counts an OCO pair as one actionable exit-rule review and exposes its direct
   expect(screen.getByText("完了まで:")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "SAMPLEの出口ルールを確認" }));
   expect(onPrimaryAction).toHaveBeenCalledWith(expect.objectContaining({ kind: "order", action: expect.objectContaining({ simulationId: "anonymous-exit-rule", legId: "put-leg" }) }));
+});
+
+it("classifies a working sell against one long call as an exit candidate, not a covered call", () => {
+  const position = { ...callPosition, uic: 55001, accountAssignment: "N" as const, symbol: "SAMPLE", underlyingSymbol: "SAMPLE", quantity: 1 };
+  const order: SaxoApiOrderSnapshot = { id: "TEST-order", accountKey: "account", accountAssignment: "N", assetType: "StockOption", uic: 55001, optionType: "call", side: "sell", quantity: 1, orderType: "StopIfTraded", status: "Working", openClose: "unknown", missingFields: [], fetchedAt: "2026-09-13T00:00:00Z" };
+  expect(getSaxoOrderDisplayCategory(order, [position])).toBe("exit");
+});
+it("does not call an unproven call sell a covered call and blocks excess close quantity", () => {
+  const position = { ...callPosition, uic: 55001, accountAssignment: "N" as const, symbol: "SAMPLE", underlyingSymbol: "SAMPLE", quantity: 1 };
+  const base: SaxoApiOrderSnapshot = { id: "TEST-order", accountKey: "account", accountAssignment: "N", assetType: "StockOption", uic: 55001, optionType: "call", side: "sell", quantity: 1, orderType: "Limit", status: "Working", openClose: "unknown", missingFields: [], fetchedAt: "2026-09-13T00:00:00Z" };
+  expect(getSaxoOrderDisplayCategory(base, [])).toBe("working");
+  expect(getSaxoOrderDisplayCategory({ ...base, quantity: 2 }, [position])).toBe("exit_quantity_excess");
+  expect(getSaxoOrderDisplayCategory({ ...base, openClose: "open" }, [position])).toBe("opening");
 });
 
 it("uses the same pending model for a P-account difference and its top-level direct CTA", () => {

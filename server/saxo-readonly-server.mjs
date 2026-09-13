@@ -1470,10 +1470,12 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
   const averageOpenPrice = kind === "stock" ? premiumOpenPrice : undefined;
   const strike = firstNumber(raw, ["Strike", "StrikePrice", "ExercisePrice"]) ?? inferredContract?.strike;
   const expiry = normalizeSaxoDate(firstString(raw, ["ExpiryDate", "Expiry", "ExpirationDate", "MaturityDate"])) ?? inferredContract?.expiry;
-  const contractSize = firstNumber(raw, ["ContractSize", "LotSize", "Multiplier"]);
+  const contractSizeMatch = firstNumberMatch(raw, ["ContractSize"]);
+  const contractSize = contractSizeMatch?.value;
   const marketValue = firstNumber(raw, ["MarketValue", "Value", "MarketValueInBaseCurrency"]);
   const unrealizedPnl = firstNumber(raw, ["ProfitLossOnTrade", "UnrealizedProfitLoss", "ProfitLoss", "Pnl", "P/L"]);
-  const currency = firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency", "DisplayCurrency"]);
+  const currencyMatch = firstStringMatch(raw, ["Currency", "TradeCurrency", "InstrumentCurrency", "DisplayCurrency"]);
+  const currency = currencyMatch?.value;
   const positionId = firstString(raw, ["PositionId", "PositionID", "Id", "PositionKey"]);
   const uic = firstNumber(raw, ["Uic", "UIC"]);
   const multiLegOrderIdMatch = firstStringMatch(raw, ["MultiLegOrderId"]);
@@ -1517,6 +1519,7 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     quantity,
     currentPrice,
     currency,
+    currencySourceField: currencyMatch?.matchedName,
   })) {
     if (value === undefined || value === "") missingFields.push(field);
   }
@@ -1557,6 +1560,7 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     strike,
     expiry,
     contractSize,
+    contractSizeSourceField: contractSizeMatch?.matchedName,
     premiumOpenPrice: kind === "option" ? premiumOpenPrice : undefined,
     currentOptionPrice,
     instrumentCode,
@@ -1580,6 +1584,7 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
       openingTransactionCostSourceField: Object.keys(openingTransactionCostComponents).length > 0 ? "Costs.OpenCostInBaseCurrency" : undefined,
       capturedAt: fetchedAt,
     },
+    sourceMissingFields: [...missingFields],
     missingFields,
     fetchedAt,
     raw,
@@ -1599,9 +1604,24 @@ export async function enrichPositionUnderlyingIdentities(positions, clientKey, f
     }
     // Documented InstrumentDetails fields only. Instrument is not proof of a
     // standard, unadjusted deliverable; leave deliverableIdentity unknown.
+    const detailCurrency = firstString(optionDetail, ["CurrencyCode"]);
+    const detailContractSize = firstNumber(optionDetail, ["ContractSize"]);
+    const specificationConflicts = [...(position.specificationConflicts ?? [])];
+    if (position.currency && detailCurrency && position.currency !== detailCurrency) specificationConflicts.push("currency");
+    if (Number.isFinite(position.contractSize) && Number.isFinite(detailContractSize) && position.contractSize !== detailContractSize) specificationConflicts.push("contractSize");
+    const effectiveCurrency = position.currency ?? detailCurrency;
+    const effectiveContractSize = position.contractSize ?? (Number.isFinite(detailContractSize) ? detailContractSize : undefined);
+    const missingFields = (position.missingFields ?? []).filter(field =>
+      field === "currency" ? !effectiveCurrency : field === "contractSize" ? !Number.isFinite(effectiveContractSize) : true,
+    );
     const specification = {
       ...position,
-      contractSize: position.contractSize ?? (Number.isFinite(optionDetail?.ContractSize) ? optionDetail.ContractSize : undefined),
+      currency: effectiveCurrency,
+      currencySourceField: position.currencySourceField ?? (detailCurrency ? "InstrumentDetails.CurrencyCode" : undefined),
+      contractSize: effectiveContractSize,
+      contractSizeSourceField: position.contractSizeSourceField ?? (Number.isFinite(detailContractSize) ? "InstrumentDetails.ContractSize" : undefined),
+      specificationConflicts,
+      missingFields,
       settlementType: optionDetail?.SettlementStyle,
       underlyingTypeCategory: optionDetail?.UnderlyingTypeCategory,
       contractSpecificationSource: optionDetail ? `ref/v1/instruments/details/${position.uic}/${position.assetType}` : undefined,
@@ -1672,6 +1692,9 @@ export function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
   const symbol = inferSymbol(raw);
   const optionType = inferOptionType(raw);
   const relation = firstString(raw, ["OrderRelation", "Relation", "RelatedOrderType"]);
+  const openCloseMatch = firstStringMatch(raw, ["ToOpenClose", "ToOpenOrClose", "OpenClose"]);
+  const openCloseText = String(openCloseMatch?.value ?? "").toLowerCase();
+  const openClose = /close/.test(openCloseText) ? "close" : /open/.test(openCloseText) ? "open" : "unknown";
   const multiLegOrderId = firstStringMatch(raw, ["MultiLegOrderId"]);
   const missingFields = [];
   for (const [field, value] of Object.entries({ accountKey, symbol, assetType, quantity, orderType, status })) {
@@ -1698,6 +1721,9 @@ export function normalizeOrder(raw, accountsByKey, fetchedAt, index) {
     duration,
     currency: firstString(raw, ["Currency", "TradeCurrency", "InstrumentCurrency"]),
     optionType,
+    uic: firstNumber(raw, ["Uic", "UIC"]),
+    openClose,
+    openCloseSourceField: openCloseMatch?.matchedName,
     strike: firstNumber(raw, ["Strike", "StrikePrice", "ExercisePrice"]),
     expiry: normalizeSaxoDate(firstString(raw, ["ExpiryDate", "Expiry", "ExpirationDate", "MaturityDate"])),
     isExitCandidate: inferExitOrderCandidate(raw),
