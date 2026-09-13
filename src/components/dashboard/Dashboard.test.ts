@@ -172,6 +172,8 @@ describe("synthetic leg history", () => {
     }));
     const row = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("XYZ"));
     expect(row?.textContent).toContain("実現利益+$1,505.52");
+    expect(row?.textContent).toContain("建玉時支払 -$792.24 / 決済時受取 +$2,297.76（手数料込み）");
+    expect(row?.textContent).not.toContain("決済支払 -$2,302.24");
     expect(row?.textContent).toContain("購入時支払総額");
     expect(row?.textContent).toContain("+190.0%");
     expect(row?.textContent).toContain("年率換算（参考）+5,335.6%保有13日");
@@ -202,6 +204,7 @@ describe("synthetic leg history", () => {
     const { container } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn() }));
     const row = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("LOSS"));
     expect(row?.textContent).toContain("実現損失-$74.48");
+    expect(row?.textContent).toContain("建玉時支払 -$102.24 / 決済時受取 +$27.76（手数料込み）");
     expect(row?.textContent).not.toContain("現在株価");
     expect(row?.textContent).toContain("警告なし");
     expect(row?.textContent).not.toContain("出口ルール");
@@ -226,6 +229,60 @@ describe("synthetic leg history", () => {
     expect(row?.textContent).toContain("契約C $220.00");
     expect(row?.textContent).not.toContain("現在株価");
     expect(row?.textContent).not.toContain("+$80.00");
+    expect(row?.querySelector('[data-testid="history-cashflow-display"]')).toBeNull();
+  });
+
+  it("labels short-option receipt and buyback payment from the actual direction", () => {
+    const value = createSimulation({
+      status: "closed",
+      ticker: "SHORT",
+      strategyType: "short_put",
+      optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", side: "sell", premiumUSD: 3.75, quantity: 1 }],
+      optionEntryExecutions: [{ id: "entry", legId: "put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 3.75, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2025-03-23", contracts: 1, closePriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 270.52, source: "manual", confirmed: true }],
+    });
+    const { container } = render(createElement(Dashboard, { simulations: [value], selectedId: value.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn() }));
+    const row = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("SHORT"));
+    expect(row?.textContent).toContain("建玉時受取 +$372.76 / 決済時支払 -$102.24（手数料込み）");
+  });
+
+  it("shows expiration and unknown cashflow without inventing a sale or zero fee", () => {
+    const expired = createSimulation({
+      status: "expired",
+      ticker: "EXPIRE",
+      strategyType: "long_put",
+      optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", side: "buy", premiumUSD: 1, quantity: 1 }],
+      optionEntryExecutions: [{ id: "entry", legId: "put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "expired", closeDate: "2025-03-23", contracts: 1, commissionUSD: 0, settlementCurrency: "USD", realizedPnlUSD: -102.24, source: "manual", confirmed: true }],
+    });
+    const unknown = createSimulation({
+      status: "closed",
+      id: "unknown",
+      ticker: "UNKNOWN",
+      strategyType: "long_put",
+      optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", side: "buy", premiumUSD: 1, quantity: 1 }],
+      optionEntryExecutions: [{ id: "entry", legId: "put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 1, settlementCurrency: "USD", source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2025-03-23", contracts: 1, closePriceUSD: 2, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 97.76, source: "manual", confirmed: true }],
+    });
+    const { container } = render(createElement(Dashboard, { simulations: [expired, unknown], selectedId: expired.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn() }));
+    const rows = Array.from(container.querySelectorAll("tr"));
+    expect(rows.find((candidate) => candidate.textContent?.includes("EXPIRE"))?.textContent).toContain("満期時受払 $0.00");
+    expect(rows.find((candidate) => candidate.textContent?.includes("UNKNOWN"))?.textContent).toContain("入出金内訳 未確認");
+  });
+
+  it("does not present materially unreconciled auxiliary cashflow as correct", () => {
+    const value = createSimulation({
+      status: "closed",
+      ticker: "CONFLICT",
+      strategyType: "long_put",
+      optionLegs: [{ ...createSimulation().optionLegs[0], id: "put", side: "buy", premiumUSD: 1, quantity: 1 }],
+      optionEntryExecutions: [{ id: "entry", legId: "put", tradeDate: "2025-03-10", contracts: 1, fillPriceUSD: 1, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+      optionCloseExecutions: [{ id: "close", legId: "put", closeKind: "buyback", closeDate: "2025-03-23", contracts: 1, closePriceUSD: 2, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 98.76, source: "manual", confirmed: true }],
+    });
+    const { container } = render(createElement(Dashboard, { simulations: [value], selectedId: value.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn() }));
+    const row = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("CONFLICT"));
+    expect(row?.textContent).toContain("入出金と実現損益 不一致");
+    expect(row?.textContent).not.toContain("建玉時支払 -$102.24 / 決済時受取 +$197.76");
   });
 });
 

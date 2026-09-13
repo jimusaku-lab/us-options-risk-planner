@@ -20,6 +20,7 @@ import { formatCurrentPriceStrikeDifference, formatCurrentPriceStrikePercent, ge
 import { getBulkApplicableTargetIds, getBulkOptionPricePreviewCounts, type CurrentOptionPricePreviewRow, type CurrentStockPricePreviewRow } from "@/domain/bulkOptionPrice";
 import { getSaxoExitOrderReviews, type SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
 import { calculateBearPutSpreadEstimate, getBearPutSpreadLifecycle } from "@/domain/bearPutSpread";
+import { calculateHistoryCashflowDisplay } from "@/domain/historyCashflowDisplay";
 
 const statusClassName = {
   planned: "bg-sky-100 text-sky-800",
@@ -396,6 +397,9 @@ export function Dashboard({
               const currentEstimateIsRemainingLeg = currentEstimate.kind === "available" && currentEstimate.evaluationScope === "remaining_leg";
               const longOptionDisplay = !isHistoryRow ? premiumDisplay.longOptionOrderDisplay : undefined;
               const historyCloseResults = historyPerformance?.optionCloseExecutionResults ?? [];
+              const historyCashflow = isHistoryRow && historyCloseResults.length > 0
+                ? calculateHistoryCashflowDisplay(simulationWithAccount, historyCloseResults)
+                : null;
               const historyRealizedUsd = historyCloseResults.reduce((sum, result) => sum + result.realizedPnlUSD, 0);
               const historyRealizedJpy = historyCloseResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
               const isNAccountRow = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
@@ -635,13 +639,11 @@ export function Dashboard({
                       <>
                         <span className="block text-[11px] font-bold text-slate-500">{isHistoryRow ? (premiumDisplayUSD >= 0 ? "実現利益" : "実現損失") : premiumDisplay.label}</span>
                         <span className={`block ${isHistoryRow ? `text-base font-extrabold ${premiumDisplayUSD >= 0 ? "text-emerald-700" : "text-red-700"}` : ""}`}>{isHistoryRow ? formatRealizedUSD(premiumDisplayUSD) : formatUSD(premiumDisplayUSD)}</span>
-                        {hasHistoryCloseResults && isNAccountRow ? (
-                          <span className="block text-xs text-slate-500">
-                            建玉時 {formatUSD(
-                              historyCloseResults[0].leg.side === "buy"
-                                ? historyCloseResults[0].entryPremiumUSD + historyCloseResults[0].openCommissionUSD
-                                : historyCloseResults[0].entryPremiumUSD - historyCloseResults[0].openCommissionUSD,
-                            )} / 決済支払 -{formatUSD(historyCloseResults[0].closeCostUSD + historyCloseResults[0].closeCommissionUSD)}
+                        {historyCashflow ? (
+                          <span className="block text-xs font-normal text-slate-600" data-testid="history-cashflow-display">
+                            {historyCashflow.available
+                              ? `${historyCashflow.entry.label} ${formatSignedUSD(historyCashflow.entry.amountUSD)} / ${historyCashflow.close.label} ${formatSignedUSD(historyCashflow.close.amountUSD)}（手数料込み${historyCashflow.executionCount > 1 ? `・${historyCashflow.executionCount}件集計` : ""}）`
+                              : historyCashflow.reason}
                           </span>
                         ) : null}
                         {!isHistoryRow && premiumDisplay.netAfterFeesUSD !== undefined && Math.abs(premiumDisplay.netAfterFeesUSD - premiumDisplay.premiumUSD) > 0.005 ? (
