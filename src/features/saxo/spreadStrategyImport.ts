@@ -6,7 +6,7 @@ import { strategyIdentityKey, strategyViewKey, type StrategyCandidate, type Stra
 export type SpreadOrderRelation = { accountKey: string; orderId: string; parentOrderId: string; sourceField: string };
 export type SpreadImportSnapshot = { environment: string; requestRevision: number; positions: SaxoApiPositionSnapshot[]; history: SaxoHistoryDiscoveryItem[]; orders: SpreadOrderRelation[]; coverage: StrategyCoverage[] };
 
-export type SpreadImportIssue = { code: "specification_missing" | "specification_conflict" | "unsupported_currency" | "duplicate_positions" | "lifecycle_history" | "account_identity" | "opening_identity" | "multiple_opening_lots" | "quantity_mismatch" | "existing_source"; label: string; reason: string };
+export type SpreadImportIssue = { code: "specification_missing" | "specification_conflict" | "unsupported_currency" | "duplicate_positions" | "lifecycle_history" | "account_identity" | "opening_identity" | "opening_accounting" | "multiple_opening_lots" | "quantity_mismatch" | "existing_source"; label: string; reason: string };
 const instrumentKey = (position: SaxoApiPositionSnapshot) => JSON.stringify([position.accountKey, position.uic]);
 const positionIssueLabel = (position: SaxoApiPositionSnapshot) => `${position.underlyingSymbol ?? position.symbol ?? "オプション"} P${position.strike} / ${position.expiry}`;
 const potential = (position: SaxoApiPositionSnapshot) => position.kind === "option" && position.assetType === "StockOption" && position.optionType === "put" && ["long", "short"].includes(position.side ?? "") && position.accountAssignment === "N" && Boolean(position.accountKey && position.uic && position.underlyingIdentity && position.expiry) && position.strike !== undefined;
@@ -45,6 +45,13 @@ function currentLotIssues(snapshot: SpreadImportSnapshot, simulations: TradeSimu
       continue;
     }
     if (history.some(item => item.openClose !== "open" || item.buySell !== side || item.duplicateResolution || item.transactionCostConflict)) { issue("lifecycle_history", "この商品には決済済み・売買方向違い・未照合または費用競合の履歴があり、現在保有する購入分を確定できません"); continue; }
+    const invalidCost = history.find(item => item.transactionCost === undefined || !Number.isFinite(item.transactionCost) || item.transactionCost < 0);
+    if (invalidCost) {
+      issue("opening_accounting", invalidCost.currencyEvidenceError
+        ? "取引履歴の商品通貨をInstrument Detailsから取得できず、開始費用を確認できません"
+        : "取引履歴の開始費用が未取得または不正なため、開始実績を確認できません");
+      continue;
+    }
     const identities = history.map(trade => fillIdentity(snapshot, position, trade));
     if (!history.length || identities.some(identity => !identity)) { issue("opening_identity", "現在保有分に対応する開始約定の識別情報が不足しています"); continue; }
     const unique = new Map<string, SaxoHistoryDiscoveryItem>();

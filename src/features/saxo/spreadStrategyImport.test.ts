@@ -18,6 +18,22 @@ function existingFixture(snapshot: SpreadImportSnapshot): TradeSimulation {
 }
 
 describe("R2 current holding / opening lot safety", () => {
+  it("R4 independent: missing history fee remains blocked before a ready CTA", () => {
+    const snapshot = fixture();
+    delete snapshot.history[0].transactionCost;
+    snapshot.history[0].currencyEvidenceError = "instrument_details_unavailable";
+    expect(getSpreadImportIssues(snapshot).length).toBeGreaterThan(0);
+    expect(candidates(snapshot)).toEqual([]);
+  });
+  it("keeps explicit zero opening cost valid but blocks a negative cost", () => {
+    const zero = fixture();
+    zero.history[0].transactionCost = 0;
+    expect(candidates(zero)).toHaveLength(1);
+    const negative = fixture();
+    negative.history[0].transactionCost = -1;
+    expect(candidates(negative)).toEqual([]);
+    expect(getSpreadImportIssues(negative)[0]).toMatchObject({ code: "opening_accounting" });
+  });
   it("accepts the clean first 1:1 import", () => expect(candidates(fixture())).toHaveLength(1));
   it("does not offer a closed historical lot after the same instrument was reopened", () => {
     const snapshot = fixture();
