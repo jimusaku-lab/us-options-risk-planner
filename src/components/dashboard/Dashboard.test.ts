@@ -86,8 +86,9 @@ describe("synthetic leg history", () => {
     });
     const onPositionFocus = vi.fn();
     const { rerender } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onPositionFocus }));
-    expect(screen.getByText("2脚の組み合わせ")).toBeTruthy();
-    expect(screen.getByText(/概算損益/)).toBeTruthy();
+    expect(screen.getByText("ベア・プット")).toBeTruthy();
+    expect(screen.getByText("P100買い／P90売り・1組")).toBeTruthy();
+    expect(screen.getByText(/決済した場合の参考損益/)).toHaveTextContent("-$28.96 / -7.2%");
     expect(screen.getAllByText(/期間損益率/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "戦略の決済を確認" })).toBeTruthy();
     fireEvent.click(screen.getByLabelText("TESTの詳細を表示する"));

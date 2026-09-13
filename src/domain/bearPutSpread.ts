@@ -30,7 +30,7 @@ export type BearPutSpreadEstimate =
       periodReturnPct: number;
       annualizedReturnPct?: number;
       holdingDays?: number;
-      evaluatedLegs: Array<{ legId: string; label: "高ストライクP買い" | "低ストライクP売り"; remainingContracts: number; closePriceUSD: number; closeFeeUSD: number; closeFeeSource: Extract<ResolvedCloseCommission, { kind: "resolved" }>["source"]; closeFeeConfirmedAt?: string }>;
+      evaluatedLegs: Array<{ legId: string; label: "高ストライクP買い" | "低ストライクP売り"; remainingContracts: number; closePriceUSD: number; grossAmountUSD: number; closeFeeUSD: number; closeFeeSource: Extract<ResolvedCloseCommission, { kind: "resolved" }>["source"]; closeFeeConfirmedAt?: string }>;
     };
 
 function positiveInteger(value: number | undefined): value is number {
@@ -142,7 +142,7 @@ export function calculateBearPutSpreadEstimate(simulation: TradeSimulation, asOf
     const closedBasis = activeSpreadCloses(simulation).filter(close => close.legId === item.leg.id).map(close => spreadCloseMoney(simulation, close)?.entryDebitUSD);
     if (closedBasis.some(value => value === undefined)) { reasons.push("開始ロット割当 未確認"); continue; }
     remainingEntryBasisUSD = moneySum(remainingEntryBasisUSD, item.leg.side === "buy" ? entry.total : -entry.total, ...closedBasis.map(value => -value!));
-    evaluatedLegs.push({ legId: item.leg.id, label: item.leg.side === "buy" ? "高ストライクP買い" : "低ストライクP売り", remainingContracts: item.remainingContracts, closePriceUSD: price!, closeFeeUSD: allocatedFee, closeFeeSource: fee.source, closeFeeConfirmedAt: fee.confirmedAt });
+    evaluatedLegs.push({ legId: item.leg.id, label: item.leg.side === "buy" ? "高ストライクP買い" : "低ストライクP売り", remainingContracts: item.remainingContracts, closePriceUSD: price!, grossAmountUSD: gross, closeFeeUSD: allocatedFee, closeFeeSource: fee.source, closeFeeConfirmedAt: fee.confirmedAt });
   }
   if (reasons.length > 0) return { kind: "missing", lifecycle, entryAllInDebitUSD, realizedPnlUSD, reasons: Array.from(new Set(reasons)) };
   const remainingEstimatedPnlUSD = moneySum(closeNetProceedsUSD, -remainingEntryBasisUSD);

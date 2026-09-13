@@ -156,7 +156,7 @@ describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE", () => {
       positionFocusSimulationId={simulation.id} onPositionFocus={vi.fn()} />);
     render(<SpreadPerformancePreview simulation={simulation} />);
     const detail = screen.getByRole("region", { name: "戦略の決済プレビュー" });
-    const entryCard = within(detail).getByText("建玉時の手数料込み支払額").parentElement!;
+    const entryCard = within(detail).getByText("開始時の支払額（手数料込）").parentElement!;
     expect(entryCard).toHaveTextContent("$404.48");
   });
 

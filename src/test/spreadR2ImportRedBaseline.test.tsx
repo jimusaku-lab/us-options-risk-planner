@@ -172,7 +172,7 @@ describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE production import", () => {
     for (const [label, value] of [["P買い 決済参考価格 USD", "4.5"], ["P売り 決済参考価格 USD", "0.7"], ["P買い 決済費用合計 USD", "2.24"], ["P売り 決済費用合計 USD", "2.24"]]) {
       fireEvent.change(within(preview).getByLabelText(label), { target: { value } });
     }
-    await waitFor(() => expect(preview).toHaveTextContent("$-28.96"));
+    await waitFor(() => expect(preview).toHaveTextContent("-$28.96"));
     const reload = JSON.parse(localStorage.getItem("us-options-simulations-v2")!);
     const reloaded = hydrateStrategyRecords(reload.live, reload.strategyLedgers.live)[0];
     expect(calculateBearPutSpreadEstimate(reloaded)).toMatchObject({ entryAllInDebitUSD: 404.48, totalEstimatedPnlUSD: -28.96 });
