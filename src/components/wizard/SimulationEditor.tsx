@@ -266,6 +266,15 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
   const entryOptionLegs = simulation.optionLegs.length > 0 ? simulation.optionLegs : recoveredEntryOptionLegs;
   const optionCloseExecutions = simulation.optionCloseExecutions ?? [];
   const shortExitLegs = getShortOptionLegs(simulation);
+  const requestedExitOrderReviewLegId = focusRequest?.exitOrderReview && focusRequest.anchorId.startsWith("exit-order-review-")
+    ? focusRequest.anchorId.slice("exit-order-review-".length)
+    : undefined;
+  const requestedExitOrderReviewLeg = requestedExitOrderReviewLegId
+    ? simulation.optionLegs.find((leg) => leg.id === requestedExitOrderReviewLegId)
+    : undefined;
+  const requestedExitOrders = requestedExitOrderReviewLeg
+    ? findOrderCandidatesForLeg(simulation, requestedExitOrderReviewLeg, saxoOrders)
+    : [];
   const isComposite = isCompositeOptionStrategy(simulation);
   const isSyntheticForward = simulation.strategyType === "synthetic_forward";
   const isBearPutSpread = simulation.strategyType === "bear_put_spread";
@@ -379,6 +388,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
   };
   const findEditorFocusInput = (target: HTMLElement | null, anchorId: string): HTMLElement | null | undefined => {
     if (!target) return null;
+    if (anchorId.startsWith("exit-order-review-")) return target;
     if (anchorId.startsWith("exit-rule-")) {
       // Saxo OCO review links intentionally focus the rule card itself.  The
       // user first sees the matched pair and then chooses whether to save it.
@@ -1853,6 +1863,56 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      {focusRequest?.exitOrderReview && requestedExitOrderReviewLegId ? (
+        <section
+          id={`exit-order-review-${requestedExitOrderReviewLegId}`}
+          role="region"
+          aria-label={`${simulation.ticker || "対象建玉"}の決済注文レビュー`}
+          tabIndex={-1}
+          className="mt-4 rounded-lg border border-sky-300 bg-sky-50 p-3 outline-none focus:ring-2 focus:ring-sky-500"
+        >
+          <h3 className="text-sm font-bold text-slate-950">Saxoの決済注文を確認</h3>
+          <p className="mt-1 text-xs leading-5 text-slate-700">
+            Saxoで設定済みの注文です。再入力は不要です。ここでの確認は注文を変更しません。
+          </p>
+          {requestedExitOrderReviewLeg ? (
+            <>
+              <div className="mt-2 text-xs font-semibold text-slate-800">
+                {simulation.ticker} / {requestedExitOrderReviewLeg.type === "call" ? "C" : "P"}{requestedExitOrderReviewLeg.side === "buy" ? "買い" : "売り"} /
+                行使価格 {requestedExitOrderReviewLeg.strikeUSD} / {requestedExitOrderReviewLeg.expiryDate}
+              </div>
+              {requestedExitOrders.length > 0 ? (
+                <div className="mt-2 grid gap-2">
+                  {requestedExitOrders.map((order) => {
+                    const normalizedType = order.orderType?.toLowerCase() ?? "";
+                    const isStop = normalizedType.includes("stop");
+                    const isLimit = normalizedType === "limit";
+                    const typeLabel = isStop ? "逆指値" : isLimit ? "指値" : order.orderType ?? "注文種別未取得";
+                    const orderPrice = isStop ? order.stopPrice ?? order.price : order.price ?? order.stopPrice;
+                    return (
+                      <div key={order.id} className="grid gap-1 rounded border border-sky-200 bg-white px-3 py-2 text-xs sm:grid-cols-4">
+                        <div><span className="text-slate-500">方向</span><div className="font-bold">{order.side === "sell" ? "売り" : order.side === "buy" ? "買い" : "未取得"}</div></div>
+                        <div><span className="text-slate-500">数量</span><div className="font-bold">{order.quantity ?? "未取得"}</div></div>
+                        <div><span className="text-slate-500">種別・価格</span><div className="font-bold">{typeLabel} / {orderPrice !== undefined ? formatUSD(orderPrice) : "未取得"}</div></div>
+                        <div><span className="text-slate-500">状態・取得時刻</span><div className="font-bold">{order.status ?? "未取得"} / {order.fetchedAt || "未取得"}</div></div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                  対象脚に一致するSaxo決済注文を現在の取得結果から確認できません。建玉の先頭や別の脚には切り替えません。Saxo API詳細の注文一覧で取得状態を確認してください。
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+              対象脚が現在の建玉から見つかりません。別の建玉へ推定移動せず、Saxo API詳細の注文一覧で対象を確認してください。
+            </div>
+          )}
+        </section>
       ) : null}
 
       <div id="exit-rules" className="mt-4 rounded-lg border border-slate-200 bg-white p-3">

@@ -399,6 +399,34 @@ describe("SimulationEditor", () => {
     expect(scrollIntoView).toHaveBeenCalled();
   });
 
+  it("opens a read-only Saxo exit-order review for a long call and focuses the real review target", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    const simulation = buildVisaLongCallSimulation({
+      optionLegs: [{ ...buildVisaLongCallSimulation().optionLegs[0], saxoAccountKey: "anonymous-account", saxoUic: 990001 }],
+    });
+    const order: SaxoApiOrderSnapshot = {
+      id: "anonymous-stop", accountKey: "anonymous-account", accountAssignment: "P", accountCode: "P",
+      symbol: "V/20X26C340:XCBF", assetType: "StockOption", quantity: 1, side: "sell", optionType: "call",
+      strike: 340, expiry: "2026-11-20", uic: 990001, status: "Working", orderType: "StopIfTraded",
+      orderRelation: "StandAlone", openClose: "close", stopPrice: 0.5, missingFields: [], fetchedAt: "2026-09-15T01:02:03.000Z",
+    };
+    render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} saxoOrders={[order]} focusRequest={{ anchorId: "exit-order-review-saxo-visa-c340-leg", requestId: 2, exitOrderReview: true }} />);
+    const review = await screen.findByRole("region", { name: "Vの決済注文レビュー" });
+    await waitFor(() => expect(review).toHaveFocus());
+    expect(review).toHaveTextContent("逆指値");
+    expect(review).toHaveTextContent("$0.50");
+    expect(review).toHaveTextContent("再入力は不要です");
+    expect(review).not.toHaveTextContent("OCO");
+  });
+
+  it("shows a safe diagnostic instead of choosing another leg for a stale review target", async () => {
+    render(<SimulationEditor simulation={buildVisaLongCallSimulation()} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} focusRequest={{ anchorId: "exit-order-review-stale-leg", requestId: 3, exitOrderReview: true }} />);
+    const review = await screen.findByRole("region", { name: "Vの決済注文レビュー" });
+    expect(review).toHaveTextContent("対象脚が現在の建玉から見つかりません");
+    expect(review).toHaveTextContent("別の建玉へ推定移動せず");
+  });
+
   it("saves one matched Saxo OCO pair as an app-side exit rule and then shows the completion state", () => {
     const onOpenDashboard = vi.fn();
     const initial: TradeSimulation = {

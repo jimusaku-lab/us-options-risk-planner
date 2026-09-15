@@ -834,17 +834,22 @@ export function Dashboard({
                         .filter((price): price is number => typeof price === "number" && Number.isFinite(price) && price > 0)
                         .map((price) => formatUSD(price));
                       return (
-                        <button
-                          key={`${review.simulationId}:${review.legId}`}
-                          type="button"
-                          className="mb-1 w-full rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-left text-xs font-bold text-sky-900 hover:bg-sky-100"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onSaxoExitOrderAction?.(review.simulationId, review.legId);
-                          }}
-                        >
-                          Saxo OCO確認待ち / {prices.join(" / ") || "価格未取得"}を確認
-                        </button>
+                        <div key={`${review.simulationId}:${review.legId}`} className="mb-1 rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-left text-xs text-sky-950">
+                          <div className="font-bold">
+                            {review.upperExitOrder && !review.takeProfitOrder ? "逆指値注文あり（未約定）" : "決済注文あり（未約定）"}
+                            {prices.length > 0 ? ` / ${prices.join(" / ")}` : ""}
+                          </div>
+                          <button
+                            type="button"
+                            className="mt-1 rounded border border-sky-300 bg-white px-2 py-1 font-bold text-sky-900 hover:bg-sky-100"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onSaxoExitOrderAction?.(review.simulationId, review.legId);
+                            }}
+                          >
+                            Saxoの注文を見る（任意）
+                          </button>
+                        </div>
                       );
                     })}
                     {simulationConfirmedExitOrderReviews.map((review) => (
@@ -852,7 +857,7 @@ export function Dashboard({
                         key={`${review.simulationId}:${review.legId}:confirmed`}
                         className="mb-1 inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800"
                       >
-                        Saxo OCO照合済み
+                        Saxo決済注文照合済み
                       </span>
                     ))}
                     {!isHistoryRow && simulation.strategyType === "bear_put_spread" ? (

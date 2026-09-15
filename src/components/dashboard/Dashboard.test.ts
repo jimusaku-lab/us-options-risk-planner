@@ -397,6 +397,16 @@ describe("bulk current option price panel", () => {
 });
 
 describe("Dashboard close decision actions", () => {
+  it("shows a working long-call stop as optional information, not a required confirmation", () => {
+    const simulation = createSimulation({ ticker: "SAMPLE", strategyType: "long_call", optionLegs: [{ id: "long-call", type: "call", side: "buy", strikeUSD: 55, premiumUSD: 3.3, quantity: 1, expiryDate: "2026-10-16", saxoAccountKey: "anonymous", saxoUic: 990001 }] });
+    const action = vi.fn();
+    render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onSaxoExitOrderAction: action,
+      saxoOrders: [{ id: "anonymous-stop", accountKey: "anonymous", accountAssignment: "N", accountCode: "N", symbol: "SAMPLE/16V26C55:XCBF", assetType: "StockOption", quantity: 1, side: "sell", optionType: "call", strike: 55, expiry: "2026-10-16", uic: 990001, status: "Working", orderType: "StopIfTraded", orderRelation: "StandAlone", openClose: "close", stopPrice: 0.5, missingFields: [], fetchedAt: "2026-09-15T01:02:03.000Z" }],
+    }));
+    expect(screen.getByText(/逆指値注文あり（未約定）/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Saxoの注文を見る（任意）" }));
+    expect(action).toHaveBeenCalledWith("sim", "long-call");
+  });
   function currentShortPut(policy: "accept" | "avoid" | "unknown", withCurrentPrice = true): TradeSimulation {
     return createSimulation({
       ticker: "ABC",

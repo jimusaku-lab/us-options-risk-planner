@@ -2251,12 +2251,12 @@ function ExitOrderSummaryActionRow({ action, hideAction = false, onOpen }: { act
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-sky-200 bg-sky-50 px-2 py-2 text-xs">
       <div className="min-w-0">
-        <div className="font-bold text-slate-900">{action.ticker} / Saxo {action.takeProfitOrder && action.upperExitOrder ? "OCO出口注文" : "決済注文"} / {prices.join(" / ") || "価格未取得"}</div>
-        <div className="mt-1 text-slate-600">Saxoの注文は変更せず、アプリ内の出口ルールとして確認します。</div>
+        <div className="font-bold text-slate-900">{action.ticker} / Saxo決済注文 / {prices.join(" / ") || "価格未取得"}</div>
+        <div className="mt-1 text-slate-600">Saxoで設定済みの注文です。再入力は不要で、ここでの確認は注文を変更しません。</div>
       </div>
       {hideAction ? null : (
         <button type="button" className="rounded border border-teal-700 bg-teal-700 px-2 py-1 font-bold text-white hover:bg-teal-800" onClick={onOpen}>
-          {action.ticker}の出口ルールを確認
+          Saxoの注文を見る（任意）
         </button>
       )}
     </div>
@@ -3244,7 +3244,7 @@ function OrderRow({
         <td className="py-2">
           {exitOrderReview ? (
             <button type="button" className="mb-1 block rounded border border-teal-700 bg-teal-700 px-2 py-1 text-xs font-bold text-white hover:bg-teal-800" onClick={() => onOpenExitOrderRule(exitOrderReview)}>
-              {exitOrderReview.ticker}の出口ルールへ
+              Saxoの注文を見る（任意）
             </button>
           ) : null}
           <button className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-bold text-slate-700" onClick={() => onToggleDetails(order.id)}>
@@ -5190,9 +5190,11 @@ export function createReflectionSummary({
   const explicitExitOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "exit_explicit").length;
   const matchedExitCandidates = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "exit_matched").length;
   const inactiveOrders = orders.filter((order) => getSaxoOrderDisplayCategory(order, orderPositions) === "inactive").length;
-  // A limit + stop OCO pair is one review job.  The raw order count remains
-  // diagnostic only and must not inflate the reflection-pending count.
-  const orderActions = getSaxoExitOrderReviews(simulations, orders).filter((action) => action.status === "pending");
+  // A working broker order is information, not an unfinished application
+  // task. It must not inflate reflection-pending or become the next required
+  // action merely because it has not been viewed in this app.
+  const informationalOrderReviews = getSaxoExitOrderReviews(simulations, orders);
+  const orderActions: SaxoExitOrderReview[] = [];
   const historyItems = historyEndpoints.flatMap((endpoint) => endpoint.items ?? []);
   const resolveHistoryTarget = (item: SaxoHistoryDiscoveryItem) => getSaxoHistoryCandidateTargetForSimulations(item, simulations);
   const entryCandidates = historyItems.filter((item) => resolveHistoryTarget(item) === "entry").length;
@@ -5335,11 +5337,11 @@ export function createReflectionSummary({
       detail:
         orders.length === 0
           ? "0件"
-          : orderActions.length > 0
-            ? `出口ルール確認待ち${orderActions.length}件 / 未約定C売り${coveredCallOpenOrders}件 / 明示決済${explicitExitOrders}件 / 保有照合候補${matchedExitCandidates}件`
+          : informationalOrderReviews.length > 0
+            ? `未約定の決済注文${informationalOrderReviews.length}件（任意確認） / 未約定C売り${coveredCallOpenOrders}件 / 明示決済${explicitExitOrders}件 / 保有照合候補${matchedExitCandidates}件`
             : `未約定C売り${coveredCallOpenOrders}件 / 明示決済${explicitExitOrders}件 / 保有照合候補${matchedExitCandidates}件 / 取消・失効${inactiveOrders}件`,
       actionable: orderActionable,
-      actionLabel: orderActions.length === 1 ? `${orderActions[0].ticker}の出口ルールを確認` : "出口ルールを確認",
+      actionLabel: "Saxoの注文を見る（任意）",
     },
     orderActions,
     historyLine: {

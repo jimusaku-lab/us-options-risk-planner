@@ -1981,7 +1981,7 @@ export default function App() {
     selectSimulation(simulationId);
     setActiveView("positions");
     setIsEditorOpen(true);
-    setEditorFocusRequest({ anchorId: `exit-rule-${legId}`, requestId: Date.now() + Math.random(), exitOrderReview: true });
+    setEditorFocusRequest({ anchorId: `exit-order-review-${legId}`, requestId: Date.now() + Math.random(), exitOrderReview: true });
   };
   const goToPendingCashEffectSource = (effect: PendingAccountCashEffect) => {
     setJournalFocusSimulationId(null);

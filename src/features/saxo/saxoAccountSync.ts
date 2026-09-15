@@ -1428,11 +1428,10 @@ export function classifySaxoOrderRole(order: SaxoApiOrderSnapshot, targets: Saxo
 }
 
 /**
- * A review task is an application-side representation of one Saxo OCO exit
- * rule for one option leg.  Two broker orders are deliberately grouped here:
- * the user confirms the pair once, rather than treating its limit and stop
- * legs as two unrelated pieces of work.
- *
+ * Read-only information about working Saxo exit orders for one option leg.
+ * Multiple orders may share one leg, but their actual orderType/relation is
+ * preserved; co-presence alone is not evidence that they form an OCO pair.
+ * Viewing this information is optional and never a reflection-pending task.
  * This function never writes broker data and only returns orders that already
  * passed the strict contract/account/side matcher above.
  */
@@ -1443,7 +1442,7 @@ export type SaxoExitOrderReview = {
   accountCode: SaxoAccountCode;
   takeProfitOrder?: SaxoApiOrderSnapshot;
   upperExitOrder?: SaxoApiOrderSnapshot;
-  /** A confirmed link becomes pending again if Saxo now shows a changed pair. */
+  /** Legacy app-side link state only; `pending` does not mean user action is required. */
   status: "pending" | "confirmed";
 };
 

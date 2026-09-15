@@ -1053,6 +1053,14 @@ describe("Saxo read-only account sync", () => {
     ]);
   });
 
+  it("routes a strictly matched long-put sell-to-close order without treating it as a short-put buyback", () => {
+    const simulation = { ...createOpenPutSimulation(), ticker: "ABC", accountCode: "N" as const, accountEnvironment: "PROD_N_USD_SETTLEMENT" as const, strategyType: "long_put" as const,
+      optionLegs: [{ ...createOpenPutSimulation().optionLegs[0], id: "long-put", side: "buy" as const, type: "put" as const, saxoAccountKey: "fictional-n-key", strikeUSD: 55, expiryDate: "2026-10-16", quantity: 1 }],
+    };
+    const order: SaxoApiOrderSnapshot = { id: "fictional-put-stop", accountKey: "fictional-n-key", accountAssignment: "N", accountCode: "N", symbol: "ABC/16V26P55:XCBF", assetType: "StockOption", quantity: 1, side: "sell", optionType: "put", strike: 55, expiry: "2026-10-16", status: "Working", orderType: "StopIfTraded", orderRelation: "StandAlone", openClose: "close", stopPrice: 1.25, missingFields: [], fetchedAt: "2026-09-15T00:00:00.000Z" };
+    expect(getSaxoExitOrderReviews([simulation], [order])).toEqual([expect.objectContaining({ simulationId: simulation.id, legId: "long-put", upperExitOrder: expect.objectContaining({ id: "fictional-put-stop" }) })]);
+  });
+
   it("classifies Saxo option history by open/close instead of buy/sell alone", () => {
     expect(
       getSaxoHistoryCandidateTarget({

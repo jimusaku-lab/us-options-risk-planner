@@ -71,7 +71,7 @@ it("keeps stale draft and broken links actionable while excluding formal linked 
   expect(isActionRequiredRegularPositionRow(row, { status: "linked", simulation: {} as TradeSimulation, simulationId: "saved" }, false)).toBe(false);
 });
 
-it("counts an OCO pair as one actionable exit-rule review and exposes its direct CTA", () => {
+it("keeps a working exit order informational and out of the required-action count", () => {
   const simulation: TradeSimulation = {
     ...sampleAmznSimulation,
     id: "anonymous-exit-rule", ticker: "SAMPLE", status: "open", accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD",
@@ -91,14 +91,16 @@ it("counts an OCO pair as one actionable exit-rule review and exposes its direct
   const onOpen = vi.fn();
   const onPrimaryAction = vi.fn();
   render(<ReflectionPendingSummary summary={summary} onShowMapping={vi.fn()} onShowSnapshot={vi.fn()} onShowPositions={vi.fn()} onShowOrders={vi.fn()} onShowHistory={vi.fn()} onOpenHistoryAction={vi.fn()} onOpenOrderAction={onOpen} onPrimaryAction={onPrimaryAction} />);
-  expect(summary.orderActions).toHaveLength(1);
-  expect(summary.requiredActionCount).toBe(1);
-  expect(summary.progress).toEqual({ location: "Saxo取得完了", next: "SAMPLEのOCO出口注文を確認", remaining: "1操作" });
+  expect(summary.orderActions).toHaveLength(0);
+  expect(summary.requiredActionCount).toBe(0);
+  expect(summary.orderLine.detail).toContain("未約定の決済注文1件（任意確認）");
+  expect(summary.progress).toEqual({ location: "Saxo取得・照合完了", next: "今回の確認は完了しました", remaining: "0操作" });
   expect(screen.getByText("現在地:")).toBeInTheDocument();
   expect(screen.getByText("次にすること:")).toBeInTheDocument();
   expect(screen.getByText("完了まで:")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "SAMPLEの出口ルールを確認" }));
-  expect(onPrimaryAction).toHaveBeenCalledWith(expect.objectContaining({ kind: "order", action: expect.objectContaining({ simulationId: "anonymous-exit-rule", legId: "put-leg" }) }));
+  expect(screen.queryByRole("button", { name: /SAMPLE.*出口ルール/ })).not.toBeInTheDocument();
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(onPrimaryAction).not.toHaveBeenCalled();
 });
 
 it("R4 counts one ready spread instead of two raw positions and exposes its direct CTA", () => {
