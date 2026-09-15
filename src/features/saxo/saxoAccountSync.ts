@@ -787,6 +787,9 @@ export type SaxoHistoryDiscoveryEndpoint = {
 };
 
 export type SaxoHistoryDiscoveryItem = {
+  /** Read-only acquisition metadata attached by the client; never used as trade evidence. */
+  acquisitionFetchedAt?: string;
+  acquisitionCoverage?: { completedPages: number; status: "complete" | "partial" };
   /** Local-only canonical reconciliation identity, never rendered. */
   brokerAccountKey?: string;
   brokerAccountIdentityStatus?: "direct" | "resolved" | "unmatched" | "ambiguous" | "conflict" | "environment_mismatch" | "missing";

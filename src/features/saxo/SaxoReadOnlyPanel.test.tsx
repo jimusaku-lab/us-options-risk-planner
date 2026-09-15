@@ -276,6 +276,27 @@ it("shows a close-specific direct CTA that only requests one Section 7 draft", (
   expect(onOpenHistoryAction).toHaveBeenCalledWith(closeHistory);
 });
 
+it("renders one parent CTA for a mixed saved-draft and new spread-close candidate", () => {
+  const onOpenHistoryAction = vi.fn();
+  const longItem = { ...closeHistory, id: "anonymous-long-close", optionType: "put" as const, strike: 100, buySell: "sell" as const };
+  const shortItem = { ...closeHistory, id: "anonymous-short-close", optionType: "put" as const, strike: 90, buySell: "buy" as const };
+  const action: ReflectionSummary["historyActions"][number] = {
+    item: longItem,
+    target: "close",
+    mode: "create",
+    spreadCloseBatch: { simulationId: "anonymous-parent", actions: [{ item: longItem, mode: "create" }, { item: shortItem, mode: "return" }] },
+  };
+  const summary = summaryWithHistoryAction(action);
+  summary.primaryAction = { kind: "history", action, label: "SAMPLEのベア・プット2脚を確認", actionLabel: "SAMPLEの2脚の決済内容を確認する" };
+  render(<ReflectionPendingSummary summary={summary} onShowMapping={vi.fn()} onShowSnapshot={vi.fn()} onShowPositions={vi.fn()} onShowOrders={vi.fn()} onShowHistory={vi.fn()} onOpenHistoryAction={onOpenHistoryAction} onPrimaryAction={(pending) => pending.kind === "history" && onOpenHistoryAction(pending.action)} />);
+
+  expect(screen.getAllByRole("button", { name: "SAMPLEの2脚の決済内容を確認する" })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "SAMPLEの決済確認へ戻る" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "SAMPLEの決済内容を確認する" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "SAMPLEの2脚の決済内容を確認する" }));
+  expect(onOpenHistoryAction).toHaveBeenCalledWith(action);
+});
+
 it("uses a return CTA for an existing draft and no direct creation CTA for blocked history", () => {
   const onOpenHistoryAction = vi.fn();
   const { rerender } = render(<ReflectionPendingSummary summary={summaryWithHistoryAction({ item: closeHistory, target: "close", mode: "return" })} onShowMapping={vi.fn()} onShowSnapshot={vi.fn()} onShowPositions={vi.fn()} onShowOrders={vi.fn()} onShowHistory={vi.fn()} onOpenHistoryAction={onOpenHistoryAction} />);

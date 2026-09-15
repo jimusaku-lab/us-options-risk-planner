@@ -365,7 +365,7 @@ describe("SimulationEditor", () => {
     expect(screen.queryByRole("button", { name: "決済済みに変更" })).not.toBeInTheDocument();
   });
 
-  it("previews and sequentially confirms both bear-put legs without requiring a pre-confirmed result", async () => {
+  it("previews both bear-put legs and confirms them in one parent update", async () => {
     let current = buildBearPutCloseDraftSimulation();
     const onChange = vi.fn((next: TradeSimulation) => { current = next; });
     function Harness() {
@@ -375,18 +375,44 @@ describe("SimulationEditor", () => {
     render(<Harness />);
     const shortCard = document.getElementById("option-close-execution-R11-close-short")!;
     expect(within(shortCard).getByText(/\$3\.52 \/ 参考JPY 未確認/)).toBeInTheDocument();
-    expect(within(shortCard).getByText("未入力項目はありません。内容を確認して正式保存できます。")).toBeInTheDocument();
     expect(within(shortCard).getByText("参考為替は未確認です。USD実績の確認には不要です。")).toBeInTheDocument();
-    expect(within(shortCard).getByRole("button", { name: "確認して正式保存" })).toBeEnabled();
+    expect(within(shortCard).queryByRole("button", { name: /正式保存/ })).not.toBeInTheDocument();
     expect(current.optionCloseExecutions?.every((execution) => !execution.confirmed)).toBe(true);
-    fireEvent.click(within(shortCard).getByRole("button", { name: "確認して正式保存" }));
-    await waitFor(() => expect(current.optionCloseExecutions?.[0]).toMatchObject({ confirmed: true, confirmationStatus: "confirmed" }));
-    expect(current.status).toBe("open");
-    const longCard = document.getElementById("option-close-execution-R11-close-long")!;
-    fireEvent.click(within(longCard).getByRole("button", { name: "確認して正式保存" }));
+    const review = screen.getByRole("region", { name: "ベア・プット2脚の決済確認" });
+    fireEvent.click(within(review).getByRole("button", { name: "2脚の決済内容を確認して正式保存" }));
     await waitFor(() => expect(current.status).toBe("closed"));
     expect(current.optionCloseExecutions?.every((execution) => execution.confirmed)).toBe(true);
-    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires explicit per-leg consent before an intentional partial bear-put close", async () => {
+    const base = buildBearPutCloseDraftSimulation();
+    let current: TradeSimulation = { ...base, optionLegs: base.optionLegs.map((leg) => ({ ...leg, quantity: 2 })), optionEntryExecutions: base.optionEntryExecutions?.map((execution) => ({ ...execution, contracts: 2 })), optionCloseExecutions: [{ ...base.optionCloseExecutions![0], contracts: 1 }] };
+    function Harness() {
+      const [simulation, setSimulation] = useState(current);
+      return <SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={(next) => { current = next; setSimulation(next); }} />;
+    }
+    render(<Harness />);
+    expect(screen.getByRole("button", { name: "2脚の決済内容を確認して正式保存" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /この脚だけを正式保存/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "意図的な一部決済として脚別に確認" }));
+    const perLegSave = screen.getByRole("button", { name: "この脚だけを正式保存（意図的な部分決済）" });
+    expect(perLegSave).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /だけを正式保存し、反対脚を残すことを確認しました/ }));
+    expect(perLegSave).toBeEnabled();
+    fireEvent.click(perLegSave);
+    await waitFor(() => expect(current.optionCloseExecutions?.[0].confirmed).toBe(true));
+    expect(current.status).toBe("open");
+    expect(current.optionCloseExecutions?.[0].contracts).toBe(1);
+  });
+
+  it("focuses the parent spread-close heading for the batch navigation anchor", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    render(<SimulationEditor simulation={buildBearPutCloseDraftSimulation()} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} focusRequest={{ anchorId: "spread-close-batch-review", requestId: 12 }} />);
+    const heading = screen.getByRole("heading", { name: "2脚の決済内容" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(scrollIntoView).toHaveBeenCalled();
   });
 
   it("blocks an invalid Saxo history close leg before it can change confirmation state", () => {

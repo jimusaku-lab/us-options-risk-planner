@@ -25,13 +25,14 @@ import {
   previewOptionCloseExecutionConfirmation,
   validateSaxoHistoryCloseExecution,
 } from "@/domain/optionCloseExecutions";
+import { previewBearPutSpreadCloseBatch } from "@/domain/spreadCloseBatch";
 import { isStockSettlementRequiredFieldsComplete, normalizeStockSettlement } from "@/domain/stockSettlementState";
 import { calculateStockSettlementTaxResult } from "@/domain/tax";
 import { createJournalForSimulation } from "@/domain/entryRationaleJournal";
 import { getStatusLabel } from "@/domain/strategyLabels";
 import { EntryRationaleJournalPanel } from "@/components/journal/EntryRationaleJournalPanel";
 import { NumberInput } from "@/components/ui/NumberInput";
-import { findOrderCandidatesForLeg, isSaxoHistoryMatchingOptionLeg, parseSaxoOptionContract, type SaxoApiOrderSnapshot, type SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
+import { findOrderCandidatesForLeg, isSaxoHistoryMatchingOptionLeg, parseSaxoOptionContract, resolveSaxoHistoryOptionLegMatch, type SaxoApiOrderSnapshot, type SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker } from "@/lib/marketData";
@@ -57,12 +58,22 @@ type SimulationEditorProps = {
   focusRequest?: { anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string; exitOrderReview?: boolean } | null;
 };
 
+function formatAcquisitionTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未確認";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} JST`;
+}
+
 export function SimulationEditor({ simulation, workspace, standardNOptionCommissionUSD = DEFAULT_N_OPTION_STANDARD_COMMISSION_USD, canUseExternalQuotes, externalQuoteModeLabel, onChange, saxoHistoryCandidates = [], saxoOrders = [], onDiscardDraft, onCloseDecisionAction, onCloseEditor, onOpenDashboard, onStockAcquisitionCompleteClose, onOpenPerformance, onReturnToSaxoHistory, onRecreateSaxoHistoryCandidate, stockTransfer, focusRequest }: SimulationEditorProps) {
   const [quoteStatus, setQuoteStatus] = useState<string>("");
   const [workflowNotice, setWorkflowNotice] = useState<{ message: string; actionLabel: string; anchorId: string } | null>(null);
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null);
   const [entryCandidatePickerId, setEntryCandidatePickerId] = useState<string | null>(null);
   const [isJournalOpen, setIsJournalOpen] = useState(false);
+  const [intentionalPartialCloseMode, setIntentionalPartialCloseMode] = useState(false);
+  const [intentionalPartialExecutionIds, setIntentionalPartialExecutionIds] = useState<string[]>([]);
+  useEffect(() => { setIntentionalPartialCloseMode(false); setIntentionalPartialExecutionIds([]); }, [simulation.id]);
   const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
   const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
   const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call", "synthetic_forward", "combo"].includes(
@@ -266,6 +277,14 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
   const recoveredEntryOptionLegs = recoverEntryOptionLegsFromSaxoDraft(simulation, optionEntryExecutions, saxoHistoryCandidates);
   const entryOptionLegs = simulation.optionLegs.length > 0 ? simulation.optionLegs : recoveredEntryOptionLegs;
   const optionCloseExecutions = simulation.optionCloseExecutions ?? [];
+  const spreadCloseBatch = previewBearPutSpreadCloseBatch(simulation);
+  const spreadCloseCandidateByLegId = new Map<string, SaxoHistoryDiscoveryItem>();
+  if (spreadCloseBatch.applies) {
+    for (const candidate of saxoHistoryCandidates) {
+      const match = resolveSaxoHistoryOptionLegMatch([simulation], candidate, "close", simulation.id, { allowCloseAccountMismatch: true });
+      if (match?.simulation.id === simulation.id && !spreadCloseCandidateByLegId.has(match.leg.id)) spreadCloseCandidateByLegId.set(match.leg.id, candidate);
+    }
+  }
   const shortExitLegs = getShortOptionLegs(simulation);
   const requestedExitOrderReviewLegId = focusRequest?.exitOrderReview && focusRequest.anchorId.startsWith("exit-order-review-")
     ? focusRequest.anchorId.slice("exit-order-review-".length)
@@ -411,6 +430,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
       target.querySelector<HTMLDetailsElement>("details")?.setAttribute("open", "");
       return target.querySelector<HTMLInputElement>("#broker-realized-pnl-jpy") ?? target.querySelector<HTMLInputElement>('input[id^="broker-booked-amount-jpy-"]') ?? target.querySelector<HTMLInputElement>("input");
     }
+    if (anchorId === "spread-close-batch-review") return document.getElementById("spread-close-batch-review-heading");
     if (anchorId === "option-close-executions") {
       return target.querySelector<HTMLInputElement>("#broker-realized-pnl-jpy") ?? target.querySelector<HTMLInputElement>("input");
     }
@@ -589,6 +609,15 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
       optionCloseExecutions: nextOptionCloseExecutions,
       ...(completion.state === "complete" && completion.terminalStatus ? { status: completion.terminalStatus } : {}),
     });
+  };
+  const confirmBearPutSpreadCloseBatch = () => {
+    const preview = previewBearPutSpreadCloseBatch(simulation);
+    if (!preview.ready || !preview.nextSimulation) {
+      setQuoteStatus(preview.reason ?? "2脚の決済内容を正式保存できません。各脚の不足理由を確認してください。");
+      return;
+    }
+    onChange(preview.nextSimulation);
+    setQuoteStatus(`2脚の決済実績を一度に正式保存しました。新たに保存した実績 ${preview.newlyConfirmedCount}件。`);
   };
   const applySaxoEntryHistoryCandidate = (executionId: string, item: SaxoHistoryDiscoveryItem) => {
     const execution = optionEntryExecutions.find((entry) => entry.id === executionId);
@@ -2584,14 +2613,14 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                 Saxoで買い決済・売り決済が実際に約定した後、注文履歴を見ながら入力します。反対売買判断の見積もり価格は自動では実績扱いしません。
               </p>
             </div>
-            {firstPendingSaxoHistoryCloseExecution ? (
+            {!spreadCloseBatch.applies && firstPendingSaxoHistoryCloseExecution ? (
               <button
                 className="rounded-md bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
                 onClick={() => scrollToEditorAnchor(`option-close-execution-${firstPendingSaxoHistoryCloseExecution.id}`)}
               >
                 最初の確認待ちを開く
               </button>
-            ) : executionLegs.length > 0 && !missingSaxoHistoryCloseCandidate ? (
+            ) : !spreadCloseBatch.applies && executionLegs.length > 0 && !missingSaxoHistoryCloseCandidate ? (
               <button
                 className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
                 onClick={() => addOptionCloseExecution(executionLegs.find((leg) => !optionCloseExecutions.some((execution) => execution.legId === leg.id)) ?? executionLegs[0])}
@@ -2605,7 +2634,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               決済済みですが、決済実績が未入力です。Saxo注文履歴から約定価格と手数料を入力してください。
             </div>
           ) : null}
-          {missingSaxoHistoryCloseCandidate ? (
+          {!spreadCloseBatch.applies && missingSaxoHistoryCloseCandidate ? (
             <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm leading-6 text-red-950">
               <div className="font-bold">この履歴候補に対応する決済実績候補が見つかりません。</div>
               <p className="mt-1">履歴候補へ戻って、反映候補を作り直してください。</p>
@@ -2627,7 +2656,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               </div>
             </div>
           ) : null}
-          {pendingSaxoHistoryCloseExecutions.length > 0 ? (
+          {!spreadCloseBatch.applies && pendingSaxoHistoryCloseExecutions.length > 0 ? (
             <div className="mt-3 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">
               <div className="font-bold">Saxo履歴から作成された決済実績候補があります。</div>
               <p className="mt-1">内容を確認し、不足項目を補ってから正式保存してください。</p>
@@ -2650,10 +2679,31 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
           {simulation.status === "open" && closeCompletion.state === "partial" ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">一部決済済み / 残り{closeCompletion.remainingContracts}枚</div>
           ) : null}
-          {simulation.status === "open" && hasUnconfirmedCloseDraft ? (
+          {simulation.status === "open" && hasUnconfirmedCloseDraft && !spreadCloseBatch.applies ? (
             <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-950">
               決済実績の下書きがあります。Saxo注文履歴を見て入力内容を確認し、「決済実績を確認済みにする」を押してください。
             </div>
+          ) : null}
+          {spreadCloseBatch.applies ? (
+            <section id="spread-close-batch-review" aria-label="ベア・プット2脚の決済確認" className="mt-3 scroll-mt-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3"><div><h4 id="spread-close-batch-review-heading" tabIndex={-1} className="text-sm font-bold text-indigo-950 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">2脚の決済内容</h4><p className="mt-1 text-xs leading-5 text-indigo-800">取得候補がない脚も必ず表示します。候補欠落はSaxo上の未決済を意味しません。</p></div><span className="rounded bg-white px-2 py-1 text-xs font-bold text-indigo-800">{(() => { const candidates = [...spreadCloseCandidateByLegId.values()]; const fetchedAt = candidates.map((candidate) => candidate.acquisitionFetchedAt).find(Boolean); const coverages = candidates.map((candidate) => candidate.acquisitionCoverage).filter(Boolean); const complete = coverages.length > 0 && coverages.every((coverage) => coverage?.status === "complete"); const pages = coverages.reduce((maximum, coverage) => Math.max(maximum, coverage?.completedPages ?? 0), 0); return `取得範囲: ${coverages.length === 0 ? "未確認" : complete ? `全ページ取得${pages > 0 ? `（${pages}ページ）` : ""}` : `一部取得${pages > 0 ? `（${pages}ページ）` : ""}`} / 取得時刻 ${fetchedAt ? formatAcquisitionTimestamp(fetchedAt) : "未確認"}`; })()}</span></div>
+              <div className="mt-3 grid gap-2">
+                {spreadCloseBatch.rows.map((row) => {
+                  const legLabel = row.leg.side === "buy" ? `P${row.leg.strikeUSD}買い（売り決済）` : `P${row.leg.strikeUSD}売り（買い決済）`;
+                  const pending = row.executions.filter((item) => !item.confirmed && !item.voided), evidence = pending[0] ?? row.executions.find((item) => item.confirmed);
+                  const unmatchedCandidate = row.state === "not_acquired" ? spreadCloseCandidateByLegId.get(row.leg.id) : undefined;
+                  const stateLabel = row.state === "ready" ? "確認可能" : row.state === "already_saved" ? "正式保存済み" : row.state === "accounting_pending" ? "精算情報待ち" : row.state === "conflict" ? "照合競合" : unmatchedCandidate ? "取得済み・未反映" : "未取得・未照合";
+                  return <div key={row.leg.id} className="rounded-md border border-indigo-100 bg-white p-3 text-sm" data-leg-id={row.leg.id}><div className="flex flex-wrap items-center justify-between gap-2"><strong>{legLabel}</strong><span className="rounded bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700">{stateLabel}</span></div><p className="mt-1 text-xs text-slate-600">{unmatchedCandidate ? "この脚の決済候補は取得・一意照合済みですが、下書きへ未反映です。" : row.reason}</p>{evidence ? <p className="mt-2 text-xs text-slate-700">決済日 {evidence.closeDate || "未確認"} / 数量 {evidence.contracts}枚 / 価格 {evidence.closePriceUSD === undefined ? "未確認" : formatUSD(evidence.closePriceUSD)} / 費用 {evidence.commissionUSD === undefined ? "未確認" : formatUSD(evidence.commissionUSD)} / 出所 {evidence.source === "saxo_history" ? "Saxo履歴" : evidence.source === "saxo_order_activity" ? "Saxo約定証拠" : "保存済み実績"}</p> : null}{unmatchedCandidate ? <button type="button" className="mt-2 rounded border border-indigo-200 px-2 py-1 text-xs font-bold text-indigo-800" onClick={() => onRecreateSaxoHistoryCandidate?.(unmatchedCandidate.id)}>この脚の候補を下書きへ反映</button> : null}</div>;
+                })}
+              </div>
+              {spreadCloseBatch.ready ? <div className="mt-3 grid gap-1 rounded-md border border-indigo-100 bg-white p-3 text-sm md:grid-cols-2"><span>建玉時現金フロー {spreadCloseBatch.entryCashflowUSD === undefined ? "未確認" : formatUSD(spreadCloseBatch.entryCashflowUSD)}</span><span>決済現金フロー {spreadCloseBatch.closeCashflowUSD === undefined ? "未確認" : formatUSD(spreadCloseBatch.closeCashflowUSD)}</span><span>合算実現損益 {spreadCloseBatch.combinedRealizedPnlUSD === undefined ? "未確認" : formatUSD(spreadCloseBatch.combinedRealizedPnlUSD)}</span><span>開始・決済費用合計 {spreadCloseBatch.totalCostsUSD === undefined ? "未確認" : formatUSD(spreadCloseBatch.totalCostsUSD)}</span></div> : <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs font-bold text-amber-950">{spreadCloseBatch.reason}</p>}
+              <button type="button" className="mt-3 rounded-md bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300" disabled={!spreadCloseBatch.ready} onClick={confirmBearPutSpreadCloseBatch}>2脚の決済内容を確認して正式保存</button>
+              <div className="mt-3 border-t border-indigo-200 pt-3">
+                <button type="button" className="rounded-md border border-indigo-300 bg-white px-3 py-2 text-xs font-bold text-indigo-900 hover:bg-indigo-100" aria-expanded={intentionalPartialCloseMode} onClick={() => { setIntentionalPartialCloseMode((current) => !current); setIntentionalPartialExecutionIds([]); }}>意図的な一部決済として脚別に確認</button>
+                {intentionalPartialCloseMode ? <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-950"><p className="font-bold">もう一方の脚を意図的に建玉のまま残す場合だけ使用します。証拠不足を回避する操作ではありません。</p><div className="mt-2 space-y-2">{spreadCloseBatch.rows.flatMap((row) => row.executions.filter((execution) => !execution.confirmed && execution.confirmationStatus !== "ignored" && !execution.voided && previewOptionCloseExecutionConfirmation(simulation, execution).valid).map((execution) => { const legLabel = row.leg.side === "buy" ? `P${row.leg.strikeUSD}買い（売り決済）` : `P${row.leg.strikeUSD}売り（買い決済）`; return <label key={execution.id} className="flex items-start gap-2"><input type="checkbox" checked={intentionalPartialExecutionIds.includes(execution.id)} onChange={(event) => setIntentionalPartialExecutionIds((current) => event.target.checked ? [...current, execution.id] : current.filter((id) => id !== execution.id))} /><span>{legLabel}だけを正式保存し、反対脚を残すことを確認しました</span></label>; }))}</div></div> : null}
+              </div>
+              {spreadCloseBatch.rows.some((row) => row.state === "already_saved") && spreadCloseBatch.pendingExecutionIds.length > 0 ? <p className="mt-2 text-xs text-indigo-800">正式保存済みの脚は変更せず、残りの検証済み実績だけを追加します。</p> : null}
+            </section>
           ) : null}
           <div className="mt-3 grid gap-3">
             {optionCloseExecutions.map((execution) => {
@@ -2674,6 +2724,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                 ? undefined
                 : result ?? (confirmationPreview?.valid ? confirmationPreview.result : undefined);
               const confirmationPreviewReason = confirmationPreview && !confirmationPreview.valid ? confirmationPreview.reason : undefined;
+              const intentionalPartialAllowed = intentionalPartialCloseMode && intentionalPartialExecutionIds.includes(execution.id);
               const isExpiredExecution = execution.closeKind === "expired";
               const isNCloseExecution = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
               const rawCloseFxRate = execution.fxRateJPY ?? execution.brokerExchangeRateJPY ?? simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
@@ -2758,7 +2809,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       </div>
                     </div>
                   ) : null}
-                  {isSaxoHistoryCloseDraft ? (
+                  {isSaxoHistoryCloseDraft && !spreadCloseBatch.applies ? (
                     <div className="mt-3 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">
                       <div className="font-bold">Saxo履歴から作成された確認待ちです。</div>
                       <p className="mt-1">この決済実績候補の内容を確認し、不足項目を補ってから正式保存してください。</p>
@@ -3065,16 +3116,18 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                           ? "Saxo履歴候補から作成された決済実績です。内容を確認してから正式保存してください。"
                           : "Saxo注文履歴で約定日、価格、数量、損益を確認してから確定してください。"}
                     </span>
-                    <button
+                    {!spreadCloseBatch.applies || intentionalPartialCloseMode ? <button
                       type="button"
                       className="rounded-md border border-emerald-300 bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-200 disabled:text-slate-500"
-                      disabled={(!(visibleResult || (execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending")) || execution.confirmed || isInvalidSaxoHistoryCloseDraft || Boolean(uiInvalidReason) || Boolean(confirmationPreviewReason))}
+                      disabled={(spreadCloseBatch.applies && !intentionalPartialAllowed) || (!(visibleResult || (execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending")) || execution.confirmed || isInvalidSaxoHistoryCloseDraft || Boolean(uiInvalidReason) || Boolean(confirmationPreviewReason))}
                       onClick={() => confirmOptionCloseExecution(execution.id)}
                     >
-                      {execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending"
+                      {spreadCloseBatch.applies && !execution.confirmed
+                        ? "この脚だけを正式保存（意図的な部分決済）"
+                        : execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending"
                         ? "決済約定を確認"
                         : execution.source === "saxo_history" ? "確認して正式保存" : "決済実績を確認済みにする"}
-                    </button>
+                    </button> : null}
                   </div>
                 </div>
               );

@@ -57,7 +57,7 @@ afterEach(() => {
 });
 
 describe("SAXO-SPREAD-CLOSE-CONFIRM-20260915-R11 App integration", () => {
-  it("keeps imported drafts inert until confirmation, then persists partial and terminal states once", async () => {
+  it("keeps imported drafts inert until the R12 parent confirmation, then persists both once", async () => {
     render(<App />);
     const before = JSON.stringify(useOptionsStore.getState().simulationsByWorkspace);
     expect(calculateHistoryPerformance(useOptionsStore.getState().simulations[0]).realizedOptionProfitUSD).toBe(0);
@@ -67,18 +67,13 @@ describe("SAXO-SPREAD-CLOSE-CONFIRM-20260915-R11 App integration", () => {
     expect(within(shortCard).getByText(/\$3\.52 \/ 参考JPY 未確認/)).toBeInTheDocument();
     expect(JSON.stringify(useOptionsStore.getState().simulationsByWorkspace)).toBe(before);
 
-    fireEvent.click(within(shortCard).getByRole("button", { name: "確認して正式保存" }));
-    await waitFor(() => expect(useOptionsStore.getState().simulations[0].optionCloseExecutions?.[0].confirmed).toBe(true));
-    let stored = useOptionsStore.getState().simulations[0];
-    expect(stored.status).toBe("open");
-    expect(stored.optionCloseExecutions?.[1].confirmed).toBe(false);
-    expect(calculateHistoryPerformance(stored).realizedOptionProfitUSD).toBe(3.52);
-    expect(within(shortCard).getByRole("button", { name: "確認して正式保存" })).toBeDisabled();
-
-    const longCard = document.getElementById("option-close-execution-R11-close-long")!;
-    fireEvent.click(within(longCard).getByRole("button", { name: "確認して正式保存" }));
+    expect(within(shortCard).queryByRole("button", { name: /正式保存/ })).not.toBeInTheDocument();
+    const review = screen.getByRole("region", { name: "ベア・プット2脚の決済確認" });
+    expect(within(review).getByText("P100買い（売り決済）")).toBeInTheDocument();
+    expect(within(review).getByText("P90売り（買い決済）")).toBeInTheDocument();
+    fireEvent.click(within(review).getByRole("button", { name: "2脚の決済内容を確認して正式保存" }));
     await waitFor(() => expect(useOptionsStore.getState().simulations[0].status).toBe("closed"));
-    stored = useOptionsStore.getState().simulations[0];
+    const stored = useOptionsStore.getState().simulations[0];
     expect(stored.optionCloseExecutions?.every((execution) => execution.confirmed)).toBe(true);
     expect(calculateHistoryPerformance(stored).realizedOptionProfitUSD).toBe(-42.96);
 

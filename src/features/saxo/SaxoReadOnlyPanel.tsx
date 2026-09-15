@@ -201,7 +201,7 @@ export function SaxoReadOnlyPanel({
   stockTransfers?: StockTransferEvent[];
   onOpenLinkedSimulation?: (simulationId: string, anchorId?: string) => void;
   onOpenSyntheticForwardDashboard?: (simulationId: string) => void;
-  onOpenHistoryTarget?: (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record" | "stock-settlement-record", sourceTradeId?: string) => void;
+  onOpenHistoryTarget?: (anchorId: "option-entry-executions" | "option-close-executions" | "spread-close-batch-review" | "stock-acquisition-record" | "stock-settlement-record", sourceTradeId?: string) => void;
   /** Opens the dashboard's persisted, read-only ended-history view. */
   onShowEndedHistory?: () => void;
   onOpenWheelManagement?: (ticker?: string) => void;
@@ -592,6 +592,20 @@ export function SaxoReadOnlyPanel({
     );
   }
 
+  function openHistorySummaryAction(input: HistorySummaryAction | SaxoHistoryDiscoveryItem) {
+    const action = "item" in input ? input : undefined;
+    if (!action?.spreadCloseBatch) {
+      createHistoryDraft(action?.item ?? (input as SaxoHistoryDiscoveryItem), true);
+      return;
+    }
+    let openItem = action.item;
+    for (const batchAction of action.spreadCloseBatch.actions) {
+      if (batchAction.mode !== "create") continue;
+      if (createHistoryDraft(batchAction.item, false)) openItem = batchAction.item;
+    }
+    onOpenHistoryTarget?.("spread-close-batch-review", openItem.id);
+  }
+
   function ignoreHistoryCandidate(item: SaxoHistoryDiscoveryItem) {
     const historyKeys = getSaxoHistoryCandidateKeys(item);
     const primaryHistoryKey = getSaxoHistoryStableKey(item);
@@ -837,7 +851,10 @@ export function SaxoReadOnlyPanel({
     setIsLoading(true);
     try {
       const response = await fetchSaxoHistoryDiscovery();
-      const mappedEndpoints = enrichHistoryEndpointsWithAccountMappings(response.endpoints, mappings);
+      const mappedEndpoints = enrichHistoryEndpointsWithAccountMappings(response.endpoints.map((endpoint) => ({
+        ...endpoint,
+        items: endpoint.items?.map((item) => ({ ...item, acquisitionFetchedAt: response.fetchedAt, acquisitionCoverage: endpoint.coverage })),
+      })), mappings);
       setHistoryEndpoints(mappedEndpoints);
       setHistoryFetchedAt(response.fetchedAt);
       setHistoryFetchOutcome("ready");
@@ -899,7 +916,10 @@ export function SaxoReadOnlyPanel({
         if (spreadRequest.current !== requestRevision) return;
         const tradesSources = historyResponse.endpoints.filter(endpoint => /trades/i.test(endpoint.endpoint));
         coverage.push(...tradesSources.map(endpoint => ({ source: endpoint.endpoint, asOf: historyResponse.fetchedAt, requestedFrom: historyResponse.fromDate, requestedTo: historyResponse.toDate, completedPages: endpoint.coverage?.completedPages ?? 0, status: endpoint.coverage?.status ?? "partial" as const })));
-        const mappedEndpoints = enrichHistoryEndpointsWithAccountMappings(historyResponse.endpoints, mappings);
+        const mappedEndpoints = enrichHistoryEndpointsWithAccountMappings(historyResponse.endpoints.map((endpoint) => ({
+          ...endpoint,
+          items: endpoint.items?.map((item) => ({ ...item, acquisitionFetchedAt: historyResponse.fetchedAt, acquisitionCoverage: endpoint.coverage })),
+        })), mappings);
         setHistoryEndpoints(mappedEndpoints);
         setHistoryFetchedAt(historyResponse.fetchedAt);
         setHistoryFetchOutcome("ready");
@@ -1249,7 +1269,7 @@ export function SaxoReadOnlyPanel({
               onShowPositions={showPositionCandidatesFromSummary}
               onShowOrders={() => scrollToSection("orders")}
               onShowHistory={() => scrollToSection("history")}
-              onOpenHistoryAction={(item) => createHistoryDraft(item, true)}
+              onOpenHistoryAction={openHistorySummaryAction}
               onOpenOrderAction={(action) => onOpenExitOrderRule?.(action.simulationId, action.legId)}
               onPrimaryAction={(action) => {
                 if (action.kind === "account") {
@@ -1273,7 +1293,7 @@ export function SaxoReadOnlyPanel({
                   scrollToSection("history");
                   return;
                 }
-                createHistoryDraft(action.action.item, true);
+                openHistorySummaryAction(action.action);
               }}
             />
             {message ? <p className="rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">{message}</p> : null}
@@ -2114,6 +2134,10 @@ type HistorySummaryAction = {
   target: HistoryCandidateTarget;
   mode: "create" | "return" | "review";
   reason?: string;
+  spreadCloseBatch?: {
+    simulationId: string;
+    actions: Array<{ item: SaxoHistoryDiscoveryItem; mode: "create" | "return" }>;
+  };
 };
 
 export type ReflectionPendingAction =
@@ -2148,7 +2172,7 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
   onShowPositions: () => void;
   onShowOrders: () => void;
   onShowHistory: () => void;
-  onOpenHistoryAction: (item: SaxoHistoryDiscoveryItem) => void;
+  onOpenHistoryAction: (action: HistorySummaryAction | SaxoHistoryDiscoveryItem) => void;
   onOpenOrderAction?: (action: SaxoExitOrderReview) => void;
   onPrimaryAction?: (action: ReflectionPendingAction) => void;
 }>(function ReflectionPendingSummary(
@@ -2157,6 +2181,7 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
 ) {
   const orderActions = summary.orderActions ?? [];
   const hasFocusedSpread = summary.primaryAction?.kind === "spread";
+  const visibleHistoryActions = summary.historyActions.filter((action) => !(summary.primaryAction?.kind === "history" && summary.primaryAction.action === action));
   const otherActionCount = Math.max(0, summary.requiredActionCount - (hasFocusedSpread ? 1 : 0));
   const otherConfirmations = (
     <>
@@ -2167,7 +2192,7 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
         <PendingLine label="注文候補" detail={summary.orderLine.detail} actionLabel={summary.orderLine.actionLabel ?? "注文候補を確認"} disabled={!summary.orderLine.actionable || orderActions.length > 0} onClick={onShowOrders} />
         <PendingLine label="履歴候補" detail={summary.historyLine.detail} actionLabel={summary.historyLine.actionLabel} disabled={!summary.historyLine.actionable} tone={summary.historyIsSupplemental ? "muted" : undefined} onClick={onShowHistory} />
       </div>
-      {summary.historyActions.length > 0 ? <div className="mt-2 space-y-2 rounded-md border border-white/70 bg-white p-2">{summary.historyActions.map((action) => <HistorySummaryActionRow key={action.item.id} action={action} onOpen={() => onOpenHistoryAction(action.item)} onShowHistory={onShowHistory} />)}</div> : null}
+      {visibleHistoryActions.length > 0 ? <div className="mt-2 space-y-2 rounded-md border border-white/70 bg-white p-2">{visibleHistoryActions.map((action) => <HistorySummaryActionRow key={action.spreadCloseBatch ? `spread-close:${action.spreadCloseBatch.simulationId}` : action.item.id} action={action} onOpen={() => onOpenHistoryAction(action.spreadCloseBatch ? action : action.item)} onShowHistory={onShowHistory} />)}</div> : null}
       {orderActions.length > 0 ? <div className="mt-2 space-y-2 rounded-md border border-white/70 bg-white p-2">{orderActions.map((action) => <ExitOrderSummaryActionRow key={`${action.simulationId}:${action.legId}`} action={action} hideAction={summary.primaryAction?.kind === "order" && summary.primaryAction.action === action} onOpen={() => onOpenOrderAction?.(action)} />)}</div> : null}
     </>
   );
@@ -2222,23 +2247,26 @@ function HistorySummaryActionRow({
     : `${symbol} / ${contract} / ${action.item.tradeDate ?? "取引日未取得"} / ${targetLabel}`;
   const createLabel = action.target === "close" ? `${symbol}の決済内容を確認する` : action.target === "entry" ? `${symbol}の建玉開始内容を確認する` : action.target === "assignment" ? `${symbol}の権利行使内容を確認する` : `${symbol}の株式譲渡を確認する`;
   const returnLabel = action.target === "close" ? `${symbol}の決済確認へ戻る` : action.target === "entry" ? `${symbol}の建玉開始確認へ戻る` : action.target === "assignment" ? `${symbol}の権利行使確認へ戻る` : `${symbol}の株式譲渡を確認する`;
+  const spreadBatch = action.spreadCloseBatch;
+  const effectiveTitle = spreadBatch ? `${symbol} / ベア・プット2脚 / 決済` : title;
+  const effectiveLabel = spreadBatch ? `${symbol}の2脚の決済内容を確認する` : action.mode === "create" ? createLabel : returnLabel;
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs">
       <div className="min-w-0">
-        <div className="font-bold text-slate-900">{title}</div>
+        <div className="font-bold text-slate-900">{effectiveTitle}</div>
         {action.reason && action.mode !== "review" ? (
           <div className="mt-1 text-amber-900">{action.reason}</div>
         ) : null}
         {action.mode === "review" ? (
           <div className="mt-1 text-amber-900">{action.reason ?? "自動反映できません。履歴一覧で理由を確認してください。"}</div>
         ) : (
-          <div className="mt-1 text-slate-600">{action.mode === "create" ? `${destination}へ確認用下書きを作成して移動します。まだ正式保存されません。` : `${destination}の既存確認用下書きへ移動します。まだ正式保存されません。`}</div>
+          <div className="mt-1 text-slate-600">{spreadBatch ? "既存下書きを保持し、不足する脚だけを反映して2脚の確認欄へ移動します。まだ正式保存されません。" : action.mode === "create" ? `${destination}へ確認用下書きを作成して移動します。まだ正式保存されません。` : `${destination}の既存確認用下書きへ移動します。まだ正式保存されません。`}</div>
         )}
       </div>
       {action.mode === "review" ? (
         <button type="button" className="rounded border border-slate-300 bg-white px-2 py-1 font-bold text-slate-800" onClick={onShowHistory}>履歴候補一覧を見る</button>
       ) : (
-        <button type="button" className="rounded border border-teal-700 bg-teal-700 px-2 py-1 font-bold text-white hover:bg-teal-800" onClick={onOpen}>{action.mode === "create" ? createLabel : returnLabel}</button>
+        <button type="button" className="rounded border border-teal-700 bg-teal-700 px-2 py-1 font-bold text-white hover:bg-teal-800" onClick={onOpen}>{effectiveLabel}</button>
       )}
     </div>
   );
@@ -5208,7 +5236,7 @@ export function createReflectionSummary({
     const state = historyReflectionStates[item.id] ?? { status: "none" as const };
     return isUserCreatableHistoryItem({ item, target, state, simulations, historyItems });
   });
-  const historyActions: HistorySummaryAction[] = historyItems
+  const rawHistoryActions: HistorySummaryAction[] = historyItems
     .map((item): HistorySummaryAction | undefined => {
       const target = resolveHistoryTarget(item);
       const state = historyReflectionStates[item.id] ?? { status: "none" as const };
@@ -5231,6 +5259,24 @@ export function createReflectionSummary({
       return undefined;
     })
     .filter((action): action is HistorySummaryAction => Boolean(action));
+  const spreadCloseGroups = new Map<string, Array<HistorySummaryAction & { mode: "create" | "return" }>>();
+  for (const action of rawHistoryActions) {
+    if (action.target !== "close" || action.mode === "review") continue;
+    const match = resolveSaxoHistoryOptionLegMatch(simulations, action.item, "close", undefined, { allowCloseAccountMismatch: true });
+    if (!match || match.simulation.strategyType !== "bear_put_spread") continue;
+    const group = spreadCloseGroups.get(match.simulation.id) ?? [];
+    group.push(action as HistorySummaryAction & { mode: "create" | "return" });
+    spreadCloseGroups.set(match.simulation.id, group);
+  }
+  const groupedHistoryIds = new Set(Array.from(spreadCloseGroups.values()).flatMap((actions) => actions.map((action) => action.item.id)));
+  const spreadCloseBatchActions: HistorySummaryAction[] = Array.from(spreadCloseGroups.entries()).map(([simulationId, actions]) => {
+    const representative = actions.find((action) => action.mode === "create") ?? actions[0];
+    return { ...representative, spreadCloseBatch: { simulationId, actions: actions.map(({ item, mode }) => ({ item, mode })) } };
+  });
+  const historyActions: HistorySummaryAction[] = [
+    ...spreadCloseBatchActions,
+    ...rawHistoryActions.filter((action) => !groupedHistoryIds.has(action.item.id)),
+  ];
   const recoveryHistoryItems = actionableHistoryItems.filter((item) => historyReflectionStates[item.id]?.status === "broken");
   const reflectedHistoryCount = actionableHistoryItems.filter((item) => {
     const state = historyReflectionStates[item.id];
@@ -5271,8 +5317,8 @@ export function createReflectionSummary({
           ? {
               kind: "history",
               action: historyActions[0],
-              label: `${historyActions[0].item.symbol ?? "履歴候補"}の履歴候補を確認`,
-              actionLabel: historyActions[0].mode === "return" ? "履歴候補の確認へ戻る" : "履歴候補を確認して反映へ",
+              label: historyActions[0].spreadCloseBatch ? `${historyActions[0].item.symbol ?? "対象銘柄"}のベア・プット2脚を確認` : `${historyActions[0].item.symbol ?? "履歴候補"}の履歴候補を確認`,
+              actionLabel: historyActions[0].spreadCloseBatch ? `${historyActions[0].item.symbol ?? "対象銘柄"}の2脚の決済内容を確認する` : historyActions[0].mode === "return" ? "履歴候補の確認へ戻る" : "履歴候補を確認して反映へ",
             }
           : accountLines.find((line) => line.actionable)
             ? (() => {

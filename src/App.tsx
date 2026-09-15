@@ -1746,7 +1746,7 @@ export default function App() {
     setQuoteStatus("履歴候補から作成された建玉開始確認があります。3-Aで内容を確認してください。");
     return { simulationId: target.id };
   };
-  const openSelectedSimulationHistoryTarget = (anchorId: "option-entry-executions" | "option-close-executions" | "stock-acquisition-record" | "stock-settlement-record", sourceTradeId?: string) => {
+  const openSelectedSimulationHistoryTarget = (anchorId: "option-entry-executions" | "option-close-executions" | "spread-close-batch-review" | "stock-acquisition-record" | "stock-settlement-record", sourceTradeId?: string) => {
     const latestState = useOptionsStore.getState();
     const latestSimulations = latestState.simulations;
     const latestSelected =
@@ -1754,7 +1754,7 @@ export default function App() {
       latestSimulations.find((simulation) => simulation.id === selected?.id);
     const sourceCandidate = sourceTradeId ? saxoHistoryCandidates.find((candidate) => candidate.id === sourceTradeId) : undefined;
     const sourceKeys = sourceCandidate ? getSaxoHistoryCandidateKeys(sourceCandidate) : sourceTradeId ? [sourceTradeId] : [];
-    const closeTarget = anchorId === "option-close-executions" && sourceTradeId
+    const closeTarget = (anchorId === "option-close-executions" || anchorId === "spread-close-batch-review") && sourceTradeId
       ? latestSimulations
           .map((simulation) => ({
             simulation,
@@ -1807,7 +1807,9 @@ export default function App() {
     setActiveView("positions");
     selectSimulation(target.id);
     setIsEditorOpen(true);
-    if (anchorId === "option-close-executions" && sourceTradeId) {
+    if (anchorId === "spread-close-batch-review") {
+      setEditorFocusRequest({ anchorId: "spread-close-batch-review", requestId: Date.now() + Math.random(), sourceTradeId });
+    } else if (anchorId === "option-close-executions" && sourceTradeId) {
       const matchedExecution = closeTarget?.execution ?? (target.optionCloseExecutions ?? []).find(
         (execution) =>
           sourceKeys.includes(execution.sourceCandidateId ?? "") ||
