@@ -22,6 +22,7 @@ import {
   deriveSaxoHistoryRealizedPnlAutofill,
   getOptionCloseCompletion,
   hasUnconfirmedCloseExecutionDraft,
+  previewOptionCloseExecutionConfirmation,
   validateSaxoHistoryCloseExecution,
 } from "@/domain/optionCloseExecutions";
 import { isStockSettlementRequiredFieldsComplete, normalizeStockSettlement } from "@/domain/stockSettlementState";
@@ -572,6 +573,13 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
         invalidReason: undefined,
       });
       return;
+    }
+    if (simulation.strategyType === "bear_put_spread" && !execution.confirmed) {
+      const preview = previewOptionCloseExecutionConfirmation(simulation, execution);
+      if (!preview.valid) {
+        updateOptionCloseExecution(id, { invalidReason: preview.reason });
+        return;
+      }
     }
     const nextOptionCloseExecutions = optionCloseExecutions.map((item) =>
       item.id === id ? { ...item, confirmed: true, confirmationStatus: "confirmed" as const, invalidReason: undefined } : item,
@@ -2659,12 +2667,19 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                   ? "表示対象の脚と保存対象の脚が一致しません。正式保存できません。"
                   : undefined;
               const isInvalidSaxoHistoryCloseDraft = execution.source === "saxo_history" && !execution.confirmed && (!closeValidation.valid || Boolean(uiInvalidReason));
-              const visibleResult = isInvalidSaxoHistoryCloseDraft ? undefined : result;
+              const confirmationPreview = simulation.strategyType === "bear_put_spread" && !execution.confirmed
+                ? previewOptionCloseExecutionConfirmation(simulation, execution)
+                : undefined;
+              const visibleResult = isInvalidSaxoHistoryCloseDraft
+                ? undefined
+                : result ?? (confirmationPreview?.valid ? confirmationPreview.result : undefined);
+              const confirmationPreviewReason = confirmationPreview && !confirmationPreview.valid ? confirmationPreview.reason : undefined;
               const isExpiredExecution = execution.closeKind === "expired";
               const isNCloseExecution = simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT";
-              const closeFxRate = execution.fxRateJPY ?? execution.brokerExchangeRateJPY ?? simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
-              const closeUsdPnl = execution.realizedPnlUSD ?? result?.realizedPnlUSD ?? 0;
-              const closeReferenceJpy = closeUsdPnl * closeFxRate;
+              const rawCloseFxRate = execution.fxRateJPY ?? execution.brokerExchangeRateJPY ?? simulation.referenceFxRateJPY ?? simulation.fxRateJPY;
+              const closeFxRate = rawCloseFxRate !== undefined && Number.isFinite(rawCloseFxRate) && rawCloseFxRate > 0 ? rawCloseFxRate : undefined;
+              const closeUsdPnl = execution.realizedPnlUSD ?? visibleResult?.realizedPnlUSD;
+              const closeReferenceJpy = closeFxRate === undefined || closeUsdPnl === undefined ? undefined : closeUsdPnl * closeFxRate;
               const closeDetailCostTotal =
                 Math.abs(execution.brokerFeeJPY ?? 0) +
                 Math.abs(execution.brokerExchangeFeeJPY ?? 0) +
@@ -2680,7 +2695,9 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                 !execution.confirmed &&
                 execution.confirmationStatus !== "ignored" &&
                 !isInvalidSaxoHistoryCloseDraft;
-              const closeMissingItems = getCloseExecutionMissingItems(execution, isNCloseExecution);
+              const closeMissingItems = getCloseExecutionMissingItems(execution, isNCloseExecution).filter(
+                (item) => !(isBearPutSpread && item === "USD実現損益" && confirmationPreview?.valid),
+              );
               const hasPCloseBookedAmount =
                 !isNCloseExecution &&
                 execution.brokerBookedAmountJPY !== undefined &&
@@ -2827,15 +2844,19 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                       </div>
                       <NumberInput
                         label="参考為替"
-                        value={closeFxRate}
+                        value={closeFxRate ?? Number.NaN}
                         suffix="JPY/USD"
                         min={0}
                         onChange={(fxRateJPY) => updateOptionCloseExecution(execution.id, { fxRateJPY })}
                       />
                       <div className="rounded-md border border-slate-200 bg-white p-3 text-sm">
                         <div className="text-xs font-semibold text-slate-500">参考JPY換算</div>
-                        <div className="numeric-input mt-1 font-bold text-slate-950">{formatJPY(closeReferenceJpy, { signed: true })}</div>
-                        <div className="mt-1 text-xs leading-5 text-slate-500">N口座の本体損益はUSDです。</div>
+                        <div className="numeric-input mt-1 font-bold text-slate-950">
+                          {closeReferenceJpy === undefined ? "未確認" : formatJPY(closeReferenceJpy, { signed: true })}
+                        </div>
+                        <div className="mt-1 text-xs leading-5 text-slate-500">
+                          {closeReferenceJpy === undefined ? "参考為替は未確認です。USD実績の確認には不要です。" : "N口座の本体損益はUSDです。"}
+                        </div>
                       </div>
                       <Select
                         label="入力元"
@@ -2998,7 +3019,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                         <div className="text-xs font-semibold">実現損益</div>
                         <div className="numeric-input font-bold">
                           {visibleResult.currency === "USD"
-                            ? `${formatUSD(visibleResult.realizedPnlUSD)} / 参考 ${formatJPY(visibleResult.realizedPnlJPY, { signed: true })}`
+                            ? `${formatUSD(visibleResult.realizedPnlUSD)} / ${Number.isFinite(visibleResult.realizedPnlJPY) ? `参考 ${formatJPY(visibleResult.realizedPnlJPY, { signed: true })}` : "参考JPY 未確認"}`
                             : formatJPY(visibleResult.realizedPnlJPY, { signed: true })}
                         </div>
                       </div>
@@ -3029,9 +3050,9 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                     </div>
                   ) : (
                     <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
-                      {isNCloseExecution
+                      {confirmationPreviewReason ?? (isNCloseExecution
                         ? "対象脚、約定数量、約定価格USD、USD手数料を確認してください。"
-                        : "決済日、約定価格USD、Saxo実現損益JPYを確認してください。"}
+                        : "決済日、約定価格USD、Saxo実現損益JPYを確認してください。")}
                     </div>
                   )}
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm">
@@ -3047,7 +3068,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                     <button
                       type="button"
                       className="rounded-md border border-emerald-300 bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-200 disabled:text-slate-500"
-                      disabled={(!(visibleResult || (execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending")) || execution.confirmed || isInvalidSaxoHistoryCloseDraft || Boolean(uiInvalidReason))}
+                      disabled={(!(visibleResult || (execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending")) || execution.confirmed || isInvalidSaxoHistoryCloseDraft || Boolean(uiInvalidReason) || Boolean(confirmationPreviewReason))}
                       onClick={() => confirmOptionCloseExecution(execution.id)}
                     >
                       {execution.executionEvidenceStatus === "detected" && execution.accountingStatus === "pending"

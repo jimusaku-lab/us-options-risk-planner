@@ -365,6 +365,30 @@ describe("SimulationEditor", () => {
     expect(screen.queryByRole("button", { name: "決済済みに変更" })).not.toBeInTheDocument();
   });
 
+  it("previews and sequentially confirms both bear-put legs without requiring a pre-confirmed result", async () => {
+    let current = buildBearPutCloseDraftSimulation();
+    const onChange = vi.fn((next: TradeSimulation) => { current = next; });
+    function Harness() {
+      const [simulation, setSimulation] = useState(current);
+      return <SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={(next) => { onChange(next); setSimulation(next); }} />;
+    }
+    render(<Harness />);
+    const shortCard = document.getElementById("option-close-execution-R11-close-short")!;
+    expect(within(shortCard).getByText(/\$3\.52 \/ 参考JPY 未確認/)).toBeInTheDocument();
+    expect(within(shortCard).getByText("未入力項目はありません。内容を確認して正式保存できます。")).toBeInTheDocument();
+    expect(within(shortCard).getByText("参考為替は未確認です。USD実績の確認には不要です。")).toBeInTheDocument();
+    expect(within(shortCard).getByRole("button", { name: "確認して正式保存" })).toBeEnabled();
+    expect(current.optionCloseExecutions?.every((execution) => !execution.confirmed)).toBe(true);
+    fireEvent.click(within(shortCard).getByRole("button", { name: "確認して正式保存" }));
+    await waitFor(() => expect(current.optionCloseExecutions?.[0]).toMatchObject({ confirmed: true, confirmationStatus: "confirmed" }));
+    expect(current.status).toBe("open");
+    const longCard = document.getElementById("option-close-execution-R11-close-long")!;
+    fireEvent.click(within(longCard).getByRole("button", { name: "確認して正式保存" }));
+    await waitFor(() => expect(current.status).toBe("closed"));
+    expect(current.optionCloseExecutions?.every((execution) => execution.confirmed)).toBe(true);
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
   it("blocks an invalid Saxo history close leg before it can change confirmation state", () => {
     const onChange = vi.fn();
     const simulation = buildSampleLongOptionCloseSimulation("call", "missing-leg");
@@ -591,5 +615,27 @@ function buildSampleLongOptionCloseSimulation(type: "call" | "put", executionLeg
     optionEntryExecutions: [{ id: "sample-entry", legId: "sample-long-leg", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 10, commissionUSD: 1, settlementCurrency: "USD", inputMode: "USD_EXECUTION_CALC", source: "manual", confirmed: true }],
     optionCloseExecutions: [{ id: "sample-close", legId: executionLegId, closeDate: "2026-08-10", contracts: 1, closePriceUSD: 12, commissionUSD: 1, settlementCurrency: "USD", source: "saxo_history", sourceCandidateId: "anonymous-candidate", sourceTradeId: "anonymous-trade", targetPositionId: simulationId, confirmationStatus: "pending", confirmed: false }],
     brokerMarginJPY: 0, brokerMarginUSD: 0, marginBufferMultiplier: 1, marginUsagePercent: 0, availableCashJPY: 0, denominatorMode: "custom", taxProfileId: "japan_derivative_separate_tax_user_confirm", nisaExpectedAnnualReturnPct: 8, brokerCommissionUSD: 1,
+  };
+}
+
+function buildBearPutCloseDraftSimulation(): TradeSimulation {
+  return {
+    id: "R11-spread", status: "open", name: "Anonymous spread", ticker: "TEST", strategyType: "bear_put_spread",
+    currentPriceUSD: 95, fxRateJPY: 0, accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD",
+    entryDate: "2026-09-01", expiryDate: "2026-10-02", dte: 31, stockPosition: null,
+    optionLegs: [
+      { id: "R11-long", type: "put", side: "buy", strikeUSD: 100, premiumUSD: 4.92, quantity: 1, contractSize: 100, expiryDate: "2026-10-02" },
+      { id: "R11-short", type: "put", side: "sell", strikeUSD: 90, premiumUSD: 0.92, quantity: 1, contractSize: 100, expiryDate: "2026-10-02" },
+    ],
+    optionEntryExecutions: [
+      { id: "R11-entry-long", legId: "R11-long", tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 4.92, commissionUSD: 2.24, settlementCurrency: "USD", source: "broker_statement", confirmed: true },
+      { id: "R11-entry-short", legId: "R11-short", tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 0.92, commissionUSD: 2.24, settlementCurrency: "USD", source: "broker_statement", confirmed: true },
+    ],
+    optionCloseExecutions: [
+      { id: "R11-close-short", legId: "R11-short", closeKind: "buyback", closeDate: "2026-09-10", contracts: 1, closePriceUSD: 0.84, commissionUSD: 2.24, settlementCurrency: "USD", source: "saxo_history", sourceCandidateId: "R11-candidate-short", confirmationStatus: "pending", confirmed: false },
+      { id: "R11-close-long", legId: "R11-long", closeKind: "buyback", closeDate: "2026-09-10", contracts: 1, closePriceUSD: 4.5, commissionUSD: 2.24, settlementCurrency: "USD", source: "saxo_history", sourceCandidateId: "R11-candidate-long", confirmationStatus: "pending", confirmed: false },
+    ],
+    brokerMarginJPY: 0, brokerMarginUSD: 0, marginBufferMultiplier: 1, marginUsagePercent: 0,
+    availableCashJPY: 0, denominatorMode: "custom", taxProfileId: "none_nisa_or_tax_free_comparison", nisaExpectedAnnualReturnPct: 8,
   };
 }

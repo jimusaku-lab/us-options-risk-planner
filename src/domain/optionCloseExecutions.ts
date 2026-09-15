@@ -71,6 +71,10 @@ export type SaxoHistoryCloseExecutionValidation = {
   reason?: string;
 };
 
+export type OptionCloseExecutionConfirmationPreview =
+  | { valid: true; result: OptionCloseExecutionResult }
+  | { valid: false; reason: string };
+
 export type OptionCloseCompletion = {
   state: "none" | "partial" | "complete" | "invalid";
   terminalStatus?: "closed" | "expired";
@@ -375,6 +379,56 @@ export function validateSaxoHistoryCloseExecution(
     };
   }
   return { valid: true, remove: false };
+}
+
+/**
+ * Validates one draft exactly as it would be confirmed, but only inside an
+ * isolated simulation snapshot. Formal progress and performance remain
+ * confirmed-only until the user explicitly saves the candidate.
+ */
+export function previewOptionCloseExecutionConfirmation(
+  simulation: TradeSimulation,
+  execution: OptionCloseExecution,
+): OptionCloseExecutionConfirmationPreview {
+  const storedExecutions = simulation.optionCloseExecutions ?? [];
+  if (!execution.id || storedExecutions.filter((item) => item.id === execution.id).length !== 1) {
+    return { valid: false, reason: "決済実績IDが重複または欠落しています。" };
+  }
+  const storedExecution = storedExecutions.find((item) => item.id === execution.id)!;
+  // Compare the complete stored candidate rather than a hand-picked subset:
+  // accounting evidence or realized-P/L provenance can change while the
+  // visible price/quantity fields stay the same.
+  if (JSON.stringify(storedExecution) !== JSON.stringify(execution)) {
+    return { valid: false, reason: "画面表示後に決済実績が更新されています。最新内容を再確認してください。" };
+  }
+  if (execution.voided) return { valid: false, reason: "取消済みの決済実績は正式保存できません。" };
+  if (execution.confirmationStatus === "invalid" || execution.confirmationStatus === "ignored") {
+    return { valid: false, reason: execution.invalidReason ?? "無効または対象外の決済実績です。" };
+  }
+  const sourceValidation = validateSaxoHistoryCloseExecution(simulation, execution);
+  if (!sourceValidation.valid) return { valid: false, reason: sourceValidation.reason ?? "Saxo履歴候補を再検証できません。" };
+  const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
+  if (!leg) return { valid: false, reason: "対象脚が現在の建玉から見つかりません。" };
+  if (!Number.isInteger(leg.quantity) || leg.quantity <= 0 || !Number.isInteger(execution.contracts) || execution.contracts <= 0) {
+    return { valid: false, reason: "建玉数量または決済数量が正の整数ではありません。" };
+  }
+  if (!Number.isInteger(leg.contractSize) || !(leg.contractSize! > 0)) return { valid: false, reason: "契約倍率が未確認です。" };
+  if (!execution.closeDate) return { valid: false, reason: "決済日が未確認です。" };
+  if (execution.settlementCurrency !== simulation.accountCurrency) return { valid: false, reason: "決済通貨が建玉口座の通貨と一致しません。" };
+  const closePrice = execution.closeKind === "expired" ? 0 : execution.closePriceUSD;
+  if (closePrice === undefined || !Number.isFinite(closePrice) || closePrice < 0) return { valid: false, reason: "決済価格が未確認または不正です。" };
+  if (execution.commissionUSD === undefined || !Number.isFinite(execution.commissionUSD) || execution.commissionUSD < 0) return { valid: false, reason: "決済手数料が未確認または不正です。" };
+
+  const confirmedCandidate: OptionCloseExecution = { ...execution, confirmed: true, confirmationStatus: "confirmed", invalidReason: undefined };
+  const snapshot: TradeSimulation = {
+    ...simulation,
+    optionCloseExecutions: storedExecutions.map((item) => item.id === execution.id ? confirmedCandidate : item),
+  };
+  const progress = getOptionLegCloseProgress(snapshot);
+  if (progress.invalidReason) return { valid: false, reason: progress.invalidReason };
+  const result = calculateOptionCloseExecutionResult(snapshot, confirmedCandidate);
+  if (!result) return { valid: false, reason: "建玉時実績、数量配賦、決済価格または手数料の対応を確定できません。" };
+  return { valid: true, result };
 }
 
 export function sanitizeSaxoHistoryCloseExecutions(simulation: TradeSimulation): TradeSimulation {
