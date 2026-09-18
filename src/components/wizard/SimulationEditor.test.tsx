@@ -378,7 +378,7 @@ describe("SimulationEditor", () => {
     expect(within(shortCard).getByText("参考為替は未確認です。USD実績の確認には不要です。")).toBeInTheDocument();
     expect(within(shortCard).queryByRole("button", { name: /正式保存/ })).not.toBeInTheDocument();
     expect(current.optionCloseExecutions?.every((execution) => !execution.confirmed)).toBe(true);
-    const review = screen.getByRole("region", { name: "ベア・プット2脚の決済確認" });
+    const review = screen.getByRole("region", { name: "2脚戦略の決済確認" });
     fireEvent.click(within(review).getByRole("button", { name: "2脚の決済内容を確認して正式保存" }));
     await waitFor(() => expect(current.status).toBe("closed"));
     expect(current.optionCloseExecutions?.every((execution) => execution.confirmed)).toBe(true);

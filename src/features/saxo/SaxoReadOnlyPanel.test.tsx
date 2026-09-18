@@ -117,8 +117,8 @@ it("R4 counts one ready spread instead of two raw positions and exposes its dire
   ] as never;
   const summary = createReflectionSummary({ mappedSnapshots: [], accountInputs: { P: { cashBalance: 0 } as never, N: { cashBalance: 0 } as never }, positionRows: rows, simulations: [], stockTransfers: [], orders: [], historyEndpoints: [], historyReflectionStates: {}, spreadCandidates: [candidate], spreadPositionIds: new Set(["TEST-long", "TEST-short"]) });
   expect(summary.requiredActionCount).toBe(1);
-  expect(summary.positionLine.detail).toContain("ベア・プット候補1件");
-  expect(summary.primaryAction).toMatchObject({ kind: "spread", actionLabel: "SAMPLE ベア・プット：2脚を確認" });
+  expect(summary.positionLine.detail).toContain("2脚戦略候補1件");
+  expect(summary.primaryAction).toMatchObject({ kind: "spread", actionLabel: "SAMPLE カスタム：2脚を確認" });
 });
 
 it("R5 leaves the spread as the only primary action and folds unrelated account work", () => {
@@ -129,7 +129,7 @@ it("R5 leaves the spread as the only primary action and folds unrelated account 
   });
   const onPrimaryAction = vi.fn();
   render(<ReflectionPendingSummary summary={summary} onShowMapping={vi.fn()} onShowSnapshot={vi.fn()} onShowPositions={vi.fn()} onShowOrders={vi.fn()} onShowHistory={vi.fn()} onOpenHistoryAction={vi.fn()} onPrimaryAction={onPrimaryAction} />);
-  expect(screen.queryByRole("button", { name: "SAMPLE ベア・プット：2脚を確認" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "SAMPLE カスタム：2脚を確認" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "2脚の確認欄へ" }));
   expect(onPrimaryAction).toHaveBeenCalledWith(expect.objectContaining({ kind: "spread" }));
   const details = screen.getByText(/その他の確認（この建玉の保存とは別）/).closest("details");

@@ -1,6 +1,7 @@
 import type { TradeSimulation } from "@/types/domain";
 import type { SaxoApiPositionSnapshot, SaxoHistoryDiscoveryItem } from "./saxoAccountSync";
 import { strategyIdentityKey, strategyViewKey, type StrategyCandidate, type StrategyCoverage, type StrategyFill, type StrategyLedger } from "@/domain/strategyLedger";
+import { classifyVerticalSpreadLegs, getVerticalSpreadDefinition } from "@/domain/verticalSpread";
 
 /** Orders are relationship evidence, never a replacement for a fill ID. */
 export type SpreadOrderRelation = { accountKey: string; orderId: string; parentOrderId: string; sourceField: string };
@@ -8,8 +9,9 @@ export type SpreadImportSnapshot = { environment: string; requestRevision: numbe
 
 export type SpreadImportIssue = { code: "specification_missing" | "specification_conflict" | "unsupported_currency" | "duplicate_positions" | "lifecycle_history" | "account_identity" | "opening_identity" | "opening_accounting" | "multiple_opening_lots" | "quantity_mismatch" | "existing_source"; label: string; reason: string };
 const instrumentKey = (position: SaxoApiPositionSnapshot) => JSON.stringify([position.accountKey, position.uic]);
-const positionIssueLabel = (position: SaxoApiPositionSnapshot) => `${position.underlyingSymbol ?? position.symbol ?? "オプション"} P${position.strike} / ${position.expiry}`;
-const potential = (position: SaxoApiPositionSnapshot) => position.kind === "option" && position.assetType === "StockOption" && position.optionType === "put" && ["long", "short"].includes(position.side ?? "") && position.accountAssignment === "N" && Boolean(position.accountKey && position.uic && position.underlyingIdentity && position.expiry) && position.strike !== undefined;
+const positionIssueLabel = (position: SaxoApiPositionSnapshot) => `${position.underlyingSymbol ?? position.symbol ?? "オプション"} ${position.optionType === "call" ? "C" : "P"}${position.strike} / ${position.expiry}`;
+const potential = (position: SaxoApiPositionSnapshot) => position.kind === "option" && position.assetType === "StockOption" && ["call", "put"].includes(position.optionType ?? "") && ["long", "short"].includes(position.side ?? "") && position.accountAssignment === "N" && Boolean(position.accountKey && position.uic && position.underlyingIdentity && position.expiry) && position.strike !== undefined;
+const pairType = (a: SaxoApiPositionSnapshot, b: SaxoApiPositionSnapshot) => classifyVerticalSpreadLegs([{ type: a.optionType as "call" | "put", side: a.side === "long" ? "buy" : "sell", strikeUSD: a.strike!, expiryDate: a.expiry!, quantity: 1, contractSize: 1 }, { type: b.optionType as "call" | "put", side: b.side === "long" ? "buy" : "sell", strikeUSD: b.strike!, expiryDate: b.expiry!, quantity: 1, contractSize: 1 }]);
 const eligible = (position: SaxoApiPositionSnapshot) => potential(position) && position.currency === "USD" && Number.isFinite(position.contractSize) && position.contractSize! > 0 && !(position.specificationConflicts?.length);
 const matchingHistory = (snapshot: SpreadImportSnapshot, position: SaxoApiPositionSnapshot) => snapshot.history.filter(item => item.kind === "trade" && item.brokerAccountKey === position.accountKey && item.uic === position.uic);
 const fillIdentity = (snapshot: SpreadImportSnapshot, position: SaxoApiPositionSnapshot, trade: SaxoHistoryDiscoveryItem) => trade.tradeId || trade.brokerHistoryId ? strategyIdentityKey({ environment: snapshot.environment, broker: "saxo", accountKey: position.accountKey, kind: trade.tradeId ? "fill" : "history", id: (trade.tradeId ?? trade.brokerHistoryId)! }) : undefined;
@@ -17,8 +19,7 @@ const fillIdentity = (snapshot: SpreadImportSnapshot, position: SaxoApiPositionS
 export function getPotentialSpreadPositionIds(snapshot: SpreadImportSnapshot): Set<string> {
   const positions = snapshot.positions.filter(potential);
   return new Set(positions.filter(position => positions.some(other =>
-    other.id !== position.id && other.accountKey === position.accountKey && other.underlyingIdentity === position.underlyingIdentity && other.expiry === position.expiry && other.side !== position.side &&
-    (position.side === "long" ? position.strike! > other.strike! : other.strike! > position.strike!),
+    other.id !== position.id && other.accountKey === position.accountKey && other.underlyingIdentity === position.underlyingIdentity && other.expiry === position.expiry && Boolean(pairType(position, other)),
   )).map(position => position.id));
 }
 
@@ -123,7 +124,7 @@ export function reconcileStrategyCandidates(snapshot: SpreadImportSnapshot, ledg
     if (!eligible(position) || unsafe.has(instrumentKey(position))) continue;
     if (position.strike === undefined || position.contractSize === undefined || !position.underlyingIdentity || !position.expiry || !position.uic) continue;
     const side = position.side === "long" ? "buy" : "sell";
-    const trades = snapshot.history.filter(item => item.kind === "trade" && item.openClose === "open" && item.buySell === side && item.brokerAccountKey === position.accountKey && item.uic === position.uic && item.optionType === "put" && item.strike === position.strike && item.expiry === position.expiry && item.accountCurrency === "USD" && !item.duplicateResolution && !item.transactionCostConflict);
+    const trades = snapshot.history.filter(item => item.kind === "trade" && item.openClose === "open" && item.buySell === side && item.brokerAccountKey === position.accountKey && item.uic === position.uic && item.optionType === position.optionType && item.strike === position.strike && item.expiry === position.expiry && item.accountCurrency === "USD" && !item.duplicateResolution && !item.transactionCostConflict);
     for (const trade of trades) {
       if (!(trade.tradeId || trade.brokerHistoryId) || !trade.tradeDate || trade.price === undefined || !Number.isFinite(trade.price) || trade.quantity === undefined || !Number.isInteger(Math.abs(trade.quantity)) || Math.abs(trade.quantity) <= 0) continue;
       const identity = { environment: snapshot.environment, broker: "saxo", accountKey: position.accountKey, kind: trade.tradeId ? "fill" as const : "history" as const, id: (trade.tradeId ?? trade.brokerHistoryId)! };
@@ -135,7 +136,7 @@ export function reconcileStrategyCandidates(snapshot: SpreadImportSnapshot, ledg
       const parentOrderId = order?.parentOrderId ?? position.multiLegOrderId;
       const idKey = (kind: "parent_order" | "order" | "position", id: string) => strategyIdentityKey({ ...identity, kind, id });
       fills.push({ key, identity, revision: JSON.stringify([trade.tradeDate, trade.price, trade.quantity, trade.transactionCost, trade.accountCurrency]), aliases: [],
-        contract: { underlying: position.underlyingIdentity, instrument: String(position.uic), ticker: position.underlyingSymbol ?? position.symbol ?? "", optionType: "put", side, strike: position.strike, expiry: position.expiry, multiplier: position.contractSize, currency: "USD", settlement: position.settlementType ?? "", deliverable: position.deliverableIdentity ?? "", underlyingCategory: position.underlyingTypeCategory, specificationSource: position.contractSpecificationSource },
+        contract: { underlying: position.underlyingIdentity, instrument: String(position.uic), ticker: position.underlyingSymbol ?? position.symbol ?? "", optionType: position.optionType as "call" | "put", side, strike: position.strike, expiry: position.expiry, multiplier: position.contractSize, currency: "USD", settlement: position.settlementType ?? "", deliverable: position.deliverableIdentity ?? "", underlyingCategory: position.underlyingTypeCategory, specificationSource: position.contractSpecificationSource },
         brokerPositionId: position.positionId,
         existing: existing[0],
         execution: existing.length ? undefined : { id: key, legId: String(position.uic), saxoFillId: trade.tradeId, historyCandidateIds: [identity.id], tradeDate: trade.tradeDate, contracts: Math.abs(trade.quantity), fillPriceUSD: trade.price, commissionUSD: trade.transactionCost, commissionSource: trade.transactionCost === undefined ? undefined : trade.transactionCostSource === "derived_same_currency_booked_difference" ? "saxo_derived_same_currency_booked_difference" : "saxo_actual", settlementCurrency: "USD", source: "broker_statement", confirmed: true },
@@ -147,13 +148,14 @@ export function reconcileStrategyCandidates(snapshot: SpreadImportSnapshot, ledg
   const candidates: StrategyCandidate[] = [];
   for (const buy of fills.filter(fill => fill.contract.side === "buy")) for (const sell of fills.filter(fill => fill.contract.side === "sell")) {
     const a = buy.contract, b = sell.contract;
-    if (buy.identity.accountKey !== sell.identity.accountKey || a.underlying !== b.underlying || a.expiry !== b.expiry || a.multiplier !== b.multiplier || a.currency !== b.currency || a.settlement && b.settlement && a.settlement !== b.settlement || a.deliverable && b.deliverable && a.deliverable !== b.deliverable || !(a.strike > b.strike)) continue;
+    const strategyType = classifyVerticalSpreadLegs([{ type: a.optionType, side: a.side, strikeUSD: a.strike, expiryDate: a.expiry, quantity: 1, contractSize: a.multiplier }, { type: b.optionType, side: b.side, strikeUSD: b.strike, expiryDate: b.expiry, quantity: 1, contractSize: b.multiplier }]);
+    if (!strategyType || buy.identity.accountKey !== sell.identity.accountKey || a.underlying !== b.underlying || a.expiry !== b.expiry || a.multiplier !== b.multiplier || a.currency !== b.currency || a.settlement && b.settlement && a.settlement !== b.settlement || a.deliverable && b.deliverable && a.deliverable !== b.deliverable) continue;
     const executionFor = (fill: StrategyFill) => fill.existing ? simulations.find(simulation => simulation.id === fill.existing!.simulationId)?.optionEntryExecutions?.find(entry => entry.id === fill.existing!.executionId) : fill.execution;
     const available = [buy, sell].map(fill => (executionFor(fill)?.contracts ?? 0) - ledger.allocations.filter(allocation => allocation.eventKey === fill.key).reduce((sum, allocation) => sum + allocation.contracts, 0));
-    if (!available.every(quantity => Number.isInteger(quantity) && quantity > 0)) continue;
-    const contracts = Math.min(...available);
+    if (!available.every(quantity => Number.isInteger(quantity) && quantity > 0) || available[0] !== available[1]) continue;
+    const contracts = available[0];
     const id = strategyViewKey(JSON.stringify([buy.key, sell.key, available]));
-    candidates.push({ id, fills: [buy, sell], contracts, grouping: buy.parentOrderKey && buy.parentOrderKey === sell.parentOrderKey && buy.legOrderKey && sell.legOrderKey ? "broker_link" : "user_confirmation", coverage: snapshot.coverage, requestRevision: snapshot.requestRevision });
+    candidates.push({ id, strategyType, fills: [buy, sell], contracts, grouping: buy.parentOrderKey && buy.parentOrderKey === sell.parentOrderKey && buy.legOrderKey && sell.legOrderKey ? "broker_link" : "user_confirmation", coverage: snapshot.coverage, requestRevision: snapshot.requestRevision });
   }
   return candidates;
 }

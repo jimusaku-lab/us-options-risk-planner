@@ -1,5 +1,6 @@
 import type { OptionEntryExecution, OptionLeg, TradeSimulation } from "@/types/domain";
 import { allocateMoney } from "./spreadCashflows";
+import { classifyVerticalSpreadLegs, type VerticalSpreadType } from "./verticalSpread";
 
 /** Broker identities are internal, never rendered as labels. Different entity
  * kinds are deliberately distinct even when a provider reuses the same ID. */
@@ -17,7 +18,7 @@ export function strategyViewKey(value: string): string {
 export type StrategyFill = {
   key: string; revision: string; aliases: string[];
   identity: StrategyIdentity;
-  contract: { underlying: string; instrument: string; ticker: string; optionType: "put"; side: "buy" | "sell"; strike: number; expiry: string; multiplier: number; currency: "USD"; settlement: string; deliverable: string; underlyingCategory?: string; specificationSource?: string };
+  contract: { underlying: string; instrument: string; ticker: string; optionType: "call" | "put"; side: "buy" | "sell"; strike: number; expiry: string; multiplier: number; currency: "USD"; settlement: string; deliverable: string; underlyingCategory?: string; specificationSource?: string };
   brokerPositionId?: string;
   /** A previously saved execution stays at its canonical location. */
   existing?: { simulationId: string; executionId: string; legId: string };
@@ -29,7 +30,7 @@ export type StrategyAllocation = { strategyId: string; legId: string; eventKey: 
 export type StrategyLedger = { schema: 1; revision: number; fills: StrategyFill[]; allocations: StrategyAllocation[]; commits: string[] };
 export const emptyStrategyLedger = (): StrategyLedger => ({ schema: 1, revision: 0, fills: [], allocations: [], commits: [] });
 export type StrategyCoverage = { source: string; requestedFrom?: string; requestedTo?: string; completedPages: number; asOf: string; status: "complete" | "partial" | "failed" | "pending" };
-export type StrategyCandidate = { id: string; fills: [StrategyFill, StrategyFill]; contracts: number; grouping: "broker_link" | "user_confirmation"; coverage: StrategyCoverage[]; requestRevision: number };
+export type StrategyCandidate = { id: string; strategyType?: VerticalSpreadType; fills: [StrategyFill, StrategyFill]; contracts: number; grouping: "broker_link" | "user_confirmation"; coverage: StrategyCoverage[]; requestRevision: number };
 export type PreparedStrategyImport = { candidate: StrategyCandidate; ledgerRevision: number; sourceFingerprint: string };
 export function strategyContractState(candidate: StrategyCandidate): "verified" | "unknown" | "incompatible" {
   const [a, b] = candidate.fills.map(fill => fill.contract);
@@ -47,7 +48,10 @@ export function validateStrategyCandidate(candidate: StrategyCandidate, ledger: 
   if (!candidate.coverage.length || candidate.coverage.some(source => source.status !== "complete" || source.completedPages < 1 || !source.asOf)) reasons.push("今回の取得は未完了。注文・開始約定・現在建玉の取得を完了してください");
   const a = buy.contract, b = sell.contract;
   if (buy.key === sell.key || buy.identity.accountKey !== sell.identity.accountKey || buy.identity.environment !== sell.identity.environment || buy.identity.broker !== sell.identity.broker) reasons.push("口座・約定の同一性が不適合です");
-  if (!a.underlying || a.underlying !== b.underlying || a.instrument === b.instrument || a.optionType !== "put" || b.optionType !== "put" || a.side !== "buy" || b.side !== "sell" || !(a.strike > b.strike) || !a.expiry || a.expiry !== b.expiry || a.currency !== b.currency || a.currency !== "USD" || strategyContractState(candidate) === "incompatible" || a.multiplier !== b.multiplier || !Number.isInteger(a.multiplier) || a.multiplier <= 0) reasons.push("原資産・契約・方向・満期・倍率・決済仕様が不適合です");
+  const classifiedType = classifyVerticalSpreadLegs([{ type: a.optionType, side: a.side, strikeUSD: a.strike, expiryDate: a.expiry, quantity: candidate.contracts, contractSize: a.multiplier }, { type: b.optionType, side: b.side, strikeUSD: b.strike, expiryDate: b.expiry, quantity: candidate.contracts, contractSize: b.multiplier }]);
+  const inferredType = candidate.strategyType ?? classifiedType;
+  if (candidate.strategyType && candidate.strategyType !== classifiedType) reasons.push("候補戦略と脚の契約構成が一致しません");
+  if (!a.underlying || a.underlying !== b.underlying || a.instrument === b.instrument || !inferredType || !classifiedType || !a.expiry || a.expiry !== b.expiry || a.currency !== b.currency || a.currency !== "USD" || strategyContractState(candidate) === "incompatible" || a.multiplier !== b.multiplier || !Number.isInteger(a.multiplier) || a.multiplier <= 0) reasons.push("原資産・契約・方向・満期・倍率・決済仕様が不適合です");
   if (!Number.isInteger(candidate.contracts) || candidate.contracts <= 0) reasons.push("正の整数組数を確認してください");
   for (const fill of candidate.fills) {
     const execution = resolveStrategyFillExecution(fill, simulations);
@@ -98,7 +102,7 @@ export function materializeStrategyEntries(strategyId: string, ledger: StrategyL
     if (!fill || !source) continue;
     const prior = ledger.allocations.slice(0, ledger.allocations.indexOf(allocation)).filter(item => item.eventKey === allocation.eventKey).reduce((sum, item) => sum + item.contracts, 0);
     const c = fill.contract;
-    legs.push({ id: allocation.legId, type: "put", side: c.side, strikeUSD: c.strike, premiumUSD: source.fillPriceUSD, quantity: allocation.contracts, contractSize: c.multiplier, expiryDate: c.expiry, saxoAccountKey: fill.identity.accountKey,
+    legs.push({ id: allocation.legId, type: c.optionType, side: c.side, strikeUSD: c.strike, premiumUSD: source.fillPriceUSD, quantity: allocation.contracts, contractSize: c.multiplier, expiryDate: c.expiry, saxoAccountKey: fill.identity.accountKey,
       saxoUic: /^\d+$/.test(c.instrument) ? Number(c.instrument) : undefined, saxoPositionId: fill.brokerPositionId });
     entries.push({ ...source, id: fill.key, legId: allocation.legId, contracts: allocation.contracts, commissionUSD: source.commissionUSD === undefined ? undefined : allocateMoney(source.commissionUSD, source.contracts, prior, allocation.contracts) });
   }

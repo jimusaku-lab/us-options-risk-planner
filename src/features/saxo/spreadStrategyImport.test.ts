@@ -35,6 +35,12 @@ describe("R2 current holding / opening lot safety", () => {
     expect(getSpreadImportIssues(negative)[0]).toMatchObject({ code: "opening_accounting" });
   });
   it("accepts the clean first 1:1 import", () => expect(candidates(fixture())).toHaveLength(1));
+  it("keeps matching call opening history through normalization and classifies a bull call parent", () => {
+    const snapshot = fixture();
+    snapshot.positions.forEach((position, index) => { position.optionType = "call"; position.strike = index ? 110 : 100; });
+    snapshot.history.forEach((trade, index) => { trade.optionType = "call"; trade.strike = index ? 110 : 100; });
+    expect(candidates(snapshot)).toMatchObject([{ strategyType: "bull_call_spread" }]);
+  });
   it("does not offer a closed historical lot after the same instrument was reopened", () => {
     const snapshot = fixture();
     snapshot.history.push({ ...snapshot.history[0], id: "TEST-old-open", tradeId: "TEST-old-open", tradeDate: "2026-09-01" }, { ...snapshot.history[0], id: "TEST-old-close", tradeId: "TEST-old-close", tradeDate: "2026-09-02", openClose: "close", buySell: "sell" });

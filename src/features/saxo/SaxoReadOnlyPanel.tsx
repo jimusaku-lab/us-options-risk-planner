@@ -1,4 +1,6 @@
 import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { getStrategyLabel } from "@/domain/strategyLabels";
+import { isManagedTwoLegStrategy } from "@/domain/verticalSpread";
 import { SpreadStrategyCandidates } from "./SpreadStrategyCandidates";
 import { getPotentialSpreadPositionIds, getSpreadImportIssueGroups, reconcileStrategyCandidates, type SpreadImportIssue } from "./spreadStrategyImport";
 import { emptyStrategyLedger, type PreparedStrategyImport, type StrategyCandidate, type StrategyCoverage, type StrategyLedger } from "@/domain/strategyLedger";
@@ -2136,6 +2138,7 @@ type HistorySummaryAction = {
   reason?: string;
   spreadCloseBatch?: {
     simulationId: string;
+    strategyLabel?: string;
     actions: Array<{ item: SaxoHistoryDiscoveryItem; mode: "create" | "return" }>;
   };
 };
@@ -2248,7 +2251,7 @@ function HistorySummaryActionRow({
   const createLabel = action.target === "close" ? `${symbol}の決済内容を確認する` : action.target === "entry" ? `${symbol}の建玉開始内容を確認する` : action.target === "assignment" ? `${symbol}の権利行使内容を確認する` : `${symbol}の株式譲渡を確認する`;
   const returnLabel = action.target === "close" ? `${symbol}の決済確認へ戻る` : action.target === "entry" ? `${symbol}の建玉開始確認へ戻る` : action.target === "assignment" ? `${symbol}の権利行使確認へ戻る` : `${symbol}の株式譲渡を確認する`;
   const spreadBatch = action.spreadCloseBatch;
-  const effectiveTitle = spreadBatch ? `${symbol} / ベア・プット2脚 / 決済` : title;
+  const effectiveTitle = spreadBatch ? `${symbol} / ${spreadBatch.strategyLabel ?? "2脚戦略"} / 決済` : title;
   const effectiveLabel = spreadBatch ? `${symbol}の2脚の決済内容を確認する` : action.mode === "create" ? createLabel : returnLabel;
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-2 text-xs">
@@ -5263,7 +5266,7 @@ export function createReflectionSummary({
   for (const action of rawHistoryActions) {
     if (action.target !== "close" || action.mode === "review") continue;
     const match = resolveSaxoHistoryOptionLegMatch(simulations, action.item, "close", undefined, { allowCloseAccountMismatch: true });
-    if (!match || match.simulation.strategyType !== "bear_put_spread") continue;
+    if (!match || !isManagedTwoLegStrategy(match.simulation)) continue;
     const group = spreadCloseGroups.get(match.simulation.id) ?? [];
     group.push(action as HistorySummaryAction & { mode: "create" | "return" });
     spreadCloseGroups.set(match.simulation.id, group);
@@ -5271,7 +5274,7 @@ export function createReflectionSummary({
   const groupedHistoryIds = new Set(Array.from(spreadCloseGroups.values()).flatMap((actions) => actions.map((action) => action.item.id)));
   const spreadCloseBatchActions: HistorySummaryAction[] = Array.from(spreadCloseGroups.entries()).map(([simulationId, actions]) => {
     const representative = actions.find((action) => action.mode === "create") ?? actions[0];
-    return { ...representative, spreadCloseBatch: { simulationId, actions: actions.map(({ item, mode }) => ({ item, mode })) } };
+    return { ...representative, spreadCloseBatch: { simulationId, strategyLabel: getStrategyLabel(simulations.find((simulation) => simulation.id === simulationId)?.strategyType ?? "custom"), actions: actions.map(({ item, mode }) => ({ item, mode })) } };
   });
   const historyActions: HistorySummaryAction[] = [
     ...spreadCloseBatchActions,
@@ -5301,7 +5304,7 @@ export function createReflectionSummary({
   const positionRequiredCount = newPositions + unknownPositions + pendingStockTransferCandidateRows.length + spreadRequiredCount;
   const requiredActionCount = accountActionCount + positionRequiredCount + historyRequiredCount + orderActions.length;
   const primaryAction: ReflectionPendingAction | undefined = spreadCandidates[0]
-    ? { kind: "spread", label: `${spreadCandidates[0].fills[0].contract.ticker} ベア・プットの2脚を確認`, actionLabel: `${spreadCandidates[0].fills[0].contract.ticker} ベア・プット：2脚を確認` }
+    ? { kind: "spread", label: `${spreadCandidates[0].fills[0].contract.ticker} ${getStrategyLabel(spreadCandidates[0].strategyType ?? "custom")}の2脚を確認`, actionLabel: `${spreadCandidates[0].fills[0].contract.ticker} ${getStrategyLabel(spreadCandidates[0].strategyType ?? "custom")}：2脚を確認` }
     : hasNewPositionCandidates
     ? { kind: "position", label: "建玉候補を確認", actionLabel: "建玉候補を確認して反映へ" }
     : positionNeedsAction
@@ -5317,7 +5320,7 @@ export function createReflectionSummary({
           ? {
               kind: "history",
               action: historyActions[0],
-              label: historyActions[0].spreadCloseBatch ? `${historyActions[0].item.symbol ?? "対象銘柄"}のベア・プット2脚を確認` : `${historyActions[0].item.symbol ?? "履歴候補"}の履歴候補を確認`,
+              label: historyActions[0].spreadCloseBatch ? `${historyActions[0].item.symbol ?? "対象銘柄"}の${historyActions[0].spreadCloseBatch.strategyLabel ?? "2脚戦略"}を確認` : `${historyActions[0].item.symbol ?? "履歴候補"}の履歴候補を確認`,
               actionLabel: historyActions[0].spreadCloseBatch ? `${historyActions[0].item.symbol ?? "対象銘柄"}の2脚の決済内容を確認する` : historyActions[0].mode === "return" ? "履歴候補の確認へ戻る" : "履歴候補を確認して反映へ",
             }
           : accountLines.find((line) => line.actionable)
@@ -5350,7 +5353,7 @@ export function createReflectionSummary({
           remaining: `${requiredActionCount}操作`,
         };
   const nextActionDetail = spreadCandidates.length > 0
-    ? `次はベア・プット候補を確認: 2脚の取得済み約定と費用を確認してから、1つの戦略として反映します。`
+    ? `次は2脚戦略候補を確認: 2脚の取得済み約定と費用を確認してから、1つの戦略として反映します。`
     : hasNewPositionCandidates
     ? `次は建玉候補を反映: 建玉候補を開き、各候補の「建玉入力へ下書き反映」を押してください。履歴候補は建玉反映後の補完確認です。`
     : positionNeedsAction
@@ -5370,7 +5373,7 @@ export function createReflectionSummary({
             ? pendingStockTransferCandidateRows.length > 0
               ? `P→N移管候補${stockTransferCandidates}件${recordedStockTransferCandidateRows.length > 0 ? ` / 照合済み現在保有${recordedStockTransferCandidateRows.length}件` : ""}${regularPositionRows.length > 0 ? ` / 通常建玉候補${regularPositionRows.length}件` : ""}`
               : `照合済みの現在保有確認${recordedStockTransferCandidateRows.length}件${regularPositionRows.length > 0 ? ` / 通常建玉候補${regularPositionRows.length}件` : ""}`
-            : `新規${newPositions}件 / ベア・プット候補${spreadRequiredCount}件 / 既存候補${matchedPositions}件 / 要確認${unknownPositions}件${spreadIssues.length ? ` / 取込停止${spreadIssues.length}件` : ""}`,
+            : `新規${newPositions}件 / 2脚戦略候補${spreadRequiredCount}件 / 既存候補${matchedPositions}件 / 要確認${unknownPositions}件${spreadIssues.length ? ` / 取込停止${spreadIssues.length}件` : ""}`,
       actionable: positionActionable,
       actionLabel: hasNewPositionCandidates
         ? "建玉候補を確認して反映"

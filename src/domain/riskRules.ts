@@ -9,7 +9,8 @@ import {
 } from "./calculations";
 import { getExitDeadlineInfo, getExitOrderLossAmount, getExitOrderPlanForLeg, getExitOrderStopValue, isAvoidAssignmentPut } from "./exitOrderPlan";
 import { hasUnconfirmedOptionEntryExecutions } from "./optionEntryExecutions";
-import { hasConfirmedBuybackCloseExecution, hasConfirmedExpiredCloseExecution, hasUnconfirmedCloseExecutionDraft } from "./optionCloseExecutions";
+import { getOptionLegCloseProgress, hasConfirmedBuybackCloseExecution, hasConfirmedExpiredCloseExecution, hasUnconfirmedCloseExecutionDraft } from "./optionCloseExecutions";
+import { isVerticalSpreadType } from "./verticalSpread";
 
 function hasAvoidPut(simulation: TradeSimulation): boolean {
   return isAvoidAssignmentPut(simulation);
@@ -74,9 +75,12 @@ export function generateRiskWarnings(
   options: { stockTransferRecorded?: boolean; coveredCallCoverage?: CoveredCallCoverageResolution } = {},
 ): RiskWarning[] {
   const warnings: RiskWarning[] = [];
-  const uncoveredCallShares = options.coveredCallCoverage
+  // Vertical short calls are protected by their paired long calls, not stock.
+  // Do not feed them through covered-call or wheel inventory diagnostics.
+  const usesStockCallCoverage = !isVerticalSpreadType(simulation.strategyType);
+  const uncoveredCallShares = usesStockCallCoverage && options.coveredCallCoverage
     ? options.coveredCallCoverage.missingShares
-    : calculateUncoveredCallShares(simulation);
+    : usesStockCallCoverage ? calculateUncoveredCallShares(simulation) : 0;
   const avoidPut = hasAvoidPut(simulation);
 
   if (hasUnconfirmedOptionEntryExecutions(simulation)) {
@@ -215,6 +219,29 @@ export function generateRiskWarnings(
       blocking: simulation.beginnerMode ?? true,
       ...(firstCall ? closeDecisionAction(simulation, firstCall) : {}),
     });
+  }
+
+  // A vertical is not a covered call, but a remaining short call must stay
+  // paired with its long call.  Flag an actual option-protection imbalance,
+  // never a stock or wheel shortage.
+  if (isVerticalSpreadType(simulation.strategyType)) {
+    const progress = getOptionLegCloseProgress(simulation);
+    const remainingLongCall = progress.legs.filter((item) => {
+      const leg = simulation.optionLegs.find((candidate) => candidate.id === item.legId);
+      return leg?.type === "call" && leg.side === "buy" && (item.remainingContracts ?? 0) > 0;
+    }).reduce((sum, item) => sum + (item.remainingContracts ?? 0), 0);
+    const exposedShortCall = simulation.optionLegs.map((leg) => ({ leg, remaining: progress.legs.find((item) => item.legId === leg.id)?.remainingContracts ?? leg.quantity }))
+      .find(({ leg, remaining }) => leg.type === "call" && leg.side === "sell" && remaining > 0);
+    if (exposedShortCall && remainingLongCall < exposedShortCall.remaining) {
+      warnings.push({
+        id: `vertical-short-call-protection-missing-${exposedShortCall.leg.id}`,
+        severity: "danger",
+        title: "スプレッドのC買い保護が不足しています",
+        message: "残存するC売りを保護するC買い脚が確認できません。株式カバーではなく、2脚の決済実績と残数量を確認してください。",
+        blocking: true,
+        ...closeDecisionAction(simulation, exposedShortCall.leg),
+      });
+    }
   }
 
   if (

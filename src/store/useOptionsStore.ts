@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { commitStrategyImport as commitStrategyLedgerImport, emptyStrategyLedger, materializeStrategyEntries, mergeStrategyViewUpdates, projectStrategyWorkspace, strategyContractState, type PreparedStrategyImport, type StrategyLedger } from "@/domain/strategyLedger";
+import { classifyVerticalSpreadLegs, getVerticalSpreadDefinition } from "@/domain/verticalSpread";
 import type {
   AccountCashAdjustment,
   AccountState,
@@ -1029,7 +1030,7 @@ export const useOptionsStore = create<OptionsStore>((set, get) => ({
       const leg = parent.optionLegs.find(item => item.id === allocation.legId)!;
       const sourceId = `${id}:source:${leg.id}`;
       sources.push({ ...parent, id: sourceId, strategyGroupId: undefined, strategyContractVerification: undefined,
-        strategyType: leg.side === "buy" ? "long_put" : "short_put", name: `${parent.ticker} ${leg.side === "buy" ? "P買い" : "P売り"}`,
+        strategyType: leg.side === "buy" ? (leg.type === "call" ? "long_call" : "long_put") : (leg.type === "put" ? "short_put" : "covered_call"), name: `${parent.ticker} ${leg.type === "call" ? "C" : "P"}${leg.side === "buy" ? "買い" : "売り"}`,
         optionLegs: [{ ...leg, quantity: fill.execution.contracts }], optionEntryExecutions: [{ ...fill.execution, legId: leg.id }], optionCloseExecutions: [] });
       return { ...fill, existing: { simulationId: sourceId, executionId: fill.execution.id, legId: leg.id }, execution: undefined };
     });
@@ -1055,9 +1056,12 @@ export const useOptionsStore = create<OptionsStore>((set, get) => ({
       if (!committed.changed) return { strategyId: committed.strategyId };
       const projected = materializeStrategyEntries(committed.strategyId, committed.ledger, state.simulationsByWorkspace[workspace]);
       const contract = prepared.candidate.fills[0].contract;
+      const inferredStrategyType = prepared.candidate.strategyType ?? classifyVerticalSpreadLegs(projected.legs);
+      const definition = getVerticalSpreadDefinition(inferredStrategyType);
+      if (!definition) return { reasons: ["垂直スプレッドの2脚契約を確認できません"] };
       const parent: TradeSimulation = { ...createBlankSimulation(workspace, state.settings), id: committed.strategyId, strategyGroupId: committed.strategyId,
         strategyContractVerification: { state: strategyContractState(prepared.candidate) },
-        name: `${contract.ticker} Bear Put Spread`, ticker: contract.ticker, strategyType: "bear_put_spread", status: "open", accountCode: "N", accountCurrency: "USD", accountEnvironment: "PROD_N_USD_SETTLEMENT",
+        name: `${contract.ticker} ${definition.label} Spread`, ticker: contract.ticker, strategyType: inferredStrategyType!, status: "open", accountCode: "N", accountCurrency: "USD", accountEnvironment: "PROD_N_USD_SETTLEMENT",
         entryDate: projected.entries[0].tradeDate, expiryDate: contract.expiry, optionLegs: projected.legs, optionEntryExecutions: projected.entries, optionCloseExecutions: [], stockPosition: null,
         currentPriceUSD: Number.NaN, fxRateJPY: Number.NaN, brokerMarginJPY: Number.NaN };
       const simulations = [parent, ...state.simulationsByWorkspace[workspace]];

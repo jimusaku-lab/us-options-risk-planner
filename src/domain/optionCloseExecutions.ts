@@ -10,6 +10,7 @@ import {
 } from "./closeCommissionStandard";
 import type { SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 import { moneyProduct, spreadCloseMoney } from "./spreadCashflows";
+import { isVerticalSpreadType } from "./verticalSpread";
 
 const CONTRACT_SIZE = 100;
 
@@ -47,7 +48,7 @@ export type SaxoHistoryRealizedPnlAutofill =
     };
 
 export function getOptionCloseExecutions(simulation: TradeSimulation): OptionCloseExecution[] {
-  if (simulation.strategyType === "bear_put_spread") {
+  if (isVerticalSpreadType(simulation.strategyType)) {
     const executions = simulation.optionCloseExecutions ?? [];
     const superseded = new Set(executions.filter(item => item.confirmed).flatMap(item => item.supersedesId ? [item.supersedesId] : []));
     return executions.filter(item => !item.voided && !superseded.has(item.id));
@@ -265,7 +266,7 @@ export function getOptionCloseCompletion(simulation: TradeSimulation): OptionClo
  */
 export function getClosedSyntheticLegHistoryItems(simulations: TradeSimulation[]): ClosedSyntheticLegHistoryItem[] {
   return simulations.flatMap((simulation) => {
-    if (!["synthetic_forward", "bear_put_spread"].includes(simulation.strategyType) || !["open", "entry_confirmation"].includes(simulation.status)) return [];
+    if (!(simulation.strategyType === "synthetic_forward" || isVerticalSpreadType(simulation.strategyType)) || !["open", "entry_confirmation"].includes(simulation.status)) return [];
     const completion = getOptionCloseCompletion(simulation);
     const progress = getOptionLegCloseProgress(simulation);
     if (completion.state !== "partial" || progress.invalidReason) return [];
@@ -741,7 +742,7 @@ export function calculateOptionCloseExecutionResult(
 ): OptionCloseExecutionResult | null {
   const leg = simulation.optionLegs.find((item) => item.id === execution.legId);
   if (!leg) return null;
-  if (simulation.strategyType === "bear_put_spread") {
+  if (isVerticalSpreadType(simulation.strategyType)) {
     const evidence = spreadCloseMoney(simulation, execution);
     if (!evidence || getOptionLegCloseProgress(simulation).invalidReason) return null;
     const days = evidence.entryDate && execution.closeDate ? calculateHoldingDays(evidence.entryDate, execution.closeDate) : undefined;

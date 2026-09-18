@@ -1,7 +1,9 @@
 import type { OptionLeg, TradeSimulation } from "@/types/domain";
 import { calculateBearPutSpreadEstimate } from "@/domain/bearPutSpread";
+import { calculateVerticalSpreadEstimate, getVerticalSpreadDefinition } from "@/domain/verticalSpread";
 import { getOptionLegCloseProgress } from "@/domain/optionCloseExecutions";
 import { resolveCloseCommissionUSD, SAXO_CLOSE_COMMISSION_CONFIRMED_AT, SAXO_CLOSE_COMMISSION_SOURCE } from "@/domain/closeCommissionStandard";
+import { spreadEntryBasis } from "@/domain/spreadCashflows";
 import { formatPct, formatUSD } from "@/lib/format";
 
 const amount = (value: number | undefined) => value !== undefined && Number.isFinite(value) ? formatUSD(value) : "未確認";
@@ -20,6 +22,7 @@ function strike(value: number): string {
 }
 
 export function SpreadPerformancePreview({ simulation, editable = false, onChange, onDraft, onUngroup, anchor = false }: { simulation: TradeSimulation; editable?: boolean; onChange?: (simulation: TradeSimulation) => void; onDraft?: (leg: OptionLeg) => void; onUngroup?: () => void; anchor?: boolean }) {
+  if (simulation.strategyType !== "bear_put_spread") return <GenericVerticalSpreadPreview simulation={simulation} anchor={anchor} />;
   const estimate = calculateBearPutSpreadEstimate(simulation);
   const progress = getOptionLegCloseProgress(simulation);
   const available = estimate.kind === "available" ? estimate : undefined;
@@ -82,5 +85,24 @@ export function SpreadPerformancePreview({ simulation, editable = false, onChang
       <p className="mt-2 text-xs">参考年率 {available?.annualizedReturnPct !== undefined && Number.isFinite(available.annualizedReturnPct) ? formatPct(available.annualizedReturnPct) : partial || closed ? "対象外（分割取引・日付未確認）" : "未計算"}。取得元・記録時点は各脚の明細に表示しています。</p>
       {onUngroup ? <button type="button" disabled={Boolean(simulation.optionCloseExecutions?.length)} className="mt-2 rounded border px-2 py-1 text-xs disabled:opacity-50" onClick={onUngroup}>組み合わせを解除（約定は残す）</button> : null}
     </details>
+  </section>;
+}
+
+function GenericVerticalSpreadPreview({ simulation, anchor }: { simulation: TradeSimulation; anchor: boolean }) {
+  const definition = getVerticalSpreadDefinition(simulation.strategyType);
+  const estimate = calculateVerticalSpreadEstimate(simulation);
+  const progress = getOptionLegCloseProgress(simulation);
+  const entryBasis = spreadEntryBasis(simulation);
+  const entryCashflowLabel = entryBasis.state !== "known"
+    ? "建玉時ネット額 未確認"
+    : entryBasis.value >= 0
+      ? `建玉時の手数料込み支払額 ${amount(entryBasis.value)}`
+      : `建玉時の手数料差引受取額 ${amount(Math.abs(entryBasis.value))}`;
+  return <section id={anchor ? `spread-close-preview-${simulation.id}` : undefined} tabIndex={anchor ? -1 : undefined} aria-label="戦略の決済プレビュー" className="min-w-0 rounded border border-indigo-200 bg-indigo-50 p-3 focus:outline-none focus:ring-2 focus:ring-indigo-600">
+    <h3 className="text-sm font-bold">{definition?.label ?? "2脚戦略"}の内訳</h3>
+    <p className="mt-1 text-xs text-slate-700">{simulation.optionLegs.map((leg) => `${leg.type === "call" ? "C" : "P"}${leg.side === "buy" ? "買い" : "売り"} ${strike(leg.strikeUSD)} ${leg.quantity}枚`).join(" ／ ")} ／ 満期 {simulation.expiryDate}</p>
+    <p className="mt-1 text-xs text-slate-600">{entryCashflowLabel}</p>
+    {estimate.kind === "available" ? <><p className="mt-2 text-sm font-bold">概算損益 {signedAmount(estimate.estimatedPnlUSD)}{estimate.periodReturnPct !== undefined ? ` / 期間損益率 ${formatPct(estimate.periodReturnPct)}` : " / 期間損益率 未計算"}</p><p className="text-xs text-slate-600">現在決済年率 {estimate.annualizedReturnPct === undefined ? "未計算" : formatPct(estimate.annualizedReturnPct)}{estimate.rateMissingReason ? ` / ${estimate.rateMissingReason}` : ""}</p></> : <p className="mt-2 text-sm text-amber-800">{estimate.reasons.join(" / ")}</p>}
+    <details className="mt-3 rounded border border-indigo-100 bg-white/70 px-3 py-2"><summary className="cursor-pointer text-xs font-bold">脚別の現在決済根拠</summary><div className="mt-2 grid gap-2 md:grid-cols-2">{simulation.optionLegs.map((leg) => { const remaining = progress.legs.find((item) => item.legId === leg.id)?.remainingContracts; const price = leg.closePlan?.closePriceUSD ?? leg.closeCostUSD; const fee = remaining && remaining > 0 ? resolveCloseCommissionUSD(simulation, leg, remaining) : undefined; return <div key={leg.id} className="rounded bg-white p-2 text-xs"><p className="font-bold">{leg.type === "call" ? "C" : "P"}{leg.side === "buy" ? "買い" : "売り"} {strike(leg.strikeUSD)}</p><p>残り {remaining ?? "未確認"}枚 / 決済参考価格 {amount(price)} / 決済費用 {fee?.kind === "resolved" ? amount(fee.amountUSD) : remaining === 0 ? "決済済み" : "未確認"}</p><p className="text-slate-500">{spreadPriceEvidenceLabel(leg)}</p></div>; })}</div></details>
   </section>;
 }

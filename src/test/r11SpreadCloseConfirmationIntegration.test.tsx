@@ -68,7 +68,7 @@ describe("SAXO-SPREAD-CLOSE-CONFIRM-20260915-R11 App integration", () => {
     expect(JSON.stringify(useOptionsStore.getState().simulationsByWorkspace)).toBe(before);
 
     expect(within(shortCard).queryByRole("button", { name: /正式保存/ })).not.toBeInTheDocument();
-    const review = screen.getByRole("region", { name: "ベア・プット2脚の決済確認" });
+    const review = screen.getByRole("region", { name: "2脚戦略の決済確認" });
     expect(within(review).getByText("P100買い（売り決済）")).toBeInTheDocument();
     expect(within(review).getByText("P90売り（買い決済）")).toBeInTheDocument();
     fireEvent.click(within(review).getByRole("button", { name: "2脚の決済内容を確認して正式保存" }));

@@ -20,7 +20,9 @@ import { formatCurrentPriceStrikeDifference, formatCurrentPriceStrikePercent, ge
 import { getBulkApplicableTargetIds, getBulkOptionPricePreviewCounts, type CurrentOptionPricePreviewRow, type CurrentStockPricePreviewRow } from "@/domain/bulkOptionPrice";
 import { getSaxoExitOrderReviews, type SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
 import { calculateBearPutSpreadEstimate, getBearPutSpreadLifecycle } from "@/domain/bearPutSpread";
+import { calculateVerticalSpreadEstimate, getVerticalSpreadDefinition } from "@/domain/verticalSpread";
 import { calculateHistoryCashflowDisplay } from "@/domain/historyCashflowDisplay";
+import { spreadEntryBasis } from "@/domain/spreadCashflows";
 
 const statusClassName = {
   planned: "bg-sky-100 text-sky-800",
@@ -50,7 +52,7 @@ function CurrentEstimateMetric({ label, annualizedReturnPct, profitLabel = "概�
   return <span className="block" data-testid="current-estimate-metric">
     <span className="block text-[11px] font-bold leading-4 text-slate-500">{label}</span>
     {annualizedReturnPct === undefined ? <span className="block text-base font-extrabold leading-5 text-slate-500">未計算</span> : <span className={`block text-base font-extrabold leading-5 ${tone}`}>{annualizedReturnPct >= 0 ? "+" : ""}{formatPct(annualizedReturnPct)}</span>}
-    {profitAmount !== undefined && profitPct !== undefined ? <span className={`block text-[11px] font-semibold leading-4 ${profitPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>{profitLabel} {profitAmount} / {profitPct >= 0 ? "+" : ""}{formatPct(profitPct)}</span> : missingReason ? <span className="block text-[11px] font-medium leading-4 text-slate-500">{missingReason}</span> : null}
+    {profitAmount !== undefined ? <span className={`block text-[11px] font-semibold leading-4 ${profitPct !== undefined && profitPct < 0 ? "text-red-700" : "text-emerald-700"}`}>{profitLabel} {profitAmount}{profitPct !== undefined ? <> / {profitPct >= 0 ? "+" : ""}{formatPct(profitPct)}</> : null}</span> : missingReason ? <span className="block text-[11px] font-medium leading-4 text-slate-500">{missingReason}</span> : null}
     {note ? <span className="block text-[10px] font-normal leading-4 text-slate-500">{note}</span> : null}
     {children}
   </span>;
@@ -389,6 +391,11 @@ export function Dashboard({
               const bearPutEstimate = !isHistoryRow && simulation.strategyType === "bear_put_spread"
                 ? calculateBearPutSpreadEstimate(simulationWithAccount)
                 : undefined;
+              const verticalDefinition = getVerticalSpreadDefinition(simulation.strategyType);
+              const verticalOpeningBasis = verticalDefinition ? spreadEntryBasis(simulationWithAccount) : undefined;
+              const verticalEstimate = !isHistoryRow && verticalDefinition && simulation.strategyType !== "bear_put_spread"
+                ? calculateVerticalSpreadEstimate(simulationWithAccount)
+                : undefined;
               const bearPutLifecycle = simulation.strategyType === "bear_put_spread" ? getBearPutSpreadLifecycle(simulationWithAccount) : undefined;
               const bearPutLong = simulation.strategyType === "bear_put_spread" ? simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "buy") : undefined;
               const bearPutShort = simulation.strategyType === "bear_put_spread" ? simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell") : undefined;
@@ -575,8 +582,9 @@ export function Dashboard({
                     </span>
                   </td>
                   <td className="py-3 pr-3 text-slate-700">
-                    <div>{simulation.strategyType === "bear_put_spread" ? "ベア・プット" : getStrategyLabel(simulation.strategyType)}</div>
+                    <div>{simulation.strategyType === "bear_put_spread" ? "ベア・プット" : verticalDefinition ? `${verticalDefinition.label}・スプレッド` : getStrategyLabel(simulation.strategyType)}</div>
                     {simulation.strategyType === "bear_put_spread" ? <p className="text-[11px] text-slate-500">P{formatCompactStrike(bearPutLong?.strikeUSD)}買い／P{formatCompactStrike(bearPutShort?.strikeUSD)}売り・{bearPutPairs ?? "未確認"}組</p> : null}
+                    {verticalDefinition && simulation.strategyType !== "bear_put_spread" ? <div className="mt-1 text-xs font-semibold text-indigo-700">{verticalDefinition.optionType === "call" ? "C" : "P"}買い／{verticalDefinition.optionType === "call" ? "C" : "P"}売り・2脚一体管理</div> : null}
                     {bearPutLifecycle ? <div className="mt-1 text-xs font-semibold text-indigo-700">{bearPutLifecycle.label}</div> : null}
                     {isCompositeOptionStrategy(simulation) ? <div className="mt-1 text-xs font-semibold text-indigo-700">C買い {callLeg?.quantity ?? 0} / P売り {putLeg?.quantity ?? 0}</div> : null}
                     {simulation.strategyType === "synthetic_forward" ? (
@@ -627,6 +635,11 @@ export function Dashboard({
                           {bearPutEstimate.entryAllInDebitUSD !== undefined ? formatUSD(bearPutEstimate.entryAllInDebitUSD) : "未確認"}
                         </span>
                       </>
+                    ) : verticalEstimate && !isHistoryRow ? (
+                      <>
+                        <span className="block text-[11px] font-bold text-slate-500">{verticalOpeningBasis?.state === "known" ? verticalOpeningBasis.value >= 0 ? "建玉時の手数料込み支払額" : "建玉時の手数料差引受取額" : "建玉時の受払"}</span>
+                        <span className="block text-slate-950">{verticalOpeningBasis?.state === "known" ? formatUSD(Math.abs(verticalOpeningBasis.value)) : "未確認"}</span>
+                      </>
                     ) : longOptionDisplay && !isHistoryRow ? (
                       <>
                         <span className="block text-[11px] font-bold text-slate-500">{premiumDisplay.basis === "confirmed" ? "支払プレミアム" : "予定の支払プレミアム"}</span>
@@ -669,6 +682,12 @@ export function Dashboard({
                         <span className="block text-[11px] font-bold text-slate-500">実績分母 <span className="font-normal">（開始時手数料込み純支払）</span></span>
                         {bearPutEstimate.entryAllInDebitUSD !== undefined ? <span className="block text-slate-950">{formatUSD(bearPutEstimate.entryAllInDebitUSD)}</span> : <span className="block text-slate-500">未確認</span>}
                         {bearPutEstimate.kind === "available" ? <span className={`block text-[11px] font-semibold ${bearPutEstimate.periodReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>保有期間損益率 {bearPutEstimate.periodReturnPct >= 0 ? "+" : ""}{formatPct(bearPutEstimate.periodReturnPct)}</span> : <span className="block text-[10px] text-slate-500">保有期間損益率 未計算 / {bearPutEstimate.reasons.join(" / ")}</span>}
+                      </>
+                    ) : verticalEstimate && !isHistoryRow ? (
+                      <>
+                        <span className="block text-[11px] font-bold text-slate-500">実績分母</span>
+                        <span className="block text-slate-950">{verticalEstimate.kind === "available" && verticalEstimate.denominatorUSD !== undefined ? formatUSD(verticalEstimate.denominatorUSD) : "未計算"}</span>
+                        {verticalEstimate.kind === "available" && verticalEstimate.periodReturnPct !== undefined ? <span className={`block text-[11px] font-semibold ${verticalEstimate.periodReturnPct >= 0 ? "text-emerald-700" : "text-red-700"}`}>保有期間損益率 {verticalEstimate.periodReturnPct >= 0 ? "+" : ""}{formatPct(verticalEstimate.periodReturnPct)}</span> : <span className="block text-[10px] text-slate-500">保有期間損益率 未計算 / {verticalEstimate.kind === "available" ? verticalEstimate.rateMissingReason : verticalEstimate.reasons.join(" / ")}</span>}
                       </>
                     ) : longOptionDisplay && !isHistoryRow ? (
                       <>
@@ -722,6 +741,10 @@ export function Dashboard({
                       </CurrentEstimateMetric>
                     ) : bearPutEstimate?.kind === "missing" ? (
                       <CurrentEstimateMetric label="現在決済年率" missingReason={bearPutEstimate.reasons.join(" / ")} note={bearPutUsesOldIndicative ? "古い参考気配" : undefined} />
+                    ) : verticalEstimate?.kind === "available" ? (
+                      <CurrentEstimateMetric label="現在決済年率" annualizedReturnPct={verticalEstimate.annualizedReturnPct} profitAmount={formatSignedUSD(verticalEstimate.estimatedPnlUSD)} profitPct={verticalEstimate.periodReturnPct} missingReason={verticalEstimate.rateMissingReason ?? "年率の開始日証拠 未確認"} note="2脚の参考価格・想定手数料で計算" />
+                    ) : verticalEstimate?.kind === "missing" ? (
+                      <CurrentEstimateMetric label="現在決済年率" missingReason={verticalEstimate.reasons.join(" / ")} />
                     ) : usesCurrentEstimate && currentEstimate.kind === "available" ? (
                       <CurrentEstimateMetric label={currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel ? `${currentEstimate.evaluatedLegLabel}残存の現在決済年率` : "現在決済年率"} annualizedReturnPct={currentEstimate.annualizedReturnPct} profitLabel={currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel ? `${currentEstimate.evaluatedLegLabel}残存の概算損益` : simulation.strategyType === "synthetic_forward" ? "合算概算損益" : "概算損益"} profitAmount={currentEstimate.currency === "JPY" ? formatJPY(currentEstimate.profitJPY, { signed: true }) : formatSignedUSD(currentEstimate.profitUSD)} profitPct={currentEstimate.profitPct} note={currentEstimate.currency === "JPY" ? formatCurrentEstimateFxEvidence(currentEstimate.fx) : currentEstimateIsRemainingLeg ? "他方の脚は決済済み・残存脚のみ評価中" : undefined} />
                     ) : usesCurrentEstimate && currentEstimate.kind === "missing" ? (
@@ -860,8 +883,8 @@ export function Dashboard({
                         Saxo決済注文照合済み
                       </span>
                     ))}
-                    {!isHistoryRow && simulation.strategyType === "bear_put_spread" ? (
-                      <button type="button" className="rounded-md border border-teal-300 bg-teal-50 px-2 py-1 text-left text-xs font-bold text-teal-900 hover:bg-teal-100" onClick={(event) => { event.stopPropagation(); onCurrentEstimateAction?.(simulation.id, bearPutEstimate?.kind === "available" ? bearPutEstimate.evaluatedLegs[0]?.legId : undefined, "exit_price"); }}>
+                    {!isHistoryRow && (simulation.strategyType === "bear_put_spread" || verticalDefinition) ? (
+                      <button type="button" className="rounded-md border border-teal-300 bg-teal-50 px-2 py-1 text-left text-xs font-bold text-teal-900 hover:bg-teal-100" onClick={(event) => { event.stopPropagation(); onCurrentEstimateAction?.(simulation.id, bearPutEstimate?.kind === "available" ? bearPutEstimate.evaluatedLegs[0]?.legId : verticalEstimate?.kind === "available" ? verticalEstimate.evaluatedLegIds[0] : undefined, "exit_price"); }}>
                         戦略の決済を確認
                       </button>
                     ) : isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason ? (

@@ -86,6 +86,7 @@ import { ScenarioCards } from "@/components/results/ScenarioCards";
 import { SummaryCards } from "@/components/results/SummaryCards";
 import { SpreadPerformancePreview } from "@/components/results/SpreadPerformancePreview";
 import { calculateBearPutSpreadEstimate } from "@/domain/bearPutSpread";
+import { calculateVerticalSpreadEstimate, isVerticalSpreadType } from "@/domain/verticalSpread";
 import { StockHoldingEvaluationCard } from "@/components/results/StockHoldingEvaluationCard";
 import { TaxComparisonCard } from "@/components/results/TaxComparisonCard";
 import { BackToTopButton } from "@/components/ui/BackToTopButton";
@@ -643,10 +644,10 @@ export default function App() {
     }
     applySimulationBatch(next);
     setBulkOptionPriceReferenceConfirmed(false);
-    const spreads = next.filter((simulation) => simulation.strategyType === "bear_put_spread" && simulation.status === "open");
-    const available = spreads.filter((simulation) => calculateBearPutSpreadEstimate(simulation).kind === "available").length;
+    const spreads = next.filter((simulation) => isVerticalSpreadType(simulation.strategyType) && simulation.status === "open");
+    const available = spreads.filter((simulation) => simulation.strategyType === "bear_put_spread" ? calculateBearPutSpreadEstimate(simulation).kind === "available" : calculateVerticalSpreadEstimate(simulation).kind === "available").length;
     const reasons = Array.from(new Set(spreads.flatMap((simulation) => {
-      const estimate = calculateBearPutSpreadEstimate(simulation);
+      const estimate = simulation.strategyType === "bear_put_spread" ? calculateBearPutSpreadEstimate(simulation) : calculateVerticalSpreadEstimate(simulation);
       return estimate.kind === "missing" ? estimate.reasons : [];
     })));
     setBulkOptionPriceMessage(`${changed}建玉の取得成功分を一回の保存で反映しました。現在見込み計算可能 ${available}件${reasons.length ? ` / 未計算: ${reasons.join(" / ")}` : ""}`);
@@ -1969,7 +1970,7 @@ export default function App() {
     setPositionFocusSimulationId(simulationId);
     setCloseDecisionSectionOpen(true);
     setCoveredCallReferenceOpen(true);
-    if (simulations.find(item => item.id === simulationId)?.strategyType === "bear_put_spread") {
+    if (isVerticalSpreadType(simulations.find(item => item.id === simulationId)?.strategyType)) {
       window.setTimeout(() => { const preview = document.getElementById(`spread-close-preview-${simulationId}`); preview?.scrollIntoView({ behavior: "smooth", block: "start" }); preview?.focus(); }, 60);
       return;
     }
@@ -2603,14 +2604,14 @@ export default function App() {
                 stockEvaluation={selectedStockHoldingEvaluation}
               />
             ) : null}
-            {(showSelectedHistoryDetails || positionFocusSimulationId) && selected.strategyType === "bear_put_spread" ? (
+            {(showSelectedHistoryDetails || positionFocusSimulationId) && isVerticalSpreadType(selected.strategyType) ? (
               <SpreadPerformancePreview simulation={selected} anchor editable={!showSelectedHistoryDetails} onChange={upsertSimulation} onUngroup={selected.strategyGroupId ? () => { const result = useOptionsStore.getState().ungroupSpread(selected.id); setQuoteStatus(result.reason ?? "組み合わせを解除しました。2本の約定は単独建玉に残しています。"); if (!result.reason) setPositionFocusSimulationId(null); } : undefined} onDraft={(leg) => {
                 upsertSimulation({ ...selected, optionCloseExecutions: [...(selected.optionCloseExecutions ?? []), createOptionCloseExecutionDraft({ simulation: selected, leg, closePriceUSD: leg.closePlan?.closePriceUSD ?? leg.closeCostUSD ?? 0 })] });
                 setIsEditorOpen(true);
                 setEditorFocusRequest({ anchorId: "option-close-executions", requestId: Date.now() });
               }} />
             ) : null}
-            {(showSelectedHistoryDetails || positionFocusSimulationId) && selected.strategyType !== "bear_put_spread" ? (
+            {(showSelectedHistoryDetails || positionFocusSimulationId) && !isVerticalSpreadType(selected.strategyType) ? (
               <CollapsibleSection
                 title={
                   orderPrepCoveredCallMode
@@ -2658,7 +2659,7 @@ export default function App() {
                 />
               </CollapsibleSection>
             ) : null}
-            {(showSelectedHistoryDetails || positionFocusSimulationId) && selected.strategyType !== "bear_put_spread" ? (showSelectedHistoryDetails ? (
+            {(showSelectedHistoryDetails || positionFocusSimulationId) && !isVerticalSpreadType(selected.strategyType) ? (showSelectedHistoryDetails ? (
               <DenominatorTable
                 denominators={denominators}
                 collapsible

@@ -26,6 +26,7 @@ import {
   validateSaxoHistoryCloseExecution,
 } from "@/domain/optionCloseExecutions";
 import { previewBearPutSpreadCloseBatch } from "@/domain/spreadCloseBatch";
+import { getVerticalSpreadDefinition } from "@/domain/verticalSpread";
 import { isStockSettlementRequiredFieldsComplete, normalizeStockSettlement } from "@/domain/stockSettlementState";
 import { calculateStockSettlementTaxResult } from "@/domain/tax";
 import { createJournalForSimulation } from "@/domain/entryRationaleJournal";
@@ -76,10 +77,10 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
   useEffect(() => { setIntentionalPartialCloseMode(false); setIntentionalPartialExecutionIds([]); }, [simulation.id]);
   const callLeg = simulation.optionLegs.find((leg) => leg.type === "call");
   const putLeg = simulation.optionLegs.find((leg) => leg.type === "put");
-  const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call", "synthetic_forward", "combo"].includes(
+  const needsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call", "bull_call_spread", "bear_call_spread", "synthetic_forward", "combo"].includes(
     simulation.strategyType,
   );
-  const needsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "bear_put_spread", "synthetic_forward", "combo"].includes(
+  const needsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "bull_put_spread", "bear_put_spread", "synthetic_forward", "combo"].includes(
     simulation.strategyType,
   );
   const needsStock = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
@@ -173,10 +174,10 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
     (stockAcquisitionComplete ? onStockAcquisitionCompleteClose ?? onCloseEditor : onCloseEditor)?.();
   };
   const updateStrategy = (strategyType: StrategyType) => {
-    const nextNeedsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call", "synthetic_forward", "combo"].includes(
+    const nextNeedsCall = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel", "long_call", "bull_call_spread", "bear_call_spread", "synthetic_forward", "combo"].includes(
       strategyType,
     );
-    const nextNeedsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "bear_put_spread", "synthetic_forward", "combo"].includes(
+    const nextNeedsPut = ["short_put", "covered_call_plus_short_put", "short_strangle", "wheel", "long_put", "bull_put_spread", "bear_put_spread", "synthetic_forward", "combo"].includes(
       strategyType,
     );
     const nextNeedsStock = ["covered_call", "covered_call_plus_short_put", "short_strangle", "wheel"].includes(
@@ -185,10 +186,11 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
     const isComposite = strategyType === "synthetic_forward" || strategyType === "combo";
     const callSide: OptionLeg["side"] = strategyType === "long_call" || isComposite ? "buy" : "sell";
     const putSide: OptionLeg["side"] = strategyType === "long_put" || strategyType === "bear_put_spread" ? "buy" : "sell";
-    if (strategyType === "bear_put_spread") {
-      const existingLong = simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "buy");
-      const existingShort = simulation.optionLegs.find((leg) => leg.type === "put" && leg.side === "sell");
-      onChange({ ...simulation, strategyType, stockPosition: null, brokerMarginJPY: 0, denominatorMode: "custom", syntheticForwardTicket: undefined, optionLegs: [existingLong ?? { id: `${simulation.id}-put-long`, type: "put", side: "buy", strikeUSD: 0, premiumUSD: 0, quantity: 1, expiryDate: simulation.expiryDate }, existingShort ?? { id: `${simulation.id}-put-short`, type: "put", side: "sell", strikeUSD: 0, premiumUSD: 0, quantity: 1, expiryDate: simulation.expiryDate, assignmentPolicy: "avoid" }] });
+    const vertical = getVerticalSpreadDefinition(strategyType);
+    if (vertical) {
+      const existingLong = simulation.optionLegs.find((leg) => leg.type === vertical.optionType && leg.side === "buy");
+      const existingShort = simulation.optionLegs.find((leg) => leg.type === vertical.optionType && leg.side === "sell");
+      onChange({ ...simulation, strategyType, stockPosition: null, brokerMarginJPY: 0, denominatorMode: "custom", syntheticForwardTicket: undefined, optionLegs: [existingLong ?? { id: `${simulation.id}-${vertical.optionType}-long`, type: vertical.optionType, side: "buy", strikeUSD: 0, premiumUSD: 0, quantity: 1, expiryDate: simulation.expiryDate }, existingShort ?? { id: `${simulation.id}-${vertical.optionType}-short`, type: vertical.optionType, side: "sell", strikeUSD: 0, premiumUSD: 0, quantity: 1, expiryDate: simulation.expiryDate, ...(vertical.optionType === "put" ? { assignmentPolicy: "avoid" as const } : {}) }] });
       return;
     }
     const nextLegs = [
@@ -1028,6 +1030,9 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               ["short_strangle", "ショートストラングル"],
               ["long_call", "コール買い"],
               ["long_put", "プット買い"],
+              ["bull_call_spread", "ブル・コール・スプレッド（低C買い + 高C売り）"],
+              ["bear_call_spread", "ベア・コール・スプレッド（高C買い + 低C売り）"],
+              ["bull_put_spread", "ブル・プット・スプレッド（低P買い + 高P売り）"],
               ["bear_put_spread", "ベア・プット・スプレッド（高P買い + 低P売り）"],
               ["synthetic_forward", "シンセティックフォワード（C買い + P売り・同一行使価格）"],
               ["combo", "コンボ（C買い + P売り・別行使価格可）"],
@@ -2685,11 +2690,12 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
             </div>
           ) : null}
           {spreadCloseBatch.applies ? (
-            <section id="spread-close-batch-review" aria-label="ベア・プット2脚の決済確認" className="mt-3 scroll-mt-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+            <section id="spread-close-batch-review" aria-label="2脚戦略の決済確認" className="mt-3 scroll-mt-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
               <div className="flex flex-wrap items-start justify-between gap-3"><div><h4 id="spread-close-batch-review-heading" tabIndex={-1} className="text-sm font-bold text-indigo-950 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">2脚の決済内容</h4><p className="mt-1 text-xs leading-5 text-indigo-800">取得候補がない脚も必ず表示します。候補欠落はSaxo上の未決済を意味しません。</p></div><span className="rounded bg-white px-2 py-1 text-xs font-bold text-indigo-800">{(() => { const candidates = [...spreadCloseCandidateByLegId.values()]; const fetchedAt = candidates.map((candidate) => candidate.acquisitionFetchedAt).find(Boolean); const coverages = candidates.map((candidate) => candidate.acquisitionCoverage).filter(Boolean); const complete = coverages.length > 0 && coverages.every((coverage) => coverage?.status === "complete"); const pages = coverages.reduce((maximum, coverage) => Math.max(maximum, coverage?.completedPages ?? 0), 0); return `取得範囲: ${coverages.length === 0 ? "未確認" : complete ? `全ページ取得${pages > 0 ? `（${pages}ページ）` : ""}` : `一部取得${pages > 0 ? `（${pages}ページ）` : ""}`} / 取得時刻 ${fetchedAt ? formatAcquisitionTimestamp(fetchedAt) : "未確認"}`; })()}</span></div>
               <div className="mt-3 grid gap-2">
                 {spreadCloseBatch.rows.map((row) => {
-                  const legLabel = row.leg.side === "buy" ? `P${row.leg.strikeUSD}買い（売り決済）` : `P${row.leg.strikeUSD}売り（買い決済）`;
+                  const optionLabel = row.leg.type === "call" ? "C" : "P";
+                  const legLabel = row.leg.side === "buy" ? `${optionLabel}${row.leg.strikeUSD}買い（売り決済）` : `${optionLabel}${row.leg.strikeUSD}売り（買い決済）`;
                   const pending = row.executions.filter((item) => !item.confirmed && !item.voided), evidence = pending[0] ?? row.executions.find((item) => item.confirmed);
                   const unmatchedCandidate = row.state === "not_acquired" ? spreadCloseCandidateByLegId.get(row.leg.id) : undefined;
                   const stateLabel = row.state === "ready" ? "確認可能" : row.state === "already_saved" ? "正式保存済み" : row.state === "accounting_pending" ? "精算情報待ち" : row.state === "conflict" ? "照合競合" : unmatchedCandidate ? "取得済み・未反映" : "未取得・未照合";
@@ -2700,7 +2706,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
               <button type="button" className="mt-3 rounded-md bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300" disabled={!spreadCloseBatch.ready} onClick={confirmBearPutSpreadCloseBatch}>2脚の決済内容を確認して正式保存</button>
               <div className="mt-3 border-t border-indigo-200 pt-3">
                 <button type="button" className="rounded-md border border-indigo-300 bg-white px-3 py-2 text-xs font-bold text-indigo-900 hover:bg-indigo-100" aria-expanded={intentionalPartialCloseMode} onClick={() => { setIntentionalPartialCloseMode((current) => !current); setIntentionalPartialExecutionIds([]); }}>意図的な一部決済として脚別に確認</button>
-                {intentionalPartialCloseMode ? <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-950"><p className="font-bold">もう一方の脚を意図的に建玉のまま残す場合だけ使用します。証拠不足を回避する操作ではありません。</p><div className="mt-2 space-y-2">{spreadCloseBatch.rows.flatMap((row) => row.executions.filter((execution) => !execution.confirmed && execution.confirmationStatus !== "ignored" && !execution.voided && previewOptionCloseExecutionConfirmation(simulation, execution).valid).map((execution) => { const legLabel = row.leg.side === "buy" ? `P${row.leg.strikeUSD}買い（売り決済）` : `P${row.leg.strikeUSD}売り（買い決済）`; return <label key={execution.id} className="flex items-start gap-2"><input type="checkbox" checked={intentionalPartialExecutionIds.includes(execution.id)} onChange={(event) => setIntentionalPartialExecutionIds((current) => event.target.checked ? [...current, execution.id] : current.filter((id) => id !== execution.id))} /><span>{legLabel}だけを正式保存し、反対脚を残すことを確認しました</span></label>; }))}</div></div> : null}
+                {intentionalPartialCloseMode ? <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-950"><p className="font-bold">もう一方の脚を意図的に建玉のまま残す場合だけ使用します。証拠不足を回避する操作ではありません。</p><div className="mt-2 space-y-2">{spreadCloseBatch.rows.flatMap((row) => row.executions.filter((execution) => !execution.confirmed && execution.confirmationStatus !== "ignored" && !execution.voided && previewOptionCloseExecutionConfirmation(simulation, execution).valid).map((execution) => { const optionLabel = row.leg.type === "call" ? "C" : "P"; const legLabel = row.leg.side === "buy" ? `${optionLabel}${row.leg.strikeUSD}買い（売り決済）` : `${optionLabel}${row.leg.strikeUSD}売り（買い決済）`; return <label key={execution.id} className="flex items-start gap-2"><input type="checkbox" checked={intentionalPartialExecutionIds.includes(execution.id)} onChange={(event) => setIntentionalPartialExecutionIds((current) => event.target.checked ? [...current, execution.id] : current.filter((id) => id !== execution.id))} /><span>{legLabel}だけを正式保存し、反対脚を残すことを確認しました</span></label>; }))}</div></div> : null}
               </div>
               {spreadCloseBatch.rows.some((row) => row.state === "already_saved") && spreadCloseBatch.pendingExecutionIds.length > 0 ? <p className="mt-2 text-xs text-indigo-800">正式保存済みの脚は変更せず、残りの検証済み実績だけを追加します。</p> : null}
             </section>

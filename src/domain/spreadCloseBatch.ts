@@ -1,6 +1,7 @@
 import type { OptionCloseExecution, OptionLeg, TradeSimulation } from "@/types/domain";
 import { calculateOptionCloseExecutionResult, getOptionCloseCompletion, getOptionCloseExecutions, previewOptionCloseExecutionConfirmation } from "@/domain/optionCloseExecutions";
 import { moneyProduct, moneySum, spreadEntryBasis } from "@/domain/spreadCashflows";
+import { getVerticalSpreadDefinition, isManagedTwoLegStrategy } from "./verticalSpread";
 
 export type SpreadCloseBatchLegState = "already_saved" | "ready" | "not_acquired" | "accounting_pending" | "conflict";
 export type SpreadCloseBatchLegReview = { leg: OptionLeg; state: SpreadCloseBatchLegState; reason: string; confirmedContracts: number; pendingContracts: number; remainingContracts: number; executions: OptionCloseExecution[] };
@@ -22,8 +23,11 @@ function rowForLeg(simulation: TradeSimulation, leg: OptionLeg): SpreadCloseBatc
 }
 
 export function previewBearPutSpreadCloseBatch(simulation: TradeSimulation): SpreadCloseBatchPreview {
-  if (simulation.strategyType !== "bear_put_spread") return { applies: false, ready: false, rows: [], pendingExecutionIds: [], newlyConfirmedCount: 0 };
-  const legs = simulation.optionLegs.filter((leg) => leg.type === "put").sort((a, b) => b.strikeUSD - a.strikeUSD || a.id.localeCompare(b.id));
+  if (!isManagedTwoLegStrategy(simulation)) return { applies: false, ready: false, rows: [], pendingExecutionIds: [], newlyConfirmedCount: 0 };
+  const definition = getVerticalSpreadDefinition(simulation.strategyType);
+  const legs = definition
+    ? simulation.optionLegs.filter((leg) => leg.type === definition.optionType).sort((a, b) => b.strikeUSD - a.strikeUSD || a.id.localeCompare(b.id))
+    : [...simulation.optionLegs].sort((a, b) => a.type.localeCompare(b.type) || b.strikeUSD - a.strikeUSD || a.id.localeCompare(b.id));
   if (legs.length !== 2 || !legs.some((leg) => activeLegExecutions(simulation, leg.id).some((item) => item.source === "saxo_history"))) return { applies: false, ready: false, rows: [], pendingExecutionIds: [], newlyConfirmedCount: 0 };
   const rows = legs.map((leg) => rowForLeg(simulation, leg));
   const pendingExecutionIds = rows.flatMap((row) => row.state === "ready" ? row.executions.filter(isPendingBatchExecution).map((item) => item.id) : []);
@@ -40,3 +44,5 @@ export function previewBearPutSpreadCloseBatch(simulation: TradeSimulation): Spr
   const closeCashflowUSD = moneySum(...activeNextExecutions.flatMap((item) => { const leg = nextSimulation.optionLegs.find((candidate) => candidate.id === item.legId)!; const price = item.closeKind === "expired" ? 0 : item.closePriceUSD!; return [moneyProduct(leg.side === "buy" ? 1 : -1, price, item.contracts, leg.contractSize!), -(item.commissionUSD ?? Number.NaN)]; }));
   return { applies: true, ready: true, rows, pendingExecutionIds, newlyConfirmedCount: pendingExecutionIds.length, entryCashflowUSD: basis.state === "known" ? -basis.value : undefined, closeCashflowUSD, combinedRealizedPnlUSD: moneySum(...confirmedResults.map((item) => item.realizedPnlUSD)), totalCostsUSD: moneySum(...confirmedResults.map((item) => item.openCommissionUSD + item.closeCommissionUSD)), nextSimulation };
 }
+
+export const previewVerticalSpreadCloseBatch = previewBearPutSpreadCloseBatch;

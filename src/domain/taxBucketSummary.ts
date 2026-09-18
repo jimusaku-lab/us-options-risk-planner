@@ -8,6 +8,7 @@ import {
 } from "./optionCloseExecutions";
 import { calculateStockSettlementTaxResult, calculateTaxResult, taxProfiles } from "./tax";
 import { shouldIncludeCompositeCloseResultsInPerformance } from "./compositeOptionPosition";
+import { isVerticalSpreadType } from "./verticalSpread";
 
 const endedStatuses = new Set(["closed", "assigned", "expired"]);
 
@@ -21,7 +22,7 @@ export function calculateTaxBucketSummary(simulations: TradeSimulation[]): TaxBu
     .reduce<TaxBucketSummary>(
       (summary, simulation) => {
         const isTerminal = endedStatuses.has(simulation.status);
-        const closeExecutionResults = (isTerminal || simulation.strategyType === "synthetic_forward" || simulation.strategyType === "bear_put_spread") && (simulation.strategyType === "bear_put_spread" || shouldIncludeCompositeCloseResultsInPerformance(simulation))
+        const closeExecutionResults = (isTerminal || simulation.strategyType === "synthetic_forward" || isVerticalSpreadType(simulation.strategyType)) && (isVerticalSpreadType(simulation.strategyType) || shouldIncludeCompositeCloseResultsInPerformance(simulation))
           ? calculateOptionCloseExecutionResults(simulation).filter((result) => result.execution.confirmed)
           : [];
         const hasCloseExecutions = closeExecutionResults.length > 0;

@@ -9,6 +9,7 @@ import {
 import { calculateTaxResult, taxProfiles } from "./tax";
 import { shouldIncludeCompositeCloseResultsInPerformance } from "./compositeOptionPosition";
 import { activeSpreadCloses, activeSpreadEntries, moneySum, spreadEntryBasis, spreadFinalCashflow } from "./spreadCashflows";
+import { isVerticalSpreadType } from "./verticalSpread";
 
 export type HistoryPerformanceResult = {
   simulation: TradeSimulation;
@@ -112,7 +113,7 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
   const hasCloseExecutionResults = optionCloseExecutionResults.length > 0;
   const requiresExecutionRecord = sanitized.status === "closed" || sanitized.status === "expired";
   const realizedOptionProfitJPY = optionCloseExecutionResults.reduce((sum, result) => sum + result.realizedPnlJPY, 0);
-  const realizedOptionProfitUSD = sanitized.strategyType === "bear_put_spread"
+  const realizedOptionProfitUSD = isVerticalSpreadType(sanitized.strategyType)
     ? (spreadFinalCashflow(sanitized) ?? (optionCloseExecutionResults.length === activeSpreadCloses(sanitized).length ? moneySum(...optionCloseExecutionResults.map(result => result.realizedPnlUSD)) : Number.NaN))
     : optionCloseExecutionResults.reduce((sum, result) => sum + result.realizedPnlUSD, 0);
   const resolvedHoldingDays = optionCloseExecutionResults.map((result) => result.holdingDays).filter((days): days is number => days !== undefined);
@@ -159,7 +160,7 @@ export function calculateHistoryPerformance(simulation: TradeSimulation): Histor
           };
         })
       : rows;
-  const spreadBasis = sanitized.strategyType === "bear_put_spread" ? spreadEntryBasis(sanitized) : undefined;
+  const spreadBasis = isVerticalSpreadType(sanitized.strategyType) ? spreadEntryBasis(sanitized) : undefined;
   const spreadEntries = spreadBasis ? sanitized.optionLegs.flatMap(leg => activeSpreadEntries(sanitized, leg)) : [];
   const spreadCloses = spreadBasis ? activeSpreadCloses(sanitized) : [];
   const sameSpreadDates = spreadEntries.length > 0 && spreadEntries.every(entry => entry.tradeDate === spreadEntries[0].tradeDate) && spreadCloses.length === sanitized.optionLegs.length && spreadCloses.every(close => close.closeDate === spreadCloses[0].closeDate);

@@ -3,6 +3,7 @@ import { calculateOptionCloseExecutionResults } from "./optionCloseExecutions";
 import { shouldIncludeCompositeCloseResultsInPerformance } from "./compositeOptionPosition";
 import { calculateStockSettlementTaxResult } from "./tax";
 import { calculateNetInitialPremiumJPY, getShortCallLegs, getShortPutLegs } from "./calculations";
+import { isVerticalSpreadType } from "./verticalSpread";
 
 const endedStatuses = new Set(["closed", "assigned", "expired"]);
 const months = Array.from({ length: 12 }, (_, index) => index + 1);
@@ -550,7 +551,7 @@ export function calculateYearlyPerformanceSummary(
       if (assignmentYear) availableYearSet.add(assignmentYear);
     }
 
-    ((endedStatuses.has(simulation.status) || simulation.strategyType === "synthetic_forward" || simulation.strategyType === "bear_put_spread") && (simulation.strategyType === "bear_put_spread" || shouldIncludeCompositeCloseResultsInPerformance(simulation)) ? calculateOptionCloseExecutionResults(simulation) : [])
+    ((endedStatuses.has(simulation.status) || simulation.strategyType === "synthetic_forward" || isVerticalSpreadType(simulation.strategyType)) && (isVerticalSpreadType(simulation.strategyType) || shouldIncludeCompositeCloseResultsInPerformance(simulation)) ? calculateOptionCloseExecutionResults(simulation) : [])
       .filter((result) => result.execution.confirmed)
       .forEach((result) => {
         const executionIdentity = `${simulation.id}:${result.execution.id}`;
