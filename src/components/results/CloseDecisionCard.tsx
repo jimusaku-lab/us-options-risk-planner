@@ -20,6 +20,15 @@ import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
 import type { FxQuote } from "@/lib/marketData";
 import { formatJPY, formatPct, formatUSD } from "@/lib/format";
 import { calculateBearPutSpreadEstimate } from "@/domain/bearPutSpread";
+import { TimeValueObservationPanel } from "@/components/results/TimeValueObservationPanel";
+import { buildOptionValueObservation, resolveOptionValueEvidenceRevision, upsertTimeValueObservation } from "@/domain/timeValue";
+
+type OptionPriceAdoptionEvidence = {
+  selectedField: "bid" | "ask";
+  fetchedAt?: string;
+  quoteStatus?: string;
+  priceType?: string;
+};
 
 export function CloseDecisionCard({
   simulation,
@@ -65,7 +74,9 @@ export function CloseDecisionCard({
       optionLegs: simulation.optionLegs.map((leg) => (leg.id === id ? { ...leg, ...patch } : leg)),
     });
   };
-  const updateLongOptionClosePrice = (leg: OptionLeg, closePriceUSD: number, source: OptionValueSnapshotSource) => {
+  const updateLongOptionClosePrice = (leg: OptionLeg, closePriceUSD: number, source: OptionValueSnapshotSource = "manual", recordObservation = true, evidence?: OptionPriceAdoptionEvidence) => {
+    const capturedAt = source === "saxo" ? evidence?.fetchedAt : new Date().toISOString();
+    const observationFee = resolveCloseCommissionUSD(simulation, leg, Math.abs(leg.quantity));
     const snapshot = buildLongOptionValueSnapshot({
       snapshotDate: todayIsoDate(),
       underlyingPrice: simulation.currentPriceUSD,
@@ -77,11 +88,19 @@ export function CloseDecisionCard({
       source,
       capturedAt: new Date().toISOString(),
     });
+    const observation = recordObservation && leg.contractSize && Number.isInteger(leg.contractSize) && leg.contractSize > 0 ? buildOptionValueObservation({ observationId: `${source}:${leg.id}:${todayIsoDate()}`, legId: leg.id, evidenceRevision: resolveOptionValueEvidenceRevision({ legId: leg.id, entryExecutions: simulation.optionEntryExecutions, closeExecutions: simulation.optionCloseExecutions }), snapshotDate: todayIsoDate(), capturedAt: source === "saxo" ? evidence?.fetchedAt : capturedAt, side: leg.side, optionType: leg.type, optionPriceUSD: closePriceUSD, underlyingPriceUSD: simulation.currentPriceUSD, underlyingSource: "保存済み現在株価", strikeUSD: leg.strikeUSD, expiry: leg.expiryDate, quantity: Math.abs(leg.quantity), contractSize: leg.contractSize, selectedField: source === "saxo" ? "bid" : "manual", source: source === "saxo" ? "saxo" : "manual", quality: source !== "saxo" ? "manual" : evidence?.priceType === "OldIndicative" ? "old_indicative" : evidence?.priceType ? "current" : "unknown", feeUSD: observationFee.kind === "resolved" ? observationFee.amountUSD : undefined, feeSource: observationFee.kind === "resolved" ? observationFee.source : undefined }) : null;
     updateLeg(leg.id, {
       closeCostUSD: closePriceUSD,
-      closePlan: { enabled: true, ...(leg.closePlan ?? {}), closePriceUSD },
-      valueSnapshots: snapshot ? upsertOptionValueSnapshot(leg.valueSnapshots, snapshot) : leg.valueSnapshots,
+      closePlan: { enabled: true, ...(leg.closePlan ?? {}), closePriceUSD, ...(source === "saxo" && evidence ? { priceSource: "saxo", priceSelectedField: evidence.selectedField, priceFetchedAt: evidence.fetchedAt, priceQuoteStatus: evidence.quoteStatus, priceType: evidence.priceType } : {}) },
+      valueSnapshots: recordObservation && snapshot ? upsertOptionValueSnapshot(leg.valueSnapshots, snapshot) : leg.valueSnapshots,
+      valueObservations: observation ? upsertTimeValueObservation(leg.valueObservations, observation) : leg.valueObservations,
     });
+  };
+  const updateShortOptionClosePrice = (leg: OptionLeg, closePriceUSD: number, source: OptionValueSnapshotSource = "manual", recordObservation = true, evidence?: OptionPriceAdoptionEvidence) => {
+    const capturedAt = source === "saxo" ? evidence?.fetchedAt : new Date().toISOString();
+    const observationFee = resolveCloseCommissionUSD(simulation, leg, Math.abs(leg.quantity));
+    const observation = recordObservation && leg.contractSize && Number.isInteger(leg.contractSize) && leg.contractSize > 0 ? buildOptionValueObservation({ observationId: `${source}:${leg.id}:${todayIsoDate()}`, legId: leg.id, evidenceRevision: resolveOptionValueEvidenceRevision({ legId: leg.id, entryExecutions: simulation.optionEntryExecutions, closeExecutions: simulation.optionCloseExecutions }), snapshotDate: todayIsoDate(), capturedAt: source === "saxo" ? evidence?.fetchedAt : capturedAt, side: leg.side, optionType: leg.type, optionPriceUSD: closePriceUSD, underlyingPriceUSD: simulation.currentPriceUSD, underlyingSource: "保存済み現在株価", strikeUSD: leg.strikeUSD, expiry: leg.expiryDate, quantity: Math.abs(leg.quantity), contractSize: leg.contractSize, selectedField: source === "saxo" ? "ask" : "manual", source: source === "saxo" ? "saxo" : "manual", quality: source !== "saxo" ? "manual" : evidence?.priceType === "OldIndicative" ? "old_indicative" : evidence?.priceType ? "current" : "unknown", feeUSD: observationFee.kind === "resolved" ? observationFee.amountUSD : undefined, feeSource: observationFee.kind === "resolved" ? observationFee.source : undefined }) : null;
+    updateLeg(leg.id, { closeCostUSD: closePriceUSD, closePlan: { enabled: true, ...(leg.closePlan ?? {}), closePriceUSD, priceSource: source === "saxo" ? "saxo" : "manual", priceSelectedField: source === "saxo" ? "ask" : "manual", priceFetchedAt: source === "saxo" ? evidence?.fetchedAt : capturedAt, ...(source === "saxo" && evidence ? { priceQuoteStatus: evidence.quoteStatus, priceType: evidence.priceType } : {}) }, valueObservations: observation ? upsertTimeValueObservation(leg.valueObservations, observation) : leg.valueObservations });
   };
   const updateCloseFee = (leg: OptionLeg, commissionUSD: number, commissionSource: "manual" | "user_confirmed_standard") => {
     updateLeg(leg.id, {
@@ -157,7 +176,7 @@ export function CloseDecisionCard({
                 fxRateJPY={simulation.fxRateJPY}
                 openCommissionUSD={confirmedOpeningCommissionUSD(leg)}
                 saxoOrderCandidates={saxoOrderCandidates}
-                onCloseCostChange={(closeCostUSD) => updateLeg(leg.id, { closeCostUSD })}
+                onCloseCostChange={(closeCostUSD, source, recordObservation, evidence) => updateShortOptionClosePrice(leg, closeCostUSD, source, recordObservation, evidence)}
                 onCloseFeeChange={(commissionUSD) => updateCloseFee(leg, commissionUSD, "manual")}
                 onExecutionDraft={() => addExecutionDraft(leg)}
               />
@@ -173,7 +192,7 @@ export function CloseDecisionCard({
                 accountInputs={accountInputs}
                 currentEstimateFxQuote={currentEstimateFxQuote}
                 singleLegLayout={closeDecisionLegs.length === 1}
-                onClosePriceChange={(closeCostUSD, source) => updateLongOptionClosePrice(leg, closeCostUSD, source)}
+                onClosePriceChange={(closeCostUSD, source, recordObservation, evidence) => updateLongOptionClosePrice(leg, closeCostUSD, source, recordObservation, evidence)}
                 onCloseFeeChange={(commissionUSD) => updateCloseFee(leg, commissionUSD, "manual")}
                 onClosePlanChange={(closePlanPatch) => updateLeg(leg.id, { closePlan: { enabled: true, ...(leg.closePlan ?? {}), ...closePlanPatch } })}
                 onExecutionDraft={() => addExecutionDraft(leg)}
@@ -262,7 +281,7 @@ function LegCloseCard({
   fxRateJPY: number;
   openCommissionUSD?: number;
   saxoOrderCandidates: SaxoApiOrderSnapshot[];
-  onCloseCostChange: (closeCostUSD: number) => void;
+  onCloseCostChange: (closeCostUSD: number, source?: OptionValueSnapshotSource, recordObservation?: boolean, evidence?: OptionPriceAdoptionEvidence) => void;
   onCloseFeeChange: (commissionUSD: number) => void;
   onExecutionDraft: () => void;
 }) {
@@ -389,7 +408,8 @@ function LegCloseCard({
             suffix="USD/株"
             placeholder="必要な時だけ入力"
             min={0}
-            onChange={onCloseCostChange}
+            onChange={(value) => onCloseCostChange(value, "manual", false)}
+            onCommit={(value) => { if (value !== undefined) onCloseCostChange(value, "manual", true); }}
           />
         </div>
         <div id={`current-estimate-fee-${leg.id}`} className="mt-3">
@@ -399,10 +419,11 @@ function LegCloseCard({
         <CompactPremiumCandidateResult
           candidate={apiCandidate}
           candidatePriceUSD={candidatePriceUSD}
+          adoptionEvidence={getPremiumCandidateAdoptionEvidence(apiCandidate, leg.side)}
           message={apiCandidateMessage}
           isLoading={isLoadingApiCandidate}
           onLoad={loadApiCandidate}
-          onAdopt={onCloseCostChange}
+          onAdopt={(price, evidence) => onCloseCostChange(price, "saxo", true, evidence)}
         />
         {(leg.closeCostUSD ?? leg.closePlan?.closePriceUSD ?? 0) > 0 ? (
           <button
@@ -431,20 +452,22 @@ function LegCloseCard({
           suffix="USD/株"
           placeholder="Saxo決済チケットの価格"
           min={0}
-          onChange={onCloseCostChange}
+          onChange={(value) => onCloseCostChange(value, "manual", false)}
+          onCommit={(value) => { if (value !== undefined) onCloseCostChange(value, "manual", true); }}
         />
       </div>
       <div id={`current-estimate-fee-${leg.id}`} className="mt-3">
         <NumberInput label="決済想定手数料" value={leg.closePlan?.commissionUSD ?? Number.NaN} suffix="USD" placeholder="明示0も入力可能" min={0} onChange={onCloseFeeChange} />
         <p className="mt-1 text-[11px] text-slate-500">手数料出所: {closeFeeSourceLabel}</p>
       </div>
-      <CompactPremiumCandidateResult
-        candidate={apiCandidate}
-        candidatePriceUSD={candidatePriceUSD}
+        <CompactPremiumCandidateResult
+          candidate={apiCandidate}
+          candidatePriceUSD={candidatePriceUSD}
+          adoptionEvidence={getPremiumCandidateAdoptionEvidence(apiCandidate, leg.side)}
         message={apiCandidateMessage}
         isLoading={isLoadingApiCandidate}
         onLoad={loadApiCandidate}
-        onAdopt={onCloseCostChange}
+          onAdopt={(price, evidence) => onCloseCostChange(price, "saxo", true, evidence)}
       />
       {(leg.closeCostUSD ?? leg.closePlan?.closePriceUSD ?? 0) > 0 ? (
         <button
@@ -664,6 +687,7 @@ function LegCloseCard({
           </>
         )}
       </dl>
+      {leg.type === "put" ? <TimeValueObservationPanel legs={[leg]} currentUnderlyingPriceUSD={simulation.currentPriceUSD} title="時間価値・買戻し判断" compact /> : null}
     </div>
   );
 }
@@ -759,6 +783,7 @@ function formatSignedOptionPriceUSD(value: number): string {
 function CompactPremiumCandidateResult({
   candidate,
   candidatePriceUSD,
+  adoptionEvidence,
   message,
   isLoading,
   onLoad,
@@ -766,10 +791,11 @@ function CompactPremiumCandidateResult({
 }: {
   candidate: SaxoOptionPremiumCandidate | null;
   candidatePriceUSD: number | null;
+  adoptionEvidence?: OptionPriceAdoptionEvidence;
   message: string;
   isLoading: boolean;
   onLoad: () => void;
-  onAdopt: (price: number) => void;
+  onAdopt: (price: number, evidence?: OptionPriceAdoptionEvidence) => void;
 }) {
   const noAccess = isSaxoPriceFeedNoAccess(candidate);
   const manualInputGuidance = getPremiumCandidateManualInputGuidance(candidate);
@@ -787,7 +813,7 @@ function CompactPremiumCandidateResult({
           {candidatePriceUSD !== null ? (
             <button
               className="mt-2 rounded border border-slate-300 bg-white px-2 py-1 font-bold text-slate-700 hover:bg-slate-50"
-              onClick={() => onAdopt(candidatePriceUSD)}
+              onClick={() => onAdopt(candidatePriceUSD, adoptionEvidence)}
             >
               この価格を採用（{formatUSD(candidatePriceUSD)}）
             </button>
@@ -826,6 +852,17 @@ export function getPremiumCandidatePrice(candidate: SaxoOptionPremiumCandidate |
   // Mid/Last remain display-only references and are never silently adopted.
   const price = side === "buy" ? candidate.bid : side === "sell" ? candidate.ask : undefined;
   return price !== undefined && Number.isFinite(price) && price > 0 ? price : null;
+}
+
+function getPremiumCandidateAdoptionEvidence(candidate: SaxoOptionPremiumCandidate | null, side: OptionLeg["side"]): OptionPriceAdoptionEvidence | undefined {
+  if (!candidate) return undefined;
+  const selectedField = side === "buy" ? "bid" : "ask";
+  return {
+    selectedField,
+    fetchedAt: candidate.fetchedAt,
+    quoteStatus: candidate.status,
+    priceType: selectedField === "bid" ? candidate.quoteDiagnostics?.priceTypeBid : candidate.quoteDiagnostics?.priceTypeAsk,
+  };
 }
 
 export function isSaxoPriceFeedNoAccess(candidate: SaxoOptionPremiumCandidate | null): boolean {
@@ -872,7 +909,7 @@ function LongOptionCloseCard({
   accountInputs?: AccountInputs;
   currentEstimateFxQuote?: FxQuote | null;
   singleLegLayout: boolean;
-  onClosePriceChange: (closePriceUSD: number, source: OptionValueSnapshotSource) => void;
+  onClosePriceChange: (closePriceUSD: number, source: OptionValueSnapshotSource, recordObservation?: boolean, evidence?: OptionPriceAdoptionEvidence) => void;
   onCloseFeeChange: (commissionUSD: number) => void;
   onClosePlanChange: (closePlanPatch: Partial<NonNullable<OptionLeg["closePlan"]>>) => void;
   onExecutionDraft: () => void;
@@ -1027,9 +1064,8 @@ function LongOptionCloseCard({
           suffix="USD/株"
           placeholder="Saxo決済チケットの売却価格"
           min={0}
-          onChange={(value) => {
-            onClosePriceChange(value, "manual");
-          }}
+          onChange={(value) => onClosePriceChange(value, "manual", false)}
+          onCommit={(value) => { if (value !== undefined) onClosePriceChange(value, "manual", true); }}
         />
         </div>
         <div id={`current-estimate-fee-${leg.id}`}>
@@ -1060,11 +1096,12 @@ function LongOptionCloseCard({
       <CompactPremiumCandidateResult
         candidate={apiCandidate}
         candidatePriceUSD={candidatePriceUSD}
+        adoptionEvidence={getPremiumCandidateAdoptionEvidence(apiCandidate, leg.side)}
         message={apiCandidateMessage}
         isLoading={isLoadingApiCandidate}
         onLoad={loadApiCandidate}
-        onAdopt={(price) => {
-          onClosePriceChange(price, "saxo");
+        onAdopt={(price, evidence) => {
+          onClosePriceChange(price, "saxo", true, evidence);
         }}
       />
       {closePriceUSD !== undefined && closePriceUSD > 0 ? (
@@ -1306,8 +1343,9 @@ function LongOptionTimeValueDecayView({
     );
   }
 
-  const intrinsicPct = Math.min(100, Math.max(0, (currentSnapshot.intrinsicValue / currentSnapshot.optionExitPrice) * 100));
-  const timePct = Math.max(0, 100 - intrinsicPct);
+  const decompositionConsistent = currentSnapshot.timeValueRatio !== undefined && currentSnapshot.timeValue >= 0;
+  const intrinsicPct = decompositionConsistent ? Math.min(100, Math.max(0, (currentSnapshot.intrinsicValue / currentSnapshot.optionExitPrice) * 100)) : 0;
+  const timePct = decompositionConsistent ? Math.max(0, 100 - intrinsicPct) : 0;
   const maxTimelineValue = Math.max(...timeline.map((snapshot) => snapshot.optionExitPrice), currentSnapshot.optionExitPrice, 1);
   const progressMessage = getOptionValueProgressMessage(progress);
 
@@ -1329,10 +1367,10 @@ function LongOptionTimeValueDecayView({
         <MiniMetric label="現在オプション価格" value={`${formatUSD(currentSnapshot.optionExitPrice)} / 株`} />
         <MiniMetric label="本質的価値" value={`${formatUSD(currentSnapshot.intrinsicValue)} / 株`} />
         <MiniMetric label="時間的価値" value={`${formatUSD(currentSnapshot.timeValue)} / 株`} tone={currentSnapshot.timeValue <= 0.05 ? "amber" : undefined} />
-        <MiniMetric label="時間的価値比率" value={formatPct(currentSnapshot.timeValueRatio * 100)} />
+        <MiniMetric label="時間的価値比率" value={currentSnapshot.timeValueRatio === undefined ? "未計算（価格と株価の整合を確認）" : formatPct(currentSnapshot.timeValueRatio * 100)} />
       </div>
 
-      <div className="mt-3 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+      {decompositionConsistent ? <div className="mt-3 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
         <div className="flex h-5 w-full">
           <div className="bg-emerald-500" style={{ width: `${intrinsicPct}%` }} title="本質的価値" />
           <div className="bg-rose-400" style={{ width: `${timePct}%` }} title="時間的価値" />
@@ -1341,7 +1379,7 @@ function LongOptionTimeValueDecayView({
           <span>本質 {formatUSD(currentSnapshot.intrinsicValue)}</span>
           <span>時間 {formatUSD(currentSnapshot.timeValue)}</span>
         </div>
-      </div>
+      </div> : <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">価格と株価の整合を確認。時間価値の構成比は表示しません。</p>}
 
       <div className="mt-3 grid gap-2 sm:grid-cols-4">
         <MiniMetric label="反対売買損益分岐価格" value={exitBreakevenPriceUSD === undefined ? "未計算" : `${formatUSD(exitBreakevenPriceUSD)} / 株`} />

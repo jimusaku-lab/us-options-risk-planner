@@ -41,6 +41,14 @@ describe("generic bulk option price contract", () => {
     const updated = applyCurrentOptionPricePreview([missingUnderlying], [createCurrentOptionPricePreviewRow(liveTarget, quote({ bid: 2 }))], { capturedAt: "2026-08-15T00:00:00Z" });
     expect(updated[0].optionLegs[0]).toMatchObject({ closeCostUSD: 2, valueSnapshots: undefined });
   });
+  it("writes a sell-leg observation with the applied batch evidence", () => {
+    const base = standalone();
+    const sell = { ...base, id: "sell", strategyType: "short_put" as const, optionLegs: [{ ...base.optionLegs[0], id: "put", type: "put" as const, side: "sell" as const, contractSize: 100 }] };
+    const target = getCurrentOptionPriceTargets([sell])[0];
+    const applied = applyCurrentOptionPricePreview([sell], [createCurrentOptionPricePreviewRow(target, quote({ ask: 2.4 }))], { capturedAt: "2026-09-23T01:00:00.000Z", batchId: "batch-r14" });
+    expect(applied[0].optionLegs[0].valueSnapshots).toBeUndefined();
+    expect(applied[0].optionLegs[0].valueObservations?.[0]).toMatchObject({ side: "sell", batchId: "batch-r14", selectedField: "ask", optionPriceUSD: 2.4 });
+  });
   it("does not make forbidden quote types available after confirmation", () => {
     for (const priceType of ["NoAccess", "NoMarket", "Pending"]) {
       const row = createCurrentOptionPricePreviewRow(target("blocked", "buy"), quote({ bid: 2, quoteDiagnostics: { priceTypeBid: priceType } }));

@@ -5,6 +5,7 @@ import { getOptionLegCloseProgress } from "@/domain/optionCloseExecutions";
 import { resolveCloseCommissionUSD, SAXO_CLOSE_COMMISSION_CONFIRMED_AT, SAXO_CLOSE_COMMISSION_SOURCE } from "@/domain/closeCommissionStandard";
 import { spreadEntryBasis } from "@/domain/spreadCashflows";
 import { formatPct, formatUSD } from "@/lib/format";
+import { TimeValueObservationPanel } from "@/components/results/TimeValueObservationPanel";
 
 const amount = (value: number | undefined) => value !== undefined && Number.isFinite(value) ? formatUSD(value) : "未確認";
 const signedAmount = (value: number | undefined) => value !== undefined && Number.isFinite(value)
@@ -56,6 +57,7 @@ export function SpreadPerformancePreview({ simulation, editable = false, onChang
     {estimate.kind === "missing" ? <p className="mt-2 text-sm text-amber-800">{estimate.reasons.join(" / ")}</p> : null}
     {partial && available ? <p className="mt-2 text-xs text-slate-700">決済済みの損益 {signedAmount(estimate.realizedPnlUSD)} ／ 残っている分を決済した場合 {signedAmount(available.remainingEstimatedPnlUSD)} ／ 合計 {signedAmount(available.totalEstimatedPnlUSD)}</p> : null}
     {closed && available ? <p className="mt-2 text-xs text-slate-700">実現損益 {signedAmount(available.realizedPnlUSD)}</p> : null}
+    <TimeValueObservationPanel legs={simulation.optionLegs.filter((leg) => (progress.legs.find((item) => item.legId === leg.id)?.remainingContracts ?? 0) > 0)} remainingContractsByLeg={Object.fromEntries(progress.legs.map((item) => [item.legId, item.remainingContracts]))} currentUnderlyingPriceUSD={simulation.currentPriceUSD} parentHistory={simulation.timeValueParentHistory} parentUpdateReason={simulation.timeValueParentUpdateReason} title="時間価値・反対売買判断" />
 
     {!closed ? <details className="mt-3 rounded border border-indigo-100 bg-white/70 px-3 py-2">
       <summary className="cursor-pointer text-xs font-bold">今決済した場合の計算内訳</summary>
@@ -103,6 +105,7 @@ function GenericVerticalSpreadPreview({ simulation, anchor }: { simulation: Trad
     <p className="mt-1 text-xs text-slate-700">{simulation.optionLegs.map((leg) => `${leg.type === "call" ? "C" : "P"}${leg.side === "buy" ? "買い" : "売り"} ${strike(leg.strikeUSD)} ${leg.quantity}枚`).join(" ／ ")} ／ 満期 {simulation.expiryDate}</p>
     <p className="mt-1 text-xs text-slate-600">{entryCashflowLabel}</p>
     {estimate.kind === "available" ? <><p className="mt-2 text-sm font-bold">概算損益 {signedAmount(estimate.estimatedPnlUSD)}{estimate.periodReturnPct !== undefined ? ` / 期間損益率 ${formatPct(estimate.periodReturnPct)}` : " / 期間損益率 未計算"}</p><p className="text-xs text-slate-600">現在決済年率 {estimate.annualizedReturnPct === undefined ? "未計算" : formatPct(estimate.annualizedReturnPct)}{estimate.rateMissingReason ? ` / ${estimate.rateMissingReason}` : ""}</p></> : <p className="mt-2 text-sm text-amber-800">{estimate.reasons.join(" / ")}</p>}
+    <TimeValueObservationPanel legs={simulation.optionLegs.filter((leg) => (progress.legs.find((item) => item.legId === leg.id)?.remainingContracts ?? 0) > 0)} remainingContractsByLeg={Object.fromEntries(progress.legs.map((item) => [item.legId, item.remainingContracts]))} currentUnderlyingPriceUSD={simulation.currentPriceUSD} parentHistory={simulation.timeValueParentHistory} parentUpdateReason={simulation.timeValueParentUpdateReason} title="時間価値・反対売買判断" />
     <details className="mt-3 rounded border border-indigo-100 bg-white/70 px-3 py-2"><summary className="cursor-pointer text-xs font-bold">脚別の現在決済根拠</summary><div className="mt-2 grid gap-2 md:grid-cols-2">{simulation.optionLegs.map((leg) => { const remaining = progress.legs.find((item) => item.legId === leg.id)?.remainingContracts; const price = leg.closePlan?.closePriceUSD ?? leg.closeCostUSD; const fee = remaining && remaining > 0 ? resolveCloseCommissionUSD(simulation, leg, remaining) : undefined; return <div key={leg.id} className="rounded bg-white p-2 text-xs"><p className="font-bold">{leg.type === "call" ? "C" : "P"}{leg.side === "buy" ? "買い" : "売り"} {strike(leg.strikeUSD)}</p><p>残り {remaining ?? "未確認"}枚 / 決済参考価格 {amount(price)} / 決済費用 {fee?.kind === "resolved" ? amount(fee.amountUSD) : remaining === 0 ? "決済済み" : "未確認"}</p><p className="text-slate-500">{spreadPriceEvidenceLabel(leg)}</p></div>; })}</div></details>
   </section>;
 }

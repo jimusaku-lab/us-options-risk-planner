@@ -208,8 +208,64 @@ export type OptionValueSnapshot = {
   dte: number;
   intrinsicValue: number;
   timeValue: number;
-  timeValueRatio: number;
+  timeValueRatio?: number;
   source: OptionValueSnapshotSource;
+};
+
+export type OptionValueObservation = {
+  observationId: string;
+  legId?: string;
+  workspaceId?: string;
+  batchId?: string;
+  evidenceRevision?: string;
+  snapshotDate: string;
+  capturedAt?: string;
+  sourceTimestamp?: string;
+  underlyingSource?: string;
+  underlyingSourceTimestamp?: string;
+  side: OptionSide;
+  optionType: OptionType;
+  strikeUSD: number;
+  expiryDate: string;
+  quantity?: number;
+  contractSize?: number;
+  optionPriceUSD: number;
+  underlyingPriceUSD?: number;
+  intrinsicValueUSD?: number;
+  rawTimeValueUSD?: number;
+  timeValueUSD?: number;
+  timeValueRatio?: number;
+  decompositionState: "available" | "price_only" | "zero_price" | "inconsistent" | "missing";
+  reason?: string;
+  selectedField?: "bid" | "ask" | "manual";
+  source: OptionValueSnapshotSource;
+  quality?: "current" | "old_indicative" | "manual" | "unknown";
+  feeUSD?: number;
+  feeSource?: string;
+  quantityChanged?: boolean;
+  previousQuantity?: number;
+  previousContractSize?: number;
+  calculationVersion: "r14" | "legacy_adapter";
+};
+
+export type OptionValueParentObservation = {
+  observationId: string;
+  batchId: string;
+  simulationId: string;
+  snapshotDate: string;
+  legs: OptionValueObservation[];
+  evidenceRevision: string;
+  positionValueUSD: number;
+  intrinsicValueUSD?: number;
+  timeValueUSD?: number;
+  closeFeeUSD?: number;
+  closeCashflowUSD?: number;
+  estimatedPnlUSD?: number;
+  periodReturnPct?: number;
+  synchronized: boolean;
+  quantityChanged?: boolean;
+  evidenceChanged?: boolean;
+  superseded?: OptionValueParentObservation[];
 };
 
 export type OptionLeg = {
@@ -240,6 +296,7 @@ export type OptionLeg = {
   saxoUic?: number;
   saxoHistoryCandidateIds?: string[];
   valueSnapshots?: OptionValueSnapshot[];
+  valueObservations?: OptionValueObservation[];
 };
 
 export type ProfitTakeRule = {
@@ -548,6 +605,8 @@ export type TradeSimulation = {
   bearPutSpreadLinkage?: BearPutSpreadLinkage;
   stockPosition: StockPosition | null;
   optionLegs: OptionLeg[];
+  timeValueParentHistory?: OptionValueParentObservation[];
+  timeValueParentUpdateReason?: string;
   brokerMarginJPY: number;
   brokerMarginUSD?: number;
   marginBufferMultiplier: number;

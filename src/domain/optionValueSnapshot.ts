@@ -11,8 +11,8 @@ export function calculateRemainingDaysUntilExpiry(expiryDate: string, now = new 
 export function buildLongOptionValueSnapshot({ snapshotDate, underlyingPrice, optionExitPrice, strike, expiry, dte, optionType, source, capturedAt }: { snapshotDate: string; underlyingPrice: number; optionExitPrice: number; strike: number; expiry: string; dte: number; optionType: OptionType; source: OptionValueSnapshotSource; capturedAt?: string }): OptionValueSnapshot | null {
   if (!Number.isFinite(underlyingPrice) || underlyingPrice <= 0 || !Number.isFinite(optionExitPrice) || optionExitPrice <= 0 || !Number.isFinite(strike) || strike <= 0) return null;
   const intrinsicValue = optionType === "call" ? Math.max(0, underlyingPrice - strike) : Math.max(0, strike - underlyingPrice);
-  const timeValue = Math.max(0, optionExitPrice - intrinsicValue);
-  return { snapshotDate, capturedAt, underlyingPrice, optionExitPrice, strike, expiry, dte, intrinsicValue, timeValue, timeValueRatio: timeValue / optionExitPrice, source };
+  const timeValue = optionExitPrice - intrinsicValue;
+  return { snapshotDate, capturedAt, underlyingPrice, optionExitPrice, strike, expiry, dte, intrinsicValue, timeValue, timeValueRatio: timeValue >= 0 ? timeValue / optionExitPrice : undefined, source };
 }
 
 export function upsertOptionValueSnapshot(snapshots: OptionValueSnapshot[] | undefined, nextSnapshot: OptionValueSnapshot): OptionValueSnapshot[] {

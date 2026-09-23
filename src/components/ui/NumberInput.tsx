@@ -8,6 +8,8 @@ type SharedNumberInputProps = {
   step?: number;
   placeholder?: string;
   inputId?: string;
+  /** Optional observation boundary; onChange still supports live calculation. */
+  onCommit?: (value: number | undefined) => void;
 };
 
 type NumberInputProps = {
@@ -22,9 +24,10 @@ function formatInputValue(value: number): string {
   return Number.isFinite(value) ? String(value) : "";
 }
 
-export function NumberInput({ label, value, onChange, suffix, min, step, placeholder, inputId, emptyAsUndefined = false }: NumberInputProps) {
+export function NumberInput({ label, value, onChange, onCommit, suffix, min, step, placeholder, inputId, emptyAsUndefined = false }: NumberInputProps) {
   const [draftValue, setDraftValue] = useState(() => formatInputValue(value));
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const editedRef = useRef(false);
 
   useEffect(() => {
     const nextValue = formatInputValue(value);
@@ -47,6 +50,7 @@ export function NumberInput({ label, value, onChange, suffix, min, step, placeho
           step={step ?? "any"}
           onChange={(event) => {
             const nextRawValue = event.target.value;
+            editedRef.current = true;
             setDraftValue(nextRawValue);
             if (nextRawValue === "") {
               if (emptyAsUndefined) (onChange as (value: number | undefined) => void)(undefined);
@@ -56,7 +60,13 @@ export function NumberInput({ label, value, onChange, suffix, min, step, placeho
             const parsed = Number(nextRawValue);
             if (Number.isFinite(parsed)) onChange(parsed);
           }}
-          onBlur={() => setDraftValue(formatInputValue(value))}
+          onBlur={() => {
+            const parsed = draftValue.trim() === "" ? undefined : Number(draftValue);
+            const edited = editedRef.current;
+            editedRef.current = false;
+            if (edited && (parsed === undefined || Number.isFinite(parsed))) onCommit?.(parsed);
+            setDraftValue(formatInputValue(value));
+          }}
         />
         {suffix ? <span className="shrink-0 px-3 text-xs text-slate-500">{suffix}</span> : null}
       </span>
