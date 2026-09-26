@@ -2945,14 +2945,14 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    <section className="grid gap-4">
+                    <section className="grid min-w-0 grid-cols-1 gap-4">
                       <div className="px-1">
                         <h2 className="text-lg font-bold text-slate-950">損益・分母</h2>
                         <p className="mt-1 text-sm leading-6 text-slate-600">
                           満期時の損益図、分母の大きさ、分母比較、年率換算の根拠をまとめて確認します。
                         </p>
                       </div>
-                      <section className="grid gap-4 xl:grid-cols-2">
+                      <section className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
                         <PayoffChart simulation={selectedWithAccount} points={payoff} />
                         <DenominatorChart denominators={denominatorsForDisplay} />
                       </section>

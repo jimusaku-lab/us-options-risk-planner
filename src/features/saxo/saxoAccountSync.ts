@@ -1116,6 +1116,7 @@ export type SaxoHistoryFieldDiagnostic = {
 };
 
 export type SaxoOptionPremiumCandidate = {
+  sourceTimestamp?: string;
   environment: SaxoEnvironment;
   fetchedAt: string;
   status: "available" | "endpoint_unidentified" | "permission_denied" | "unavailable";

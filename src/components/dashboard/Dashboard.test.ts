@@ -5,6 +5,8 @@ import type { TradeSimulation } from "@/types/domain";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import { getSimulationTickerDisplayLabel } from "./Dashboard";
 import { Dashboard } from "./Dashboard";
+import { captureReferenceQuote, resolveEvaluationQuote } from "@/domain/midpointEvaluation";
+function explicitFixtureQuotes(s: TradeSimulation) { s.optionLegs = s.optionLegs.map(leg => ({...leg, contractSize:100, referenceQuote: leg.closeCostUSD === undefined ? undefined : captureReferenceQuote(resolveEvaluationQuote({bid:leg.closeCostUSD,ask:leg.closeCostUSD,priceTypeBid:"Tradable",priceTypeAsk:"Tradable",source:"fixture",fetchedAt:"2026-09-26T01:00:00Z"}),"fixture")})); return s; }
 
 function createSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulation {
   return {
@@ -31,6 +33,7 @@ function createSimulation(patch: Partial<TradeSimulation> = {}): TradeSimulation
         strikeUSD: 195,
         premiumUSD: 3.75,
         quantity: 1,
+        contractSize: 100,
         expiryDate: "2026-07-24",
       },
     ],
@@ -85,9 +88,10 @@ describe("synthetic leg history", () => {
       {id:"partial-put",type:"put",side:"sell",strikeUSD:210,premiumUSD:21.05,quantity:1,expiryDate:"2026-12-18",closeCostUSD:2,closePlan:{enabled:true,commissionUSD:2.24}}],optionEntryExecutions:[
       {id:"partial-call-entry",legId:"partial-call",tradeDate:"2026-09-01",contracts:1,fillPriceUSD:26.25,settlementCurrency:"USD",commissionUSD:2.24,source:"manual",confirmed:true},
       {id:"partial-put-entry",legId:"partial-put",tradeDate:"2026-09-01",contracts:1,fillPriceUSD:21.05,settlementCurrency:"USD",commissionUSD:2.24,source:"manual",confirmed:true}],optionCloseExecutions:[{id:"partial-call-close",legId:"partial-call",closeKind:"buyback",closeDate:"2026-09-10",contracts:1,settlementCurrency:"USD",source:"manual",confirmed:true}]});
+    [spread,nLong,pLong,partial].forEach(explicitFixtureQuotes);
     const {container}=render(createElement(Dashboard,{simulations:[spread,nLong,pLong,partial],selectedId:spread.id,onSelect:vi.fn(),onEdit:vi.fn(),onDelete:vi.fn(),workspace:"live",accountInputs,historyOpen:false,onHistoryOpenChange:vi.fn(),currentEstimateFxQuote:{pair:"USDJPY",rate:160,date:"2026-09-13",fetchedAt:"2026-09-13T00:00:00Z",source:"frankfurter"}}));
     const rows=["SPRD","NBUY","PJPY","PART"].map((ticker)=>container.querySelector(`tr[aria-label="${ticker}の詳細を表示する"]`)!);
-    for (const row of rows) { const metric=row.querySelector<HTMLElement>('td:nth-child(9) [data-testid="current-estimate-metric"]')!; expect(metric.children[0]?.textContent).toMatch(/現在決済年率/); expect(metric.children[1]?.textContent).toMatch(/[+-].*%/); expect(metric.children[2]?.textContent).toMatch(/概算損益/); }
+    for (const row of rows) { expect(row.children[8].textContent).toContain("参考損益（中間値）"); expect(row.children[8].textContent).toContain("参考損益率"); expect(row.children[8].textContent).not.toContain("現在決済年率"); expect(row.querySelectorAll("td")).toHaveLength(12); }
     expect(rows[0].children[7].textContent).toContain("$404.48"); expect(rows[1].children[7].textContent).toContain("$222.24"); expect(rows[2].children[7].textContent).toContain("383,934円"); expect(rows[3].children[7].textContent).toContain("$21,000.00");
     expect(container.textContent).not.toContain("開始支払額は左列に表示"); expect(container.textContent).not.toContain("支払総額は左列に表示");
   });
@@ -104,12 +108,15 @@ describe("synthetic leg history", () => {
         { id: "es", legId: "short", tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 0.92, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
       ],
     });
+    explicitFixtureQuotes(simulation);
     const onPositionFocus = vi.fn();
     const { container, rerender } = render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onPositionFocus }));
     expect(screen.getByText("ベア・プット")).toBeTruthy();
     expect(screen.getByText("P100買い／P90売り・1組")).toBeTruthy();
-    expect(screen.getByText(/概算損益 -\$28\.96/)).toHaveTextContent("-$28.96 / -7.2%");
-    expect(screen.getByText("現在決済年率")).toBeTruthy();
+    expect(container.querySelector('tr[aria-label="TESTの詳細を表示する"]')?.children[8].textContent).toContain("-$28.96");
+    expect(container.querySelector('tr[aria-label="TESTの詳細を表示する"]')?.children[8].textContent).toContain("-7.2%");
+    expect(screen.getByText("参考損益（中間値）")).toBeTruthy();
+    expect(screen.queryByText("現在決済年率")).toBeNull();
     expect(container.querySelector('tr[aria-label="TESTの詳細を表示する"]')?.children[7].textContent).toContain("$404.48");
     expect(screen.getAllByText(/期間損益率/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "戦略の決済を確認" })).toBeTruthy();
@@ -422,18 +429,20 @@ describe("Dashboard close decision actions", () => {
   }
 
   it.each(["accept", "unknown"] as const)("uses the common current-close rate and P/L order for %s", (policy) => {
-    const simulation = currentShortPut(policy);
+    const simulation = explicitFixtureQuotes(currentShortPut(policy));
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn() }));
-    expect(screen.getByText("現在決済年率")).toBeTruthy();
-    expect(screen.getByText(/概算損益 [+-]\$/)).toBeTruthy();
+    expect(screen.getByText("参考損益（中間値）")).toBeTruthy();
+    expect(screen.queryByText("現在決済年率")).toBeNull();
+    expect(screen.getByText("+$170.52")).toBeTruthy();
     expect(screen.queryByText("プレミアム年率")).toBeNull();
   });
 
   it("keeps avoid on current close annual return plus the existing P/L label", () => {
-    const simulation = currentShortPut("avoid");
+    const simulation = explicitFixtureQuotes(currentShortPut("avoid"));
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn() }));
-    expect(screen.getByText("現在決済年率")).toBeTruthy();
-    expect(screen.getByText(/概算損益 [+-]\$/)).toBeTruthy();
+    expect(screen.getByText("参考損益（中間値）")).toBeTruthy();
+    expect(screen.queryByText("現在決済年率")).toBeNull();
+    expect(screen.getByText("+$170.52")).toBeTruthy();
     expect(screen.queryByText(/現在買戻し概算損益/)).toBeNull();
   });
 
@@ -441,7 +450,7 @@ describe("Dashboard close decision actions", () => {
     const action = vi.fn();
     const simulation = currentShortPut("accept", false);
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onCurrentEstimateAction: action }));
-    expect(screen.getByText("買戻し価格 未取得")).toBeTruthy();
+    expect(screen.getByText(/中間値未取得/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "不足情報を確認" }));
     expect(action).toHaveBeenCalledWith("sim", "leg", "exit_price");
   });
@@ -484,8 +493,9 @@ describe("Dashboard close decision actions", () => {
     }));
 
     expect(screen.getByText("建玉時ネット支払額")).toBeTruthy();
-    expect(screen.getByText("現在決済年率")).toBeTruthy();
-    expect(screen.getByText("C売却価格・P買戻し価格 未取得")).toBeTruthy();
+    expect(screen.getByText("参考損益（中間値）")).toBeTruthy();
+    expect(screen.queryByText("現在決済年率")).toBeNull();
+    expect(screen.getByText(/契約倍率 未確認/)).toBeTruthy();
     expect(screen.queryByText("プレミアム年率")).toBeNull();
   });
 

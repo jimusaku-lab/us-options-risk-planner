@@ -47,6 +47,7 @@ export function SpreadPerformancePreview({ simulation, editable = false, onChang
   return <section id={anchor ? `spread-close-preview-${simulation.id}` : undefined} tabIndex={anchor ? -1 : undefined} aria-label="戦略の決済プレビュー" className="min-w-0 rounded border border-indigo-200 bg-indigo-50 p-3 focus:outline-none focus:ring-2 focus:ring-indigo-600">
     <div className="flex flex-wrap items-baseline justify-between gap-2">
       <h3 className="text-sm font-bold">ベア・プットの内訳</h3>
+      <span className="text-xs text-slate-600">決済目安（買いBid・売りAsk／保存済み決済候補）</span>
       <span className="text-xs font-semibold text-indigo-700">{estimate.lifecycle.label}</span>
     </div>
     <p className="mt-1 text-xs text-slate-700">
@@ -102,6 +103,7 @@ function GenericVerticalSpreadPreview({ simulation, anchor }: { simulation: Trad
       : `建玉時の手数料差引受取額 ${amount(Math.abs(entryBasis.value))}`;
   return <section id={anchor ? `spread-close-preview-${simulation.id}` : undefined} tabIndex={anchor ? -1 : undefined} aria-label="戦略の決済プレビュー" className="min-w-0 rounded border border-indigo-200 bg-indigo-50 p-3 focus:outline-none focus:ring-2 focus:ring-indigo-600">
     <h3 className="text-sm font-bold">{definition?.label ?? "2脚戦略"}の内訳</h3>
+    <p className="text-xs text-slate-600">決済目安（買いBid・売りAsk／保存済み決済候補）</p>
     <p className="mt-1 text-xs text-slate-700">{simulation.optionLegs.map((leg) => `${leg.type === "call" ? "C" : "P"}${leg.side === "buy" ? "買い" : "売り"} ${strike(leg.strikeUSD)} ${leg.quantity}枚`).join(" ／ ")} ／ 満期 {simulation.expiryDate}</p>
     <p className="mt-1 text-xs text-slate-600">{entryCashflowLabel}</p>
     {estimate.kind === "available" ? <><p className="mt-2 text-sm font-bold">概算損益 {signedAmount(estimate.estimatedPnlUSD)}{estimate.periodReturnPct !== undefined ? ` / 期間損益率 ${formatPct(estimate.periodReturnPct)}` : " / 期間損益率 未計算"}</p><p className="text-xs text-slate-600">現在決済年率 {estimate.annualizedReturnPct === undefined ? "未計算" : formatPct(estimate.annualizedReturnPct)}{estimate.rateMissingReason ? ` / ${estimate.rateMissingReason}` : ""}</p></> : <p className="mt-2 text-sm text-amber-800">{estimate.reasons.join(" / ")}</p>}

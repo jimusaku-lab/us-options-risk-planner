@@ -297,6 +297,7 @@ export type OptionLeg = {
   saxoHistoryCandidateIds?: string[];
   valueSnapshots?: OptionValueSnapshot[];
   valueObservations?: OptionValueObservation[];
+  referenceQuote?: { priceTypeBid?: string; priceTypeAsk?: string; referenceConfirmedAt?: string; bidUSD?: number; askUSD?: number; midUSD?: number; spreadUSD?: number; spreadRate?: number; quality: "current" | "old_indicative" | "unknown"; fetchedAt: string; source: string; sourceTimestamp?: string; delayedByMinutes?: number; batchId?: string; basisVersion: "r15-midpoint-v1" };
 };
 
 export type ProfitTakeRule = {

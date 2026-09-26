@@ -23,7 +23,11 @@ import { calculateBearPutSpreadEstimate } from "@/domain/bearPutSpread";
 import { TimeValueObservationPanel } from "@/components/results/TimeValueObservationPanel";
 import { buildOptionValueObservation, resolveOptionValueEvidenceRevision, upsertTimeValueObservation } from "@/domain/timeValue";
 
+import { resolveEvaluationQuote, captureReferenceQuote, type EvaluationQuote } from "@/domain/midpointEvaluation";
+
 type OptionPriceAdoptionEvidence = {
+  referenceQuote?: OptionLeg["referenceQuote"];
+  referenceOnly?: boolean;
   selectedField: "bid" | "ask";
   fetchedAt?: string;
   quoteStatus?: string;
@@ -75,6 +79,7 @@ export function CloseDecisionCard({
     });
   };
   const updateLongOptionClosePrice = (leg: OptionLeg, closePriceUSD: number, source: OptionValueSnapshotSource = "manual", recordObservation = true, evidence?: OptionPriceAdoptionEvidence) => {
+    if (evidence?.referenceOnly) { if (evidence.referenceQuote) updateLeg(leg.id, { referenceQuote: evidence.referenceQuote }); return; }
     const capturedAt = source === "saxo" ? evidence?.fetchedAt : new Date().toISOString();
     const observationFee = resolveCloseCommissionUSD(simulation, leg, Math.abs(leg.quantity));
     const snapshot = buildLongOptionValueSnapshot({
@@ -90,6 +95,7 @@ export function CloseDecisionCard({
     });
     const observation = recordObservation && leg.contractSize && Number.isInteger(leg.contractSize) && leg.contractSize > 0 ? buildOptionValueObservation({ observationId: `${source}:${leg.id}:${todayIsoDate()}`, legId: leg.id, evidenceRevision: resolveOptionValueEvidenceRevision({ legId: leg.id, entryExecutions: simulation.optionEntryExecutions, closeExecutions: simulation.optionCloseExecutions }), snapshotDate: todayIsoDate(), capturedAt: source === "saxo" ? evidence?.fetchedAt : capturedAt, side: leg.side, optionType: leg.type, optionPriceUSD: closePriceUSD, underlyingPriceUSD: simulation.currentPriceUSD, underlyingSource: "保存済み現在株価", strikeUSD: leg.strikeUSD, expiry: leg.expiryDate, quantity: Math.abs(leg.quantity), contractSize: leg.contractSize, selectedField: source === "saxo" ? "bid" : "manual", source: source === "saxo" ? "saxo" : "manual", quality: source !== "saxo" ? "manual" : evidence?.priceType === "OldIndicative" ? "old_indicative" : evidence?.priceType ? "current" : "unknown", feeUSD: observationFee.kind === "resolved" ? observationFee.amountUSD : undefined, feeSource: observationFee.kind === "resolved" ? observationFee.source : undefined }) : null;
     updateLeg(leg.id, {
+      referenceQuote: evidence?.referenceQuote ?? leg.referenceQuote,
       closeCostUSD: closePriceUSD,
       closePlan: { enabled: true, ...(leg.closePlan ?? {}), closePriceUSD, ...(source === "saxo" && evidence ? { priceSource: "saxo", priceSelectedField: evidence.selectedField, priceFetchedAt: evidence.fetchedAt, priceQuoteStatus: evidence.quoteStatus, priceType: evidence.priceType } : {}) },
       valueSnapshots: recordObservation && snapshot ? upsertOptionValueSnapshot(leg.valueSnapshots, snapshot) : leg.valueSnapshots,
@@ -97,10 +103,12 @@ export function CloseDecisionCard({
     });
   };
   const updateShortOptionClosePrice = (leg: OptionLeg, closePriceUSD: number, source: OptionValueSnapshotSource = "manual", recordObservation = true, evidence?: OptionPriceAdoptionEvidence) => {
+    if (evidence?.referenceOnly) { if (evidence.referenceQuote) updateLeg(leg.id, { referenceQuote: evidence.referenceQuote }); return; }
     const capturedAt = source === "saxo" ? evidence?.fetchedAt : new Date().toISOString();
     const observationFee = resolveCloseCommissionUSD(simulation, leg, Math.abs(leg.quantity));
     const observation = recordObservation && leg.contractSize && Number.isInteger(leg.contractSize) && leg.contractSize > 0 ? buildOptionValueObservation({ observationId: `${source}:${leg.id}:${todayIsoDate()}`, legId: leg.id, evidenceRevision: resolveOptionValueEvidenceRevision({ legId: leg.id, entryExecutions: simulation.optionEntryExecutions, closeExecutions: simulation.optionCloseExecutions }), snapshotDate: todayIsoDate(), capturedAt: source === "saxo" ? evidence?.fetchedAt : capturedAt, side: leg.side, optionType: leg.type, optionPriceUSD: closePriceUSD, underlyingPriceUSD: simulation.currentPriceUSD, underlyingSource: "保存済み現在株価", strikeUSD: leg.strikeUSD, expiry: leg.expiryDate, quantity: Math.abs(leg.quantity), contractSize: leg.contractSize, selectedField: source === "saxo" ? "ask" : "manual", source: source === "saxo" ? "saxo" : "manual", quality: source !== "saxo" ? "manual" : evidence?.priceType === "OldIndicative" ? "old_indicative" : evidence?.priceType ? "current" : "unknown", feeUSD: observationFee.kind === "resolved" ? observationFee.amountUSD : undefined, feeSource: observationFee.kind === "resolved" ? observationFee.source : undefined }) : null;
-    updateLeg(leg.id, { closeCostUSD: closePriceUSD, closePlan: { enabled: true, ...(leg.closePlan ?? {}), closePriceUSD, priceSource: source === "saxo" ? "saxo" : "manual", priceSelectedField: source === "saxo" ? "ask" : "manual", priceFetchedAt: source === "saxo" ? evidence?.fetchedAt : capturedAt, ...(source === "saxo" && evidence ? { priceQuoteStatus: evidence.quoteStatus, priceType: evidence.priceType } : {}) }, valueObservations: observation ? upsertTimeValueObservation(leg.valueObservations, observation) : leg.valueObservations });
+    updateLeg(leg.id, { referenceQuote: evidence?.referenceQuote ?? leg.referenceQuote,
+      closeCostUSD: closePriceUSD, closePlan: { enabled: true, ...(leg.closePlan ?? {}), closePriceUSD, priceSource: source === "saxo" ? "saxo" : "manual", priceSelectedField: source === "saxo" ? "ask" : "manual", priceFetchedAt: source === "saxo" ? evidence?.fetchedAt : capturedAt, ...(source === "saxo" && evidence ? { priceQuoteStatus: evidence.quoteStatus, priceType: evidence.priceType } : {}) }, valueObservations: observation ? upsertTimeValueObservation(leg.valueObservations, observation) : leg.valueObservations });
   };
   const updateCloseFee = (leg: OptionLeg, commissionUSD: number, commissionSource: "manual" | "user_confirmed_standard") => {
     updateLeg(leg.id, {
@@ -797,6 +805,11 @@ function CompactPremiumCandidateResult({
   onLoad: () => void;
   onAdopt: (price: number, evidence?: OptionPriceAdoptionEvidence) => void;
 }) {
+  const [referenceConfirmed, setReferenceConfirmed] = useState(false);
+  useEffect(() => setReferenceConfirmed(false), [candidate]);
+  const quote: EvaluationQuote | undefined = candidate?.status === "available" ? resolveEvaluationQuote({bid:candidate.bid,ask:candidate.ask,priceTypeBid:candidate.quoteDiagnostics?.priceTypeBid,priceTypeAsk:candidate.quoteDiagnostics?.priceTypeAsk,source:candidate.source,sourceTimestamp:candidate.sourceTimestamp,fetchedAt:candidate.fetchedAt,delayedByMinutes:candidate.quoteDiagnostics?.delayedByMinutes}) : undefined;
+  const needsConfirmation = quote?.kind === "confirmable_reference" || adoptionEvidence?.priceType === "OldIndicative";
+  const referenceOnly = candidatePriceUSD === null && quote !== undefined && quote.kind !== "unavailable";
   const noAccess = isSaxoPriceFeedNoAccess(candidate);
   const manualInputGuidance = getPremiumCandidateManualInputGuidance(candidate);
   return (
@@ -806,16 +819,18 @@ function CompactPremiumCandidateResult({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
             <span>Bid {noAccess ? "—" : formatOptionalUSD(candidate.bid)}</span>
             <span>Ask {noAccess ? "—" : formatOptionalUSD(candidate.ask)}</span>
-            <span>Mid {noAccess ? "—" : formatOptionalUSD(candidate.mid)}</span>
+            <span>Mid {noAccess ? "—" : formatOptionalUSD(quote?.mid)}</span>
             <span>Last {noAccess ? "—" : formatOptionalUSD(candidate.last)}</span>
             <span className="text-slate-500">{candidate.source} / {candidate.fetchedAt ? candidate.fetchedAt.slice(0, 16) : "時刻未取得"}</span>
           </div>
-          {candidatePriceUSD !== null ? (
+          {needsConfirmation ? <label className="mt-2 block"><input type="checkbox" checked={referenceConfirmed} onChange={e=>setReferenceConfirmed(e.target.checked)}/> OldIndicativeを取得時点の参考値として使用することを確認</label> : null}
+          {candidatePriceUSD !== null || referenceOnly ? (
             <button
               className="mt-2 rounded border border-slate-300 bg-white px-2 py-1 font-bold text-slate-700 hover:bg-slate-50"
-              onClick={() => onAdopt(candidatePriceUSD, adoptionEvidence)}
+              disabled={needsConfirmation && !referenceConfirmed}
+              onClick={() => { const at=new Date().toISOString(); onAdopt(candidatePriceUSD ?? 0, { ...adoptionEvidence!, referenceOnly, referenceQuote: captureReferenceQuote(quote,"individual:"+at, referenceConfirmed ? at : undefined) }); }}
             >
-              この価格を採用（{formatUSD(candidatePriceUSD)}）
+              {referenceOnly ? "中間値の参考評価のみ採用" : `この価格を採用（${formatUSD(candidatePriceUSD!)}）`}
             </button>
           ) : null}
           <details className="mt-2 text-slate-600">
@@ -846,7 +861,7 @@ export function getLongOptionExitOrderLineCandidate(candidates: SaxoApiOrderSnap
 }
 
 export function getPremiumCandidatePrice(candidate: SaxoOptionPremiumCandidate | null, side?: OptionLeg["side"]): number | null {
-  if (!candidate) return null;
+  if (!candidate || candidate.status !== "available") return null;
   if (isSaxoPriceFeedNoAccess(candidate)) return null;
   // A live close candidate is executable only on the correct side of the book.
   // Mid/Last remain display-only references and are never silently adopted.

@@ -23,6 +23,9 @@ import { calculateBearPutSpreadEstimate, getBearPutSpreadLifecycle } from "@/dom
 import { calculateVerticalSpreadEstimate, getVerticalSpreadDefinition } from "@/domain/verticalSpread";
 import { calculateHistoryCashflowDisplay } from "@/domain/historyCashflowDisplay";
 import { spreadEntryBasis } from "@/domain/spreadCashflows";
+import { calculatePositionBasisEvaluation } from "@/domain/positionBasisEvaluation";
+import { BasisMetric, PositionBasisCard, formatBasisAmount } from "./PositionBasisCard";
+import { resolveCloseCommissionUSD } from "@/domain/closeCommissionStandard";
 
 const statusClassName = {
   planned: "bg-sky-100 text-sky-800",
@@ -45,13 +48,13 @@ function formatRealizedUSD(value: number): string {
   return `${sign}${formatUSD(Math.abs(value))}`;
 }
 
-function CurrentEstimateMetric({ label, annualizedReturnPct, profitLabel = "概算損益", profitAmount, profitPct, note, missingReason, children }: {
-  label: string; annualizedReturnPct?: number; profitLabel?: string; profitAmount?: string; profitPct?: number; note?: string; missingReason?: string; children?: ReactNode;
+function CurrentEstimateMetric({ label, annualizedReturnPct, profitLabel = "概算損益", profitAmount, profitPct, note, missingReason, showAnnual = true, children }: {
+  label: string; annualizedReturnPct?: number; profitLabel?: string; profitAmount?: string; profitPct?: number; note?: string; missingReason?: string; showAnnual?: boolean; children?: ReactNode;
 }) {
   const tone = annualizedReturnPct !== undefined ? annualizedReturnPct >= 0 ? "text-emerald-700" : "text-red-700" : profitPct !== undefined ? profitPct >= 0 ? "text-emerald-700" : "text-red-700" : "text-slate-500";
   return <span className="block" data-testid="current-estimate-metric">
     <span className="block text-[11px] font-bold leading-4 text-slate-500">{label}</span>
-    {annualizedReturnPct === undefined ? <span className="block text-base font-extrabold leading-5 text-slate-500">未計算</span> : <span className={`block text-base font-extrabold leading-5 ${tone}`}>{annualizedReturnPct >= 0 ? "+" : ""}{formatPct(annualizedReturnPct)}</span>}
+    {!showAnnual ? null : annualizedReturnPct === undefined ? <span className="block text-base font-extrabold leading-5 text-slate-500">未計算</span> : <span className={`block text-base font-extrabold leading-5 ${tone}`}>{annualizedReturnPct >= 0 ? "+" : ""}{formatPct(annualizedReturnPct)}</span>}
     {profitAmount !== undefined ? <span className={`block text-[11px] font-semibold leading-4 ${profitPct !== undefined && profitPct < 0 ? "text-red-700" : "text-emerald-700"}`}>{profitLabel} {profitAmount}{profitPct !== undefined ? <> / {profitPct >= 0 ? "+" : ""}{formatPct(profitPct)}</> : null}</span> : missingReason ? <span className="block text-[11px] font-medium leading-4 text-slate-500">{missingReason}</span> : null}
     {note ? <span className="block text-[10px] font-normal leading-4 text-slate-500">{note}</span> : null}
     {children}
@@ -145,8 +148,8 @@ function BulkOptionPricePreview({ rows, stockRows, simulations, referenceConfirm
         <td>{row.target.side === "buy" ? "売却候補" : "買戻し候補"}</td>
         <td className="text-right">{row.target.savedPriceUSD ?? "—"}</td>
         <td className="text-right">{[row.candidate?.bid, row.candidate?.ask, row.candidate?.mid, row.candidate?.last].map((v) => v ?? "—").join(" / ")}</td>
-        <td className="text-right">{row.selectedPriceUSD ?? "—"}{row.selectedField ? ` (${row.selectedField})` : ""}</td>
-        <td>{row.reason}{row.selectedField ? ` / ${row.selectedField} ${row.selectedField === "bid" ? row.candidate?.quoteDiagnostics?.priceTypeBid ?? "種別未取得" : row.candidate?.quoteDiagnostics?.priceTypeAsk ?? "種別未取得"}` : ""}{row.candidate?.fetchedAt ? ` / ${row.candidate.fetchedAt}` : ""}</td>
+        <td className="text-right">{row.selectedPriceUSD ?? "—"}{row.selectedField ? ` (${row.selectedField})` : ""}<span className="block text-[10px] text-slate-500">参考Mid {row.referenceQuote?.mid === undefined ? "未取得" : row.referenceQuote.mid}</span></td>
+        <td>{row.reason}{row.selectedField ? ` / ${row.selectedField} ${row.selectedField === "bid" ? row.candidate?.quoteDiagnostics?.priceTypeBid ?? "種別未取得" : row.candidate?.quoteDiagnostics?.priceTypeAsk ?? "種別未取得"}` : ""}{row.candidate?.fetchedAt ? ` / 取得 ${row.candidate.fetchedAt}` : ""}{row.referenceQuote?.spread !== undefined ? ` / spread ${row.referenceQuote.spread}` : ""}</td>
       </tr>)}</tbody>
     </table>
     <p className="mt-2 text-xs text-slate-600">取得成功 {counts.successful}脚 / 通常 {counts.ready}脚 / 参考値・要確認 {counts.confirmableReference}脚 / 反映不可 {counts.unavailable}脚</p>
@@ -245,6 +248,11 @@ export function Dashboard({
   onSaxoExitOrderAction?: (simulationId: string, legId: string) => void;
 }) {
   const [isBulkDialogOpen, setIsBulkDialogOpen] = useState(false);
+  const [notUpdated, setNotUpdated] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!bulkOptionPricePreview || bulkOptionPriceLoading) return;
+    setNotUpdated(new Set(bulkOptionPricePreview.filter(row => row.status === "unavailable" || !row.referenceQuote || row.referenceQuote.kind === "unavailable").map(row=>row.target.simulationId)));
+  }, [bulkOptionPricePreview, bulkOptionPriceLoading]);
   const bulkDialogCloseRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!isBulkDialogOpen) return;
@@ -388,6 +396,8 @@ export function Dashboard({
               const realizedOptionDays = historyPerformance?.realizedOptionDays;
               const premiumDisplay = calculateDashboardPremiumDisplay(simulationWithAccount);
               const currentEstimate = !isHistoryRow ? calculateCurrentPositionEstimate(simulationWithAccount, new Date(), currentEstimateFxQuote) : { kind: "not_applicable" } as const;
+              const basisEvaluation = !isHistoryRow && simulation.optionLegs.length ? calculatePositionBasisEvaluation(simulationWithAccount, currentEstimateFxQuote) : undefined;
+              const referencePositionEstimate = basisEvaluation?.reference;
               const bearPutEstimate = !isHistoryRow && simulation.strategyType === "bear_put_spread"
                 ? calculateBearPutSpreadEstimate(simulationWithAccount)
                 : undefined;
@@ -480,8 +490,14 @@ export function Dashboard({
                   ? "適用外"
                   : !isHistoryRow && !premiumDisplay.hasPremiumInput
                   ? "未入力"
+                  : referencePositionEstimate?.kind === "available"
+                  ? `参考損益（中間値） ${referencePositionEstimate.amount! >= 0 ? "+" : ""}${formatBasisAmount(referencePositionEstimate)}`
                   : longOptionDisplay
-                    ? longOptionDisplay.currentCloseAnnualizedReturnPct !== undefined
+                    ? longOptionDisplay.referenceAnnualizedReturnPct !== undefined
+                      ? `参考損益（中間値） ${longOptionDisplay.referenceProfitUSD !== undefined && longOptionDisplay.referenceProfitUSD > 0 ? "+" : ""}${longOptionDisplay.referenceProfitUSD === undefined ? "未計算" : formatUSD(longOptionDisplay.referenceProfitUSD)} / ${longOptionDisplay.referenceAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.referenceAnnualizedReturnPct)}`
+                      : longOptionDisplay.referenceProfitUSD === undefined
+                      ? "参考損益（中間値）未計算"
+                      : longOptionDisplay.currentCloseAnnualizedReturnPct !== undefined
                       ? `現在決済 ${longOptionDisplay.currentCloseAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.currentCloseAnnualizedReturnPct)}`
                       : "現在決済 未計算"
                   : isHistoryRow && historyPerformance?.historicalAnnualReturnMissingReason
@@ -677,7 +693,7 @@ export function Dashboard({
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {bearPutEstimate && !isHistoryRow ? (
+                    {referencePositionEstimate ? <><span className="block text-xs">参考評価の分母</span><span className="block">{referencePositionEstimate.denominator === undefined ? "未確認" : referencePositionEstimate.currency === "JPY" ? formatJPY(referencePositionEstimate.denominator) : formatUSD(referencePositionEstimate.denominator)}</span><span className="block text-xs">保有期間損益率 {referencePositionEstimate.periodReturnPct === undefined ? "未計算" : formatPct(referencePositionEstimate.periodReturnPct)}</span></> : bearPutEstimate && !isHistoryRow ? (
                       <>
                         <span className="block text-[11px] font-bold text-slate-500">実績分母 <span className="font-normal">（開始時手数料込み純支払）</span></span>
                         {bearPutEstimate.entryAllInDebitUSD !== undefined ? <span className="block text-slate-950">{formatUSD(bearPutEstimate.entryAllInDebitUSD)}</span> : <span className="block text-slate-500">未確認</span>}
@@ -735,43 +751,7 @@ export function Dashboard({
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {bearPutEstimate?.kind === "available" ? (
-                      <CurrentEstimateMetric label="現在決済年率" annualizedReturnPct={bearPutEstimate.annualizedReturnPct} profitAmount={formatSignedUSD(bearPutEstimate.totalEstimatedPnlUSD)} profitPct={bearPutEstimate.periodReturnPct} note={bearPutUsesOldIndicative ? "古い参考気配で計算" : "参考価格・想定手数料で計算"}>
-                        {bearPutEstimate.realizedPnlUSD !== 0 ? <span className="block text-[10px] text-slate-500">実現済み {formatSignedUSD(bearPutEstimate.realizedPnlUSD)} / 残存見込み {formatSignedUSD(bearPutEstimate.remainingEstimatedPnlUSD)}</span> : null}
-                      </CurrentEstimateMetric>
-                    ) : bearPutEstimate?.kind === "missing" ? (
-                      <CurrentEstimateMetric label="現在決済年率" missingReason={bearPutEstimate.reasons.join(" / ")} note={bearPutUsesOldIndicative ? "古い参考気配" : undefined} />
-                    ) : verticalEstimate?.kind === "available" ? (
-                      <CurrentEstimateMetric label="現在決済年率" annualizedReturnPct={verticalEstimate.annualizedReturnPct} profitAmount={formatSignedUSD(verticalEstimate.estimatedPnlUSD)} profitPct={verticalEstimate.periodReturnPct} missingReason={verticalEstimate.rateMissingReason ?? "年率の開始日証拠 未確認"} note="2脚の参考価格・想定手数料で計算" />
-                    ) : verticalEstimate?.kind === "missing" ? (
-                      <CurrentEstimateMetric label="現在決済年率" missingReason={verticalEstimate.reasons.join(" / ")} />
-                    ) : usesCurrentEstimate && currentEstimate.kind === "available" ? (
-                      <CurrentEstimateMetric label={currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel ? `${currentEstimate.evaluatedLegLabel}残存の現在決済年率` : "現在決済年率"} annualizedReturnPct={currentEstimate.annualizedReturnPct} profitLabel={currentEstimateIsRemainingLeg && currentEstimate.evaluatedLegLabel ? `${currentEstimate.evaluatedLegLabel}残存の概算損益` : simulation.strategyType === "synthetic_forward" ? "合算概算損益" : "概算損益"} profitAmount={currentEstimate.currency === "JPY" ? formatJPY(currentEstimate.profitJPY, { signed: true }) : formatSignedUSD(currentEstimate.profitUSD)} profitPct={currentEstimate.profitPct} note={currentEstimate.currency === "JPY" ? formatCurrentEstimateFxEvidence(currentEstimate.fx) : currentEstimateIsRemainingLeg ? "他方の脚は決済済み・残存脚のみ評価中" : undefined} />
-                    ) : usesCurrentEstimate && currentEstimate.kind === "missing" ? (
-                      <CurrentEstimateMetric label="現在決済年率" missingReason={currentEstimate.reason}>
-                        {currentEstimate.reason === "為替レート 未確認" ? (
-                          <button
-                            type="button"
-                            className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onRefreshFx?.();
-                            }}
-                          >為替を取得</button>
-                        ) : currentEstimate.missingRequirements[0]?.field === "exit_price" || currentEstimate.missingRequirements[0]?.field === "close_fee" ? (
-                          <button
-                            type="button"
-                            className="mt-1 rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onCurrentEstimateAction?.(simulation.id, currentEstimate.missingRequirements[0]?.legId, currentEstimate.missingRequirements[0]?.field);
-                            }}
-                          >
-                            不足情報を確認
-                          </button>
-                        ) : null}
-                      </CurrentEstimateMetric>
-                    ) : isHistoryRow && isNAccountRow ? (
+                    {referencePositionEstimate ? <><BasisMetric result={referencePositionEstimate} /><span className="block text-[10px] text-slate-500">{basisEvaluation?.hint !== referencePositionEstimate.reason ? basisEvaluation?.hint : ""}</span>{notUpdated.has(simulation.id)?<span className="block text-xs text-amber-800">今回未更新・保存済み参考値</span>:null}{referencePositionEstimate.kind === "missing" && onCurrentEstimateAction ? <button type="button" className="mt-1 rounded border px-2 py-1 text-xs" onClick={event=>{event.stopPropagation();const requirement=currentEstimate.kind==="missing"?currentEstimate.missingRequirements[0]:undefined;onCurrentEstimateAction(simulation.id,requirement?.legId ?? simulation.optionLegs[0]?.id,requirement?.field ?? "exit_price");}}>不足情報を確認</button>:null}</> : isHistoryRow && isNAccountRow ? (
                       historyPerformance?.historicalAnnualReturnMissingReason || primary.annualReturnPct === undefined ? (
                         <>
                           <span className="block text-[11px] font-bold text-slate-500">年率換算（参考）</span>
@@ -964,6 +944,7 @@ export function Dashboard({
           </tbody>
         </table>
       </div> : null}
+      {focusedSimulation && focusedSimulation.optionLegs.length > 0 && !endedStatuses.has(focusedSimulation.status) ? <PositionBasisCard simulation={focusedSimulation} fx={currentEstimateFxQuote} /> : null}
     </section>
   );
 }

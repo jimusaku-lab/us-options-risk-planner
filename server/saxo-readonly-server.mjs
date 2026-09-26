@@ -1151,7 +1151,7 @@ function walkOptionSpace(value, inherited, visit) {
   }
 }
 
-function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, accountKey, fetchedAt, source, root, contract, price, messageSourceLabel }) {
+export function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, accountKey, fetchedAt, source, root, contract, price, messageSourceLabel }) {
   const quoteSummary = extractOptionPremiumQuote(price);
   const bid = quoteSummary.bid;
   const ask = quoteSummary.ask;
@@ -1185,6 +1185,7 @@ function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
     referencePriceUSD: quoteSummary.referencePrice,
     referencePriceLabel: quoteSummary.referencePriceLabel,
     quoteDiagnostics: diagnostics,
+    sourceTimestamp: validQuoteSourceTimestamp(price?.LastUpdated ?? price?.Quote?.LastUpdated),
     manualInputGuidance: hasPrice ? undefined : manualInputGuidance,
     message: hasPrice
       ? `${messageSourceLabel ?? "InfoPrice"}から候補価格を取得しました。自動入力はしません。`
@@ -1199,11 +1200,17 @@ function normalizeOptionPremiumCandidate({ symbol, expiry, strike, optionType, a
   };
 }
 
+function validQuoteSourceTimestamp(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value) || Number(value.slice(0,4)) < 1970 || !Number.isFinite(Date.parse(value))) return undefined;
+  return value;
+}
+
 function extractOptionPremiumQuote(price) {
   const quote = price?.Quote ?? {};
   const priceInfo = price?.PriceInfo ?? {};
   const priceInfoDetails = price?.PriceInfoDetails ?? {};
-  const bid = firstPositiveNumber(quote, ["Bid"]);
+  const rawBid = quote.Bid;
+  const bid = typeof rawBid === "number" && Number.isFinite(rawBid) && rawBid >= 0 ? rawBid : undefined;
   const ask = firstPositiveNumber(quote, ["Ask"]);
   const mid = firstPositiveNumber(quote, ["Mid"]);
   const last =
@@ -1228,13 +1235,12 @@ function buildOptionPremiumQuoteDiagnostics(price) {
   const quote = price?.Quote ?? {};
   const meta = price?.__infoPriceMeta ?? {};
   const primaryDiagnostics = collectInfoPriceDiagnostics(price);
-  const fallbackDiagnostics = meta.fallbackPayload ? collectInfoPriceDiagnostics(meta.fallbackPayload) : {};
-  const errorCode = primaryDiagnostics.errorCode ?? fallbackDiagnostics.errorCode;
-  const priceTypeBid = primaryDiagnostics.priceTypeBid ?? fallbackDiagnostics.priceTypeBid;
-  const priceTypeAsk = primaryDiagnostics.priceTypeAsk ?? fallbackDiagnostics.priceTypeAsk;
-  const delayedByMinutes = primaryDiagnostics.delayedByMinutes ?? fallbackDiagnostics.delayedByMinutes;
-  const isMarketOpen = primaryDiagnostics.isMarketOpen ?? fallbackDiagnostics.isMarketOpen;
-  const calculationReliability = primaryDiagnostics.calculationReliability ?? fallbackDiagnostics.calculationReliability;
+  const errorCode = primaryDiagnostics.errorCode;
+  const priceTypeBid = primaryDiagnostics.priceTypeBid;
+  const priceTypeAsk = primaryDiagnostics.priceTypeAsk;
+  const delayedByMinutes = primaryDiagnostics.delayedByMinutes;
+  const isMarketOpen = primaryDiagnostics.isMarketOpen;
+  const calculationReliability = primaryDiagnostics.calculationReliability;
   const reasonLabel = classifyInfoPriceNoQuoteReason({ errorCode, priceTypeBid, priceTypeAsk, isMarketOpen, fallbackError: meta.fallbackError });
   const details = [
     reasonLabel,
@@ -1264,13 +1270,15 @@ function buildOptionPremiumQuoteDiagnostics(price) {
 
 function collectInfoPriceDiagnostics(price) {
   const quote = price?.Quote ?? {};
+  const text = value => typeof value === "string" && value.trim() ? value : undefined;
+  const delay = price?.DelayedByMinutes ?? quote.DelayedByMinutes ?? price?.PriceInfoDetails?.DelayedByMinutes;
   return {
-    errorCode: firstString(price, ["ErrorCode"]) ?? firstString(quote, ["ErrorCode"]),
-    priceTypeBid: firstString(price, ["PriceTypeBid"]) ?? firstString(quote, ["PriceTypeBid"]),
-    priceTypeAsk: firstString(price, ["PriceTypeAsk"]) ?? firstString(quote, ["PriceTypeAsk"]),
-    delayedByMinutes: firstNumber(price, ["DelayedByMinutes"]) ?? firstNumber(quote, ["DelayedByMinutes"]),
-    isMarketOpen: firstBoolean(price, ["IsMarketOpen"]),
-    calculationReliability: firstString(price, ["CalculationReliability"]),
+    errorCode: text(price?.ErrorCode) ?? text(quote.ErrorCode),
+    priceTypeBid: text(quote.PriceTypeBid) ?? text(price?.PriceTypeBid),
+    priceTypeAsk: text(quote.PriceTypeAsk) ?? text(price?.PriceTypeAsk),
+    delayedByMinutes: typeof delay === "number" && Number.isFinite(delay) && delay >= 0 ? delay : undefined,
+    isMarketOpen: typeof price?.IsMarketOpen === "boolean" ? price.IsMarketOpen : undefined,
+    calculationReliability: text(price?.CalculationReliability),
   };
 }
 
