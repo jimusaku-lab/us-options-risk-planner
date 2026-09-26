@@ -27,6 +27,7 @@ export type PositionBasisEvaluation = {
   conservative: BasisResult;
   legs: Array<{ leg: OptionLeg; remaining: number; quote: EvaluationQuote }>;
   hint: string;
+  needsPricePreview?: boolean;
 };
 const finite = (v: number | undefined): v is number => v !== undefined && Number.isFinite(v);
 const positive = (v: number | undefined): v is number => finite(v) && v > 0;
@@ -59,6 +60,13 @@ export function calculatePositionBasisEvaluation(simulation: TradeSimulation, cu
   const ids = legs.map(({leg}) => leg.id);
   const batches = new Set(legs.map(({leg}) => leg.referenceQuote?.batchId));
   const coherent = legs.length === 1 || (batches.size === 1 && !batches.has(undefined) && !batches.has(""));
+  const absent = legs.filter(({leg}) => !leg.referenceQuote).length;
+  const quoteProblem = legs.find(({quote}) => quote.kind === "unavailable")?.quote;
+  const referencePriceReason = absent === legs.length ? "中間値の価格をまだ取得していません"
+    : absent > 0 ? "一部の脚の中間値が未取得です。両脚の価格をまとめて更新してください"
+    : quoteProblem ? quoteProblem.reason ?? "Bid/Askの価格品質を確認してください"
+    : !coherent ? "価格の取得タイミングが揃っていません。両脚の価格をまとめて更新してください"
+    : undefined;
   const validDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d+"T00:00:00Z")) && new Date(d+"T00:00:00Z").toISOString().slice(0,10) === d;
   const dates = legs.flatMap(({leg}) => activeSpreadEntries(simulation, leg).map(e => e.tradeDate));
   const dateValid = dates.length > 0 && validDate(asOf) && dates.every(d => validDate(d) && d === dates[0]);
@@ -73,7 +81,7 @@ export function calculatePositionBasisEvaluation(simulation: TradeSimulation, cu
       evaluatedLegIds: ids };
   }
   function evaluate(basis: PriceBasis): BasisResult {
-    if (basis === "reference" && !coherent) return missing(basis, "中間値未取得（残存脚の取得batchが不一致）");
+    if (basis === "reference" && referencePriceReason) return missing(basis, referencePriceReason);
     const prices = new Map<string, number>();
     for (const {leg, quote} of legs) {
       const price = basis === "reference" ? quote.kind !== "unavailable" ? quote.mid : undefined
@@ -131,5 +139,5 @@ export function calculatePositionBasisEvaluation(simulation: TradeSimulation, cu
   }
   const reference = safeEvaluate("reference"), conservative = safeEvaluate("conservative-close");
   if (reference.kind === "missing" && conservative.denominator !== undefined) reference.denominator = conservative.denominator;
-  return { reference, conservative, legs, hint: hints.join(" / ") };
+  return { reference, conservative, legs, hint: hints.join(" / "), needsPricePreview: referencePriceReason !== undefined };
 }

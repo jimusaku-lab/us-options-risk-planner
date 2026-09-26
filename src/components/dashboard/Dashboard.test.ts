@@ -74,6 +74,18 @@ afterEach(() => {
   cleanup();
 });
 
+it("opens shared Bid/Ask preview for missing Mid, not the manual close input, after capability recovery", () => {
+ const simulation=createSimulation(), fetch=vi.fn(), manual=vi.fn();
+ const props={simulations:[simulation],selectedId:simulation.id,onSelect:vi.fn(),onEdit:vi.fn(),onDelete:vi.fn(),workspace:"live" as const,accountInputs,historyOpen:false,onHistoryOpenChange:vi.fn(),onFetchBulkOptionPrices:fetch,onCurrentEstimateAction:manual,bulkOptionPriceAvailable:false};
+ const {rerender}=render(createElement(Dashboard,props));
+ fireEvent.click(screen.getByRole("button",{name:"Bid/Ask候補価格を取得"}));
+ expect(fetch).toHaveBeenCalledTimes(1);expect(manual).not.toHaveBeenCalled();expect(screen.getByRole("dialog")).toBeTruthy();
+ fireEvent.click(screen.getByRole("button",{name:"現在オプション価格の確認を閉じる"}));
+ expect(screen.queryByRole("dialog")).toBeNull();
+ rerender(createElement(Dashboard,{...props,bulkOptionPriceOpenRequest:1}));
+ expect(screen.getByRole("dialog")).toBeTruthy();expect(fetch).toHaveBeenCalledTimes(1);
+});
+
 describe("synthetic leg history", () => {
   it("renders four current strategies with one metric order and canonical denominators", () => {
     const spread=createSimulation({id:"spread",ticker:"SPRD",strategyType:"bear_put_spread",entryDate:"2026-09-01",expiryDate:"2026-10-02",optionLegs:[
@@ -388,7 +400,7 @@ describe("bulk current option price panel", () => {
   });
   it("keeps the public surface safely disabled", () => {
     const simulation = createSimulation(); render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn() }));
-    expect(screen.getByText("SaxoローカルAPIが旧版です。ローカルAPIを更新して再起動してください。個別取得は利用できます。")).toBeTruthy();
+    expect(screen.getByText("Saxo価格取得は利用できません（未接続・未対応または公開版）。")).toBeTruthy();
   });
   it("requires and clears the in-dialog OldIndicative confirmation before it enables apply", () => {
     const simulation = createSimulation({ ticker: "ABC" }); const onConfirmation = vi.fn(); const onClose = vi.fn();
@@ -446,13 +458,14 @@ describe("Dashboard close decision actions", () => {
     expect(screen.queryByText(/現在買戻し概算損益/)).toBeNull();
   });
 
-  it("shows the real missing reason and routes accept to the missing put input", () => {
+  it("does not send missing reference quotes to a manual put input when price preview is unavailable", () => {
     const action = vi.fn();
     const simulation = currentShortPut("accept", false);
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onCurrentEstimateAction: action }));
-    expect(screen.getByText(/中間値未取得/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "不足情報を確認" }));
-    expect(action).toHaveBeenCalledWith("sim", "leg", "exit_price");
+    expect(screen.getByText("中間値の価格をまだ取得していません")).toBeTruthy();
+    expect(screen.getByText("Bid/Ask価格取得は利用できません")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "不足情報を確認" })).toBeNull();
+    expect(action).not.toHaveBeenCalled();
   });
 
   it("does not duplicate an account margin warning into any position row", () => {

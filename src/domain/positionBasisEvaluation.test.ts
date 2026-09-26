@@ -24,6 +24,17 @@ function fixture(kind="long_call"):TradeSimulation {
 }
 const evaluate=(s:TradeSimulation)=>calculatePositionBasisEvaluation(s,undefined,"2026-09-26");
 describe("R15 unified reference and conservative evaluation",()=>{
+ it("distinguishes absent, partially missing, quality pending and mismatched reference observations",()=>{
+  const s=fixture("bull_call_spread"); const saved=s.optionLegs.map(l=>l.referenceQuote);
+  s.optionLegs.forEach(l=>{delete l.referenceQuote;});
+  expect(evaluate(s).reference.reason).toBe("中間値の価格をまだ取得していません");
+  s.optionLegs[0].referenceQuote=saved[0];
+  expect(evaluate(s).reference.reason).toBe("一部の脚の中間値が未取得です。両脚の価格をまとめて更新してください");
+  s.optionLegs[1].referenceQuote={...saved[1]!,priceTypeAsk:"OldIndicative",referenceConfirmedAt:undefined};
+  expect(evaluate(s).reference.reason).toContain("使用確認");
+  s.optionLegs[1].referenceQuote={...saved[1]!,batchId:"other"};
+  expect(evaluate(s).reference.reason).toBe("価格の取得タイミングが揃っていません。両脚の価格をまとめて更新してください");
+ });
  it("preserves all old reference legs when one new opposite side is missing, independently of close adoption",()=>{
  const s=fixture("bull_call_spread");const rows=getCurrentOptionPriceTargets([s]).map((target,i)=>createCurrentOptionPricePreviewRow(target,{environment:"live",status:"available",classification:"available",source:"fixture",message:"",fetchedAt:at,bid:i===0?14:undefined,ask:i===0?16:5,quoteDiagnostics:{priceTypeBid:"Tradable",priceTypeAsk:"Tradable"}}));
  const updated=applyCurrentOptionPricePreview([s],rows,{batchId:"new"})[0];

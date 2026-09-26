@@ -182,6 +182,7 @@ export function SaxoReadOnlyPanel({
   oauthReconnectReturn = false,
   onRequestClose,
   bulkFetchButtonRef,
+  onPreviewCurrentPrices,
 }: {
   workspace: WorkspaceMode;
   accountInputs: AccountInputs;
@@ -215,8 +216,10 @@ export function SaxoReadOnlyPanel({
   oauthReconnectReturn?: boolean;
   onRequestClose?: () => void;
   bulkFetchButtonRef?: RefObject<HTMLButtonElement | null>;
+  onPreviewCurrentPrices?: () => Promise<string>;
 }) {
   const [showConnectionDetails, setShowConnectionDetails] = useState(false);
+  const [currentPricePreviewMessage, setCurrentPricePreviewMessage] = useState("");
   const [showOtherAccounts, setShowOtherAccounts] = useState(false);
   const [showPnSettings, setShowPnSettings] = useState(false);
   const [showIndividualFetch, setShowIndividualFetch] = useState(false);
@@ -877,6 +880,7 @@ export function SaxoReadOnlyPanel({
       return;
     }
     setIsLoading(true);
+    setCurrentPricePreviewMessage("");
     const requestRevision = ++spreadRequest.current;
     setSpreadRequestRevision(requestRevision);
     setSpreadCoverage([]);
@@ -939,6 +943,15 @@ export function SaxoReadOnlyPanel({
           : "まとめて取得が完了しました。反映待ちサマリーを確認してください。",
       );
       window.setTimeout(() => (document.querySelector('[aria-label="スプレッドの組み合わせ確認"]') ?? pendingSummaryRef.current)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      // Price preview is distinct from account/history reflection; never adopt here.
+      if (onPreviewCurrentPrices) {
+        try {
+          const priceMessage = await onPreviewCurrentPrices();
+          if (spreadRequest.current === requestRevision) setCurrentPricePreviewMessage(priceMessage);
+        } catch {
+          if (spreadRequest.current === requestRevision) setCurrentPricePreviewMessage("取得できませんでした。口座・履歴の取得結果は保持しています。");
+        }
+      }
     } finally {
       setIsLoading(false);
     }
@@ -1255,6 +1268,7 @@ export function SaxoReadOnlyPanel({
               onLoadHistory={loadHistoryDiscovery}
               bulkFetchButtonRef={bulkFetchButtonRef}
             />
+            {currentPricePreviewMessage ? <p className="text-xs text-slate-600" role="status">価格候補: {currentPricePreviewMessage}</p> : null}
             {onCommitSpread && spreadCandidates.length ? <div id="saxo-spread-candidates">
               <SpreadStrategyCandidates candidates={spreadCandidates} ledger={strategyLedger ?? emptyStrategyLedger()} simulations={simulations} onCommit={onCommitSpread} />
             </div> : null}

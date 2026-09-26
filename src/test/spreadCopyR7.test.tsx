@@ -41,7 +41,7 @@ describe("R7 spread copy and hierarchy", () => {
     const result = screen.getByText("保守的な決済目安").parentElement!;
     expect(result).toHaveTextContent("-$82.96");
     expect(screen.getByText("参考損益（中間値）")).toBeInTheDocument();
-    expect(screen.getAllByText(/中間値未取得/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("中間値の価格をまだ取得していません").length).toBeGreaterThan(0);
     expect(screen.queryByText("現在決済年率")).not.toBeInTheDocument();
   });
 
