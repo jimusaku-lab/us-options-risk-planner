@@ -1231,6 +1231,15 @@ function extractOptionPremiumQuote(price) {
   };
 }
 
+// Allowlisted numeric evidence only; never retain arbitrary raw values or payloads.
+function quoteNumericEvidence(quote, field) {
+  if (!Object.prototype.hasOwnProperty.call(quote, field)) return { presence: "absent" };
+  const value = quote[field];
+  if (value === null) return { presence: "null" };
+  if (typeof value !== "number") return { presence: "other" };
+  return Number.isFinite(value) ? { presence: "number", value } : { presence: "number" };
+}
+
 function buildOptionPremiumQuoteDiagnostics(price) {
   const quote = price?.Quote ?? {};
   const meta = price?.__infoPriceMeta ?? {};
@@ -1261,7 +1270,11 @@ function buildOptionPremiumQuoteDiagnostics(price) {
     delayedByMinutes,
     isMarketOpen,
     calculationReliability,
-    selectedSource: meta.selectedSource,
+    selectedSource: ["trade/v1/infoprices", "trade/v1/infoprices/list"].includes(meta.selectedSource) ? meta.selectedSource : undefined,
+    sourceQuote: {
+      bid: quoteNumericEvidence(quote, "Bid"),
+      ask: quoteNumericEvidence(quote, "Ask"),
+    },
     attemptedSources: meta.attemptedSources,
     details,
     rawQuoteKeys: Object.keys(quote).slice(0, 30),

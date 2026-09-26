@@ -3,6 +3,49 @@ import assert from "node:assert/strict";
 process.env.SAXO_READONLY_SERVER_TEST="1";
 const {normalizeOptionPremiumCandidate}=await import("./saxo-readonly-server.mjs");
 const normalize=price=>normalizeOptionPremiumCandidate({fetchedAt:"2026-09-26T02:00:00Z",source:"anonymous",contract:{},price});
+test("M01 sourceQuote preserves only finite numeric evidence and exact presence",()=>{
+ const cases=[
+  [{Ask:2},{presence:"absent"}],
+  [{Bid:null,Ask:2},{presence:"null"}],
+  [{Bid:0,Ask:2},{presence:"number",value:0}],
+  [{Bid:-1,Ask:2},{presence:"number",value:-1}],
+  [{Bid:"0",Ask:2},{presence:"other"}],
+  [{Bid:{secret:"anonymous-canary"},Ask:2},{presence:"other"}],
+  [{Bid:undefined,Ask:2},{presence:"other"}],
+  [{Bid:NaN,Ask:2},{presence:"number"}],
+  [{Bid:Infinity,Ask:2},{presence:"number"}],
+ ];
+ for(const [Quote,expected] of cases){
+  const result=normalize({Quote,__infoPriceMeta:{selectedSource:"trade/v1/infoprices"}});
+  assert.deepEqual(result.quoteDiagnostics.sourceQuote,{bid:expected,ask:{presence:"number",value:2}});
+  assert.equal(result.quoteDiagnostics.selectedSource,"trade/v1/infoprices");
+  assert.equal(JSON.stringify(result.quoteDiagnostics.sourceQuote).includes("anonymous-canary"),false);
+ }
+});
+test("M01 NoMarket evidence and source stay on the selected payload, without fallback or identifiers",()=>{
+ const result=normalize({
+  AccountKey:"anonymous-account-canary",Token:"anonymous-token-canary",
+  Quote:{Ask:1.1,PriceTypeBid:"NoMarket",PriceTypeAsk:"OldIndicative"},
+  __infoPriceMeta:{selectedSource:"trade/v1/infoprices/list",fallbackPayload:{Quote:{Bid:0,Ask:9,PriceTypeBid:"Tradable",PriceTypeAsk:"Tradable"}}},
+ });
+ assert.deepEqual(result.quoteDiagnostics.sourceQuote,{bid:{presence:"absent"},ask:{presence:"number",value:1.1}});
+ assert.equal(result.bid,undefined);assert.equal(result.ask,1.1);
+ assert.equal(result.quoteDiagnostics.priceTypeBid,"NoMarket");
+ assert.equal(result.quoteDiagnostics.priceTypeAsk,"OldIndicative");
+ assert.equal(result.quoteDiagnostics.selectedSource,"trade/v1/infoprices/list");
+ assert.equal(JSON.stringify(result).includes("canary"),false);
+ const zero=normalize({Quote:{Bid:0,Ask:1.1,PriceTypeBid:"NoMarket",PriceTypeAsk:"OldIndicative"}});
+ assert.deepEqual(zero.quoteDiagnostics.sourceQuote.bid,{presence:"number",value:0});
+ assert.equal(zero.quoteDiagnostics.priceTypeBid,"NoMarket");
+});
+test("M01 source evidence never serializes invalid Ask values or arbitrary source strings",()=>{
+ for(const Ask of [null,"2",{},Infinity,NaN]){
+  const result=normalize({Quote:{Bid:0,Ask},__infoPriceMeta:{selectedSource:"anonymous-secret-canary"}});
+  assert.equal(result.quoteDiagnostics.sourceQuote.ask.value,undefined);
+  assert.equal(result.quoteDiagnostics.selectedSource,undefined);
+  assert.equal(JSON.stringify(result).includes("canary"),false);
+ }
+});
 test("R15 preserves explicit zero Bid with same-payload quote metadata",()=>{
  const result=normalize({LastUpdated:"2026-09-26T01:00:00Z",Quote:{Bid:0,Ask:2,PriceTypeBid:"Indicative",PriceTypeAsk:"OldIndicative",DelayedByMinutes:15}});
  assert.equal(result.bid,0);assert.equal(result.ask,2);assert.equal(result.sourceTimestamp,"2026-09-26T01:00:00Z");

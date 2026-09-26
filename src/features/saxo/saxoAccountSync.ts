@@ -1148,6 +1148,10 @@ export type SaxoOptionPremiumCandidate = {
     isMarketOpen?: boolean;
     calculationReliability?: string;
     selectedSource?: string;
+    sourceQuote?: {
+      bid: { presence: "absent" | "null" | "number" | "other"; value?: number };
+      ask: { presence: "absent" | "null" | "number" | "other"; value?: number };
+    };
     attemptedSources?: string[];
     details?: string[];
   };
