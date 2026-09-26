@@ -5,6 +5,7 @@ import type { TradeSimulation } from "@/types/domain";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import { getSimulationTickerDisplayLabel } from "./Dashboard";
 import { Dashboard } from "./Dashboard";
+import { createCurrentOptionPricePreviewRow, getCurrentOptionPriceTargets } from "@/domain/bulkOptionPrice";
 import { captureReferenceQuote, resolveEvaluationQuote } from "@/domain/midpointEvaluation";
 function explicitFixtureQuotes(s: TradeSimulation) { s.optionLegs = s.optionLegs.map(leg => ({...leg, contractSize:100, referenceQuote: leg.closeCostUSD === undefined ? undefined : captureReferenceQuote(resolveEvaluationQuote({bid:leg.closeCostUSD,ask:leg.closeCostUSD,priceTypeBid:"Tradable",priceTypeAsk:"Tradable",source:"fixture",fetchedAt:"2026-09-26T01:00:00Z"}),"fixture")})); return s; }
 
@@ -767,6 +768,28 @@ describe("Dashboard close decision actions", () => {
       }),
     );
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("reopens a parent failure diagnostic without fetching or claiming an absent saved reference, and retries explicitly", () => {
+    const simulation = createSimulation({ ticker: "TEST", optionLegs: [{ ...createSimulation().optionLegs[0], id: "leg", contractSize: 100 }] });
+    const fetch = vi.fn();
+    const row = createCurrentOptionPricePreviewRow(getCurrentOptionPriceTargets([simulation])[0], { environment: "live", source: "fixture", status: "available", classification: "available", message: "fixture", fetchedAt: "2026-09-26T00:00:00Z", ask: 2, quoteDiagnostics: { priceTypeBid: "Indicative", priceTypeAsk: "Indicative" } });
+    const props = { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live" as const, accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onFetchBulkOptionPrices: fetch, bulkOptionPricePreview: [row] };
+    const mounted = render(createElement(Dashboard, props));
+    expect(screen.queryByText("今回未更新・保存済み参考値")).toBeNull();
+    expect(screen.getByText("中間値を取得できませんでした")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取得結果を確認" }));
+    expect(fetch).not.toHaveBeenCalled();
+    expect(screen.getByRole("region", { name: "TESTの価格取得結果" }).textContent).toContain("Bidが未取得");
+    expect(screen.getByRole("region", { name: "TESTの価格取得結果" }).textContent).toContain("保存: 中間値なし");
+    fireEvent.click(screen.getByRole("button", { name: "この建玉の残存脚を再取得" }));
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(simulation.id);
+    mounted.rerender(createElement(Dashboard, { ...props, bulkOptionPriceLoading: true }));
+    expect(screen.getByRole("button", { name: "この建玉の残存脚を再取得" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "現在オプション価格の確認を閉じる" }));
+    mounted.rerender(createElement(Dashboard, { ...props, bulkOptionPricePreview: undefined }));
+    expect(screen.getByText(/今回の取得結果は未保持です/)).toBeInTheDocument();
+    expect(screen.queryByText("中間値を取得できませんでした")).toBeNull();
   });
 
   it("offers a direct 3-A review for a historical long-option entry conflict", () => {

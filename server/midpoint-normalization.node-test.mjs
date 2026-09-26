@@ -16,3 +16,10 @@ test("R15 rejects invalid Bid and missing/sentinel source timestamps",()=>{
  for(const bid of [-1,Infinity,NaN])assert.equal(normalize({Quote:{Bid:bid,Ask:2}}).bid,undefined);
  for(const LastUpdated of [undefined,"0001-01-01T00:00:00Z","invalid"])assert.equal(normalize({LastUpdated,Quote:{Bid:1,Ask:2}}).sourceTimestamp,undefined);
 });
+test("R15 diagnostics distinguish explicit zero from missing/null normalized bid",()=>{
+ for(const Bid of [undefined,null]){
+  const result=normalize({Quote:{Bid,Ask:2,PriceTypeBid:"Indicative",PriceTypeAsk:"Indicative"}});
+  assert.equal(result.bid,undefined);assert.equal(result.ask,2);
+ }
+ assert.equal(normalize({Quote:{Bid:0,Ask:2,PriceTypeBid:"Indicative",PriceTypeAsk:"Indicative"}}).bid,0);
+});

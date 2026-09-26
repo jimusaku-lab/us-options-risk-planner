@@ -33,10 +33,13 @@ const finite = (value: number | undefined): value is number => value !== undefin
 export function resolveEvaluationQuote(input: EvaluationQuoteInput): EvaluationQuote {
   const base = { priceTypeBid: input.priceTypeBid, priceTypeAsk: input.priceTypeAsk, fetchedAt: input.fetchedAt, source: input.source, sourceTimestamp: input.sourceTimestamp, delayedByMinutes: input.delayedByMinutes, batchId: input.batchId };
   const forbidden = new Set(["NoAccess", "NoMarket", "None", "Pending", "Theor"]);
-  if (forbidden.has(input.priceTypeBid ?? "") || forbidden.has(input.priceTypeAsk ?? "")) return { ...base, kind: "unavailable", quality: "unknown", bid: input.bid, ask: input.ask, reason: "許可されない価格品質" };
-  if (!finite(input.bid) || !finite(input.ask) || input.bid! < 0 || input.ask! <= 0 || input.bid! > input.ask!) {
-    return { ...base, kind: "unavailable", quality: "unknown", bid: input.bid, ask: input.ask, reason: "Bid/Askが両方そろっていないか無効" };
-  }
+  const invalidReason = input.bid == null ? "Bidが未取得" : input.ask == null ? "Askが未取得"
+    : !finite(input.bid) ? "Bidが非有限値です" : !finite(input.ask) ? "Askが非有限値です"
+    : input.bid < 0 ? "Bidが負値です" : input.ask <= 0 ? "Askが正数ではありません"
+    : input.bid > input.ask ? "BidがAskを上回っています" : undefined;
+  if (invalidReason) return { ...base, kind: "unavailable", quality: "unknown", bid: input.bid, ask: input.ask, reason: invalidReason };
+  const blocked = [forbidden.has(input.priceTypeBid ?? "") ? `Bid: ${input.priceTypeBid}` : undefined, forbidden.has(input.priceTypeAsk ?? "") ? `Ask: ${input.priceTypeAsk}` : undefined].filter(Boolean);
+  if (blocked.length) return { ...base, kind: "unavailable", quality: "unknown", bid: input.bid, ask: input.ask, reason: `許可されない価格品質（${blocked.join(" / ")}）` };
   const mid = (input.bid! + input.ask!) / 2;
   if (!Number.isFinite(mid)) return { ...base, kind: "unavailable", quality: "unknown", bid: input.bid, ask: input.ask, reason: "Bid/Askの合計が有限ではありません" };
   const spread = input.ask! - input.bid!;

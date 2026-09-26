@@ -24,6 +24,7 @@ import { calculateVerticalSpreadEstimate, getVerticalSpreadDefinition } from "@/
 import { calculateHistoryCashflowDisplay } from "@/domain/historyCashflowDisplay";
 import { spreadEntryBasis } from "@/domain/spreadCashflows";
 import { calculatePositionBasisEvaluation } from "@/domain/positionBasisEvaluation";
+import { diagnosePriceUpdate, type PriceUpdateAdoption, type PriceUpdateDiagnostic } from "@/domain/priceUpdateDiagnostic";
 import { BasisMetric, PositionBasisCard, formatBasisAmount } from "./PositionBasisCard";
 import { resolveCloseCommissionUSD } from "@/domain/closeCommissionStandard";
 
@@ -129,6 +130,17 @@ function ClosedLegHistoryRows({ items, onOpen }: { items: ClosedSyntheticLegHist
     })}</>;
 }
 
+function PriceDiagnosticDetails({ result, focused = false }: { result: PriceUpdateDiagnostic; focused?: boolean }) {
+  const heading = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => { if (!focused) return; const timer = window.setTimeout(() => { heading.current?.scrollIntoView({ block: "nearest" }); heading.current?.focus({ preventScroll: true }); }, 0); return () => window.clearTimeout(timer); }, [focused]);
+  return <section className="my-2 min-w-0 break-words rounded border p-2 text-xs" aria-label={`${result.ticker}の価格取得結果`}>
+    <h4 ref={heading} tabIndex={-1} className="font-bold outline-offset-2 focus:outline">{result.ticker}: {result.summary}</h4>
+    <p>取得: {result.acquisition === "received" ? "全脚応答あり" : result.acquisition === "partial" ? "一部応答なし" : "取得失敗・照合不可"} / 中間値評価: {result.evaluation === "ready" ? "評価可能" : result.evaluation === "confirmation_required" ? "使用確認待ち" : "評価不可"} / 親採用: {result.adoption === "eligible" ? "採用可能" : result.adoption === "confirmation_required" ? "確認待ち" : "採用不可"} / 保存: {result.storage === "updated" ? "今回更新済み" : result.storage === "previous" ? "前回の中間値を保持" : result.storage === "not_applied" ? "未反映" : "中間値なし"}</p>
+    <p className="text-amber-800">{result.reason}</p>
+    {result.legs.map(leg => <p key={leg.legId}>{leg.label}: Bid {leg.bid ?? "—"} / Ask {leg.ask ?? "—"} / 品質 Bid {leg.priceTypeBid ?? "未確認"}・Ask {leg.priceTypeAsk ?? "未確認"} / 取得元 {leg.source ?? "未保持"} / 取得 {leg.fetchedAt ?? "時刻未保持"} / {leg.reason}</p>)}
+  </section>;
+}
+
 function BulkOptionPricePreview({ rows, stockRows, simulations, referenceConfirmed, onReferenceConfirmedChange, onApply }: { rows: CurrentOptionPricePreviewRow[]; stockRows: CurrentStockPricePreviewRow[]; simulations: TradeSimulation[]; referenceConfirmed: boolean; onReferenceConfirmedChange: (checked: boolean) => void; onApply?: () => void }) {
   const counts = getBulkOptionPricePreviewCounts(rows);
   const applicable = getBulkApplicableTargetIds(rows, simulations, referenceConfirmed);
@@ -140,6 +152,7 @@ function BulkOptionPricePreview({ rows, stockRows, simulations, referenceConfirm
       ? `通常${counts.ready}脚 + 確認済み参考価格${counts.confirmableReference}脚を一括反映`
       : `取得成功分${ready}脚を一括反映`;
   return <div className="mt-3 overflow-x-auto">
+    <p className="mb-2 text-xs">API価格応答 {rows.filter(row => row.candidate !== undefined).length}脚 / 中間値評価可能 {rows.filter(row => row.referenceQuote?.kind === "available").length}脚 / 中間値使用確認待ち {rows.filter(row => row.referenceQuote?.kind === "confirmable_reference").length}脚（保存件数ではありません）</p>
     <div className="mb-3 rounded border border-slate-200 bg-slate-50 p-2"><p className="font-bold">現在株価（オプション価格と別取得）</p>{stockRows.map((row) => <p key={row.ticker} className="mt-1">{row.ticker}: {row.quote ? `${row.quote.price} / ${row.quote.source} / 市場日 ${row.quote.date ?? "未取得"} / 取得 ${row.quote.fetchedAt ?? row.quote.time ?? "未取得"}` : `取得失敗 / ${row.reason}`}</p>)}<p className="mt-1 text-slate-500">日次・遅延値の可能性があります。オプション気配から株価を推定しません。</p></div>
     <table className="w-full min-w-[760px] text-xs">
       <thead><tr className="border-b text-left text-slate-500"><th className="py-1">銘柄 / 脚</th><th>方向</th><th className="text-right">保存中</th><th className="text-right">Bid / Ask / Mid / Last</th><th className="text-right">採用候補</th><th>状態</th></tr></thead>
@@ -195,6 +208,8 @@ export function Dashboard({
   onRefreshFx,
   bulkOptionPricePreview,
   bulkOptionPriceOpenRequest = 0,
+  bulkOptionPriceScope,
+  bulkOptionPriceAdoption,
   bulkStockPricePreview = [],
   bulkOptionPriceMessage,
   bulkOptionPriceAvailable = false,
@@ -236,11 +251,13 @@ export function Dashboard({
   onRefreshFx?: () => void;
   bulkOptionPricePreview?: CurrentOptionPricePreviewRow[] | null;
   bulkOptionPriceOpenRequest?: number;
+  bulkOptionPriceScope?: string;
+  bulkOptionPriceAdoption?: PriceUpdateAdoption;
   bulkStockPricePreview?: CurrentStockPricePreviewRow[] | null;
   bulkOptionPriceMessage?: string;
   bulkOptionPriceAvailable?: boolean;
-  onFetchBulkOptionPrices?: () => void;
-  onApplyBulkOptionPrices?: () => void;
+  onFetchBulkOptionPrices?: (simulationId?: string) => void;
+  onApplyBulkOptionPrices?: (simulationId?: string) => void;
   bulkOptionPriceLoading?: boolean;
   bulkOptionPriceProgress?: { total: number; completed: number };
   bulkOptionPriceReferenceConfirmed?: boolean;
@@ -250,14 +267,16 @@ export function Dashboard({
   onSaxoExitOrderAction?: (simulationId: string, legId: string) => void;
 }) {
   const [isBulkDialogOpen, setIsBulkDialogOpen] = useState(false);
+  const [resultSimulationId, setResultSimulationId] = useState<string>();
   useEffect(() => {
-    if (bulkOptionPriceOpenRequest > 0) setIsBulkDialogOpen(true);
-  }, [bulkOptionPriceOpenRequest]);
-  const [notUpdated, setNotUpdated] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    if (!bulkOptionPricePreview || bulkOptionPriceLoading) return;
-    setNotUpdated(new Set(bulkOptionPricePreview.filter(row => row.status === "unavailable" || !row.referenceQuote || row.referenceQuote.kind === "unavailable").map(row=>row.target.simulationId)));
-  }, [bulkOptionPricePreview, bulkOptionPriceLoading]);
+    if (bulkOptionPriceOpenRequest > 0) { setResultSimulationId(bulkOptionPriceScope); setIsBulkDialogOpen(true); }
+  }, [bulkOptionPriceOpenRequest, bulkOptionPriceScope]);
+  const priceDiagnostics = new Map(simulations.flatMap(simulation => {
+    const result = diagnosePriceUpdate(simulation, bulkOptionPricePreview ?? [], bulkOptionPriceReferenceConfirmed, bulkOptionPriceAdoption);
+    return result ? [[simulation.id, result] as const] : [];
+  }));
+  const visiblePriceRows = (bulkOptionPricePreview ?? []).filter(row => !resultSimulationId || row.target.simulationId === resultSimulationId);
+  const visibleStockRows = (bulkStockPricePreview ?? []).filter(row => !resultSimulationId || row.simulationIds.includes(resultSimulationId));
   const bulkDialogCloseRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!isBulkDialogOpen) return;
@@ -320,7 +339,7 @@ export function Dashboard({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-        {bulkOptionPriceAvailable || onFetchBulkOptionPrices ? <button type="button" title="取得時点の現在決済候補価格をread-onlyで確認します" aria-description="決済実績・状態・数量は変更しません" disabled={bulkOptionPriceLoading} className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white disabled:bg-slate-400" onClick={() => { setIsBulkDialogOpen(true); onFetchBulkOptionPrices?.(); }}>{bulkOptionPriceLoading ? `${bulkOptionPriceProgress.total}脚中 ${bulkOptionPriceProgress.completed}脚` : "価格を一括更新"}</button> : <span className="text-xs text-amber-700">Saxo価格取得は利用できません（未接続・未対応または公開版）。</span>}
+        {bulkOptionPriceAvailable || onFetchBulkOptionPrices ? <button type="button" title="取得時点の現在決済候補価格をread-onlyで確認します" aria-description="決済実績・状態・数量は変更しません" disabled={bulkOptionPriceLoading} className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white disabled:bg-slate-400" onClick={() => { setResultSimulationId(undefined); setIsBulkDialogOpen(true); onFetchBulkOptionPrices?.(); }}>{bulkOptionPriceLoading ? `${bulkOptionPriceProgress.total}脚中 ${bulkOptionPriceProgress.completed}脚` : "価格を一括更新"}</button> : <span className="text-xs text-amber-700">Saxo価格取得は利用できません（未接続・未対応または公開版）。</span>}
         {isPositionFocusMode ? (
           <button
             className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
@@ -349,7 +368,20 @@ export function Dashboard({
         </div>
       </div>
       {bulkOptionPriceMessage && !isBulkDialogOpen ? <p className="mt-2 text-right text-xs text-slate-500">{bulkOptionPriceMessage}</p> : null}
-{isBulkDialogOpen ? <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 pt-12" role="presentation"><div role="dialog" aria-modal="true" aria-labelledby="bulk-option-price-dialog-title" className="w-full max-w-5xl rounded-lg bg-white p-4 shadow-xl"><div className="flex items-start justify-between gap-3"><div><h3 id="bulk-option-price-dialog-title" className="text-base font-bold">現在オプション価格を一括更新</h3><p className="mt-1 text-xs text-slate-600">Bid/Askから中間値の参考損益と決済目安を更新します。決済実績・状態・数量は変更しません。</p></div><button ref={bulkDialogCloseRef} type="button" aria-label="現在オプション価格の確認を閉じる" className="rounded border px-2 py-1 text-xs" onClick={() => { setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }}>閉じる</button></div>{bulkOptionPriceLoading ? <p className="mt-4 text-sm">株価と候補価格を取得中...</p> : null}{bulkOptionPriceMessage ? <p className="mt-3 text-xs text-slate-600">{bulkOptionPriceMessage}</p> : null}{bulkOptionPricePreview ? <BulkOptionPricePreview rows={bulkOptionPricePreview} stockRows={bulkStockPricePreview ?? []} simulations={simulations} referenceConfirmed={bulkOptionPriceReferenceConfirmed} onReferenceConfirmedChange={onBulkOptionPriceReferenceConfirmedChange ?? (() => {})} onApply={() => { onApplyBulkOptionPrices?.(); setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }} /> : null}</div></div> : null}
+      {isBulkDialogOpen ? <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 pt-12" role="presentation">
+        <div role="dialog" aria-modal="true" aria-labelledby="bulk-option-price-dialog-title" className="w-full max-w-5xl rounded-lg bg-white p-4 shadow-xl">
+          <div className="flex items-start justify-between gap-3"><div>
+            <h3 id="bulk-option-price-dialog-title" className="text-base font-bold">現在オプション価格を一括更新</h3>
+            {resultSimulationId ? <p className="font-bold">{simulations.find(simulation => simulation.id === resultSimulationId)?.ticker}の取得結果を確認中</p> : null}
+            <p className="mt-1 text-xs text-slate-600">Bid/Askから中間値の参考損益と決済目安を更新します。決済実績・状態・数量は変更しません。</p>
+          </div><button ref={bulkDialogCloseRef} type="button" aria-label="現在オプション価格の確認を閉じる" className="rounded border px-2 py-1 text-xs" onClick={() => { setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }}>閉じる</button></div>
+          {bulkOptionPriceLoading ? <p className="mt-4 text-sm">株価と候補価格を取得中...</p> : null}
+          {bulkOptionPriceMessage ? <p className="mt-3 text-xs text-slate-600">{bulkOptionPriceMessage}</p> : null}
+          {Array.from(priceDiagnostics.values()).filter(result => !resultSimulationId || result.simulationId === resultSimulationId).map(result => <PriceDiagnosticDetails key={result.simulationId} result={result} focused={result.simulationId === resultSimulationId} />)}
+          {onFetchBulkOptionPrices ? <button type="button" disabled={bulkOptionPriceLoading} className="my-2 rounded border px-2 py-1 text-xs disabled:opacity-40" onClick={() => onFetchBulkOptionPrices(resultSimulationId)}>{resultSimulationId ? "この建玉の残存脚を再取得" : "全建玉の価格を再取得"}</button> : null}
+          {bulkOptionPricePreview ? <BulkOptionPricePreview rows={visiblePriceRows} stockRows={visibleStockRows} simulations={simulations} referenceConfirmed={bulkOptionPriceReferenceConfirmed} onReferenceConfirmedChange={onBulkOptionPriceReferenceConfirmedChange ?? (() => {})} onApply={() => { onApplyBulkOptionPrices?.(resultSimulationId); setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }} /> : null}
+        </div>
+      </div> : null}
       {simulations.length === 0 ? (
         <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-5 text-sm leading-6 text-slate-600">
           このワークスペースにはまだ建玉がありません。上部の「新規建玉」から、Saxo画面を見ながら建玉を登録できます。
@@ -756,7 +788,7 @@ availableCashJPY:
                     )}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
-                    {referencePositionEstimate ? <><BasisMetric result={referencePositionEstimate} /><span className="block text-[10px] text-slate-500">{basisEvaluation?.hint !== referencePositionEstimate.reason ? basisEvaluation?.hint : ""}</span>{notUpdated.has(simulation.id)?<span className="block text-xs text-amber-800">今回未更新・保存済み参考値</span>:null}{referencePositionEstimate.kind === "missing" && basisEvaluation?.needsPricePreview && onFetchBulkOptionPrices ? <button type="button" disabled={bulkOptionPriceLoading} className="mt-1 rounded border px-2 py-1 text-xs disabled:opacity-40" onClick={event=>{event.stopPropagation();setIsBulkDialogOpen(true);onFetchBulkOptionPrices();}}>{basisEvaluation.legs.length > 1 ? "両脚の価格をまとめて更新" : "Bid/Ask候補価格を取得"}</button> : referencePositionEstimate.kind === "missing" && basisEvaluation?.needsPricePreview ? <span className="block text-xs text-slate-500">Bid/Ask価格取得は利用できません</span> : referencePositionEstimate.kind === "missing" && onCurrentEstimateAction ? <button type="button" className="mt-1 rounded border px-2 py-1 text-xs" onClick={event=>{event.stopPropagation();const requirement=currentEstimate.kind==="missing"?currentEstimate.missingRequirements[0]:undefined;onCurrentEstimateAction(simulation.id,requirement?.legId ?? simulation.optionLegs[0]?.id,requirement?.field ?? "exit_price");}}>不足情報を確認</button>:null}</> : isHistoryRow && isNAccountRow ? (
+{referencePositionEstimate ? <><BasisMetric result={referencePositionEstimate} /><span className="block text-[10px] text-slate-500">{basisEvaluation?.hint !== referencePositionEstimate.reason ? basisEvaluation?.hint : ""}</span>{priceDiagnostics.has(simulation.id) ? <><span className="block text-xs text-amber-800">{priceDiagnostics.get(simulation.id)!.summary}</span><span className="block text-xs">{priceDiagnostics.get(simulation.id)!.reason}</span><button type="button" className="mt-1 rounded border px-2 py-1 text-xs" onClick={event=>{event.stopPropagation();setResultSimulationId(simulation.id);setIsBulkDialogOpen(true);}}>取得結果を確認</button></> : basisEvaluation?.needsPricePreview ? <span className="block text-[10px] text-slate-500">今回の取得結果は未保持です（未試行または再読込後）</span> : null}{!priceDiagnostics.has(simulation.id) && referencePositionEstimate.kind === "missing" && basisEvaluation?.needsPricePreview && onFetchBulkOptionPrices ? <button type="button" disabled={bulkOptionPriceLoading} className="mt-1 rounded border px-2 py-1 text-xs disabled:opacity-40" onClick={event=>{event.stopPropagation();setResultSimulationId(simulation.id);setIsBulkDialogOpen(true);onFetchBulkOptionPrices(simulation.id);}}>{basisEvaluation.legs.length > 1 ? "両脚の価格をまとめて更新" : "Bid/Ask候補価格を取得"}</button> : !priceDiagnostics.has(simulation.id) && referencePositionEstimate.kind === "missing" && basisEvaluation?.needsPricePreview ? <span className="block text-xs text-slate-500">Bid/Ask価格取得は利用できません</span> : !priceDiagnostics.has(simulation.id) && referencePositionEstimate.kind === "missing" && onCurrentEstimateAction ? <button type="button" className="mt-1 rounded border px-2 py-1 text-xs" onClick={event=>{event.stopPropagation();const requirement=currentEstimate.kind==="missing"?currentEstimate.missingRequirements[0]:undefined;onCurrentEstimateAction(simulation.id,requirement?.legId ?? simulation.optionLegs[0]?.id,requirement?.field ?? "exit_price");}}>不足情報を確認</button>:null}</> : isHistoryRow && isNAccountRow ? (
                       historyPerformance?.historicalAnnualReturnMissingReason || primary.annualReturnPct === undefined ? (
                         <>
                           <span className="block text-[11px] font-bold text-slate-500">年率換算（参考）</span>

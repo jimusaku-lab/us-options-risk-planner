@@ -298,6 +298,8 @@ export default function App() {
   const [bulkOptionPriceProgress, setBulkOptionPriceProgress] = useState({ total: 0, completed: 0 });
   const [bulkOptionPriceReferenceConfirmed, setBulkOptionPriceReferenceConfirmed] = useState(false);
   const [bulkOptionPriceOpenRequest, setBulkOptionPriceOpenRequest] = useState(0);
+  const [bulkOptionPriceScope, setBulkOptionPriceScope] = useState<string>();
+  const [bulkOptionPriceAdoption, setBulkOptionPriceAdoption] = useState<{ simulationIds: string[]; referenceConfirmed: boolean }>();
   const candidatePanelRef = useRef<HTMLDivElement | null>(null);
   const saxoApiDetailsRef = useRef<HTMLDivElement | null>(null);
   const saxoBulkFetchButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -575,12 +577,14 @@ export default function App() {
     }
   };
   const bulkOptionPriceAvailable = bulkOptionPriceCapability === "available";
-  const previewBulkOptionPrices = async (): Promise<string> => {
+  const previewBulkOptionPrices = async (simulationId?: string): Promise<string> => {
+    setBulkOptionPriceScope(simulationId);
+    setBulkOptionPriceAdoption(undefined);
     setBulkOptionPriceOpenRequest(value => value + 1);
     setBulkOptionPriceReferenceConfirmed(false);
     setBulkOptionPricePreview(null);
     setBulkStockPricePreview(null);
-    const currentSimulations = useOptionsStore.getState().simulations;
+    const currentSimulations = useOptionsStore.getState().simulations.filter(simulation => !simulationId || simulation.id === simulationId);
     const targets = getCurrentOptionPriceTargets(currentSimulations);
     const stockTargets = getCurrentStockPriceTargets(currentSimulations);
     const requestId = ++bulkPriceRequestIdRef.current;
@@ -611,6 +615,8 @@ export default function App() {
       if (!capable) {
         const message = !status.connected ? "Saxoは未接続です。再接続後に価格取得を再確認してください。保存価格は変更していません。"
           : "SaxoローカルAPIは一括価格取得に未対応です。口座・履歴の取得とは別に、ローカルAPIの更新を確認してください。";
+        setBulkOptionPricePreview(targets.map(target => ({ target, status: "unavailable", reason: message })));
+        setBulkStockPricePreview([]);
         setBulkOptionPriceMessage(message);
         return message;
       }
@@ -646,19 +652,24 @@ export default function App() {
       setBulkStockPricePreview(null);
       const message = error instanceof Error ? error.message : "Saxo候補価格を取得できませんでした。";
       const displayMessage = /not_found|実装していません|404/i.test(message) ? "SaxoローカルAPIが旧版です。ローカルAPIを更新して再起動してください。個別取得は利用できます。" : `${message} 既存価格は変更していません。`;
+      setBulkOptionPricePreview(targets.map(target => ({ target, status: "unavailable", reason: displayMessage })));
+      setBulkStockPricePreview([]);
       setBulkOptionPriceMessage(displayMessage);
       return displayMessage;
     } finally {
       if (requestId === bulkPriceRequestIdRef.current) setBulkOptionPriceLoading(false);
     }
   };
-  const applyBulkOptionPrices = () => {
+  const applyBulkOptionPrices = (simulationId?: string) => {
     if (!bulkOptionPricePreview || !bulkStockPricePreview || bulkPricePreviewWorkspace !== activeWorkspace) {
       setBulkOptionPriceMessage("取得後にワークスペースが変わりました。再取得してください。");
       return;
     }
     const latest = useOptionsStore.getState().simulations;
-    const next = applyCurrentPricePreview(latest, bulkOptionPricePreview, bulkStockPricePreview, { includeConfirmedReferences: bulkOptionPriceReferenceConfirmed });
+    const rows = bulkOptionPricePreview.filter(row => !simulationId || row.target.simulationId === simulationId);
+    const stocks = bulkStockPricePreview.filter(row => !simulationId || row.simulationIds.includes(simulationId)).map(row => simulationId ? { ...row, simulationIds: [simulationId] } : row);
+    setBulkOptionPriceAdoption({ simulationIds: [...new Set(rows.map(row => row.target.simulationId))], referenceConfirmed: bulkOptionPriceReferenceConfirmed });
+    const next = applyCurrentPricePreview(latest, rows, stocks, { includeConfirmedReferences: bulkOptionPriceReferenceConfirmed });
     const changed = next.filter((simulation, index) => simulation !== latest[index]).length;
     if (changed === 0) {
       setBulkOptionPriceMessage("反映できる候補はありません。Mid/Lastのみや片脚欠損は個別に確認してください。");
@@ -2179,6 +2190,8 @@ export default function App() {
                 onRefreshFx={refreshAllFx}
                 bulkOptionPricePreview={bulkOptionPricePreview}
                 bulkOptionPriceOpenRequest={bulkOptionPriceOpenRequest}
+                bulkOptionPriceScope={bulkOptionPriceScope}
+                bulkOptionPriceAdoption={bulkOptionPriceAdoption}
                 bulkStockPricePreview={bulkStockPricePreview}
                 bulkOptionPriceMessage={bulkOptionPriceMessage}
                 bulkOptionPriceLoading={bulkOptionPriceLoading}
@@ -2465,6 +2478,8 @@ export default function App() {
               onRefreshFx={refreshAllFx}
               bulkOptionPricePreview={bulkOptionPricePreview}
               bulkOptionPriceOpenRequest={bulkOptionPriceOpenRequest}
+                bulkOptionPriceScope={bulkOptionPriceScope}
+                bulkOptionPriceAdoption={bulkOptionPriceAdoption}
               bulkStockPricePreview={bulkStockPricePreview}
               bulkOptionPriceMessage={bulkOptionPriceMessage}
               bulkOptionPriceLoading={bulkOptionPriceLoading}

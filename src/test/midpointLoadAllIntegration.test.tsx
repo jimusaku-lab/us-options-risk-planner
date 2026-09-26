@@ -13,6 +13,8 @@ let connected = false;
 let capability = true;
 let premiumCalls = 0;
 let statusCalls = 0;
+let missingFirstBid = false;
+let requestedTargets: string[][] = [];
 function fixture(): TradeSimulation {
   return {
     id: "mid-parent", status: "open", name: "Anonymous spread", ticker: "TEST", strategyType: "bull_call_spread",
@@ -31,6 +33,7 @@ function fixture(): TradeSimulation {
 }
 beforeEach(() => {
   connected = false; capability = true; premiumCalls = 0; statusCalls = 0;
+  missingFirstBid = false; requestedTargets = [];
   localStorage.clear(); localStorage.setItem("us-options-first-run-notice-accepted", "true");
   const simulation = fixture();
   useOptionsStore.setState({ activeWorkspace: "live", simulationsByWorkspace: { demo: [], live: [simulation] }, simulations: [simulation], strategyLedgersByWorkspace: { demo: emptyStrategyLedger(), live: emptyStrategyLedger() }, selectedSimulationId: simulation.id, selectedSimulationIds: { demo: "", live: simulation.id }, wheelCycles: [], wheelEvents: [], stockTransfers: [], wheelCyclesByWorkspace: { demo: [], live: [] }, wheelEventsByWorkspace: { demo: [], live: [] }, stockTransfersByWorkspace: { demo: [], live: [] } });
@@ -51,9 +54,10 @@ beforeEach(() => {
     if (path === "/api/saxo/options/premium-candidates/preview") {
       premiumCalls++;
       const targets = JSON.parse(String(init?.body)).targets as { targetId: string }[];
+      requestedTargets.push(targets.map(target => target.targetId));
       responses[path] = { ...envelope, results: targets.map(({ targetId }) => ({
         targetId, candidate: { ...envelope, status: "available", classification: "available", source: "fixture",
-          bid: targetId.endsWith("mid-long") ? 12 : 2, ask: targetId.endsWith("mid-long") ? 14 : 4,
+          bid: missingFirstBid && targetId === "mid-parent:mid-long" ? undefined : targetId.endsWith("mid-long") ? 12 : 2, ask: targetId.endsWith("mid-long") ? 14 : 4,
           quoteDiagnostics: { priceTypeBid: "OldIndicative", priceTypeAsk: "OldIndicative" } },
       })) };
     }
@@ -111,6 +115,41 @@ describe("R15 App all-fetch to common price preview", () => {
     expect(saved.status).toBe("open");
     expect(JSON.parse(localStorage.getItem("us-options-simulations-v2")!).live[0].optionLegs).toEqual(saved.optionLegs);
   });
+  it("keeps mixed parent results, opens the failed parent without refetching, then explicitly retries only its residual legs", async () => {
+    const failed = { ...fixture(), ticker: "BAD" };
+    const good = { ...fixture(), id: "good-parent", ticker: "GOOD" };
+    useOptionsStore.setState({ simulations: [failed, good], simulationsByWorkspace: { demo: [], live: [failed, good] } });
+    missingFirstBid = true;
+    const button = await mountAndReconnect();
+    const persistence = vi.spyOn(Storage.prototype, "setItem");
+    fireEvent.click(button);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(await within(dialog).findByRole("checkbox", { name: /OldIndicative/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /一括反映/ }));
+    await waitFor(() => expect(useOptionsStore.getState().simulations[1].optionLegs[0].referenceQuote).toBeDefined());
+    const goodSaved = structuredClone(useOptionsStore.getState().simulations[1]);
+    expect(useOptionsStore.getState().simulations[0].optionLegs.every(leg => !leg.referenceQuote)).toBe(true);
+    const badRow = screen.getAllByRole("row").find(row => row.textContent?.includes("BAD"))!;
+    expect(badRow.textContent).toContain("Bidが未取得");
+    expect(badRow.textContent).not.toContain("保存済み参考値");
+    fireEvent.click(within(badRow).getByRole("button", { name: "取得結果を確認" }));
+    expect(premiumCalls).toBe(1);
+    const result = await screen.findByRole("dialog");
+    expect(within(result).getByRole("region", { name: "BADの価格取得結果" })).toBeInTheDocument();
+    expect(within(result).queryByRole("region", { name: "GOODの価格取得結果" })).toBeNull();
+    missingFirstBid = false;
+    fireEvent.click(within(result).getByRole("button", { name: "この建玉の残存脚を再取得" }));
+    await waitFor(() => expect(premiumCalls).toBe(2));
+    expect(requestedTargets[1]).toEqual(["mid-parent:mid-long", "mid-parent:mid-short"]);
+    fireEvent.click(await within(result).findByRole("checkbox", { name: /OldIndicative/ }));
+    fireEvent.click(within(result).getByRole("button", { name: /一括反映/ }));
+    await waitFor(() => expect(useOptionsStore.getState().simulations[0].optionLegs.every(leg => !!leg.referenceQuote)).toBe(true));
+    expect(useOptionsStore.getState().simulations[1]).toEqual(goodSaved);
+    expect(persistence.mock.calls.filter(([key]) => key === "us-options-simulations-v2")).toHaveLength(2);
+    const envelope = JSON.parse(localStorage.getItem("us-options-simulations-v2")!);
+    expect(envelope.live.map((simulation: TradeSimulation) => simulation.optionLegs)).toEqual(useOptionsStore.getState().simulations.map(simulation => simulation.optionLegs));
+  });
+
   it("keeps account/history completion separate when current helper has no bulk capability", async () => {
     capability = false;
     const button = await mountAndReconnect();
