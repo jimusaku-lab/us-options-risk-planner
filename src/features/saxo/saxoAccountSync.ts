@@ -138,6 +138,7 @@ export type SaxoPositionMatchStatus =
   | "unknown";
 
 export type SaxoApiPositionSnapshot = {
+  valuation?: import("@/types/domain").SaxoPositionValuation;
   id: string;
   positionId?: string;
   accountKey: string;

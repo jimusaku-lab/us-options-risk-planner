@@ -95,7 +95,8 @@ import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker, type FxQuote } from "@/lib/marketData";
 import { applyCurrentPricePreview, createCurrentOptionPricePreviewRow, createCurrentStockPricePreviewRow, getCurrentOptionPriceTargets, getCurrentStockPriceTargets, type CurrentOptionPricePreviewRow, type CurrentStockPricePreviewRow } from "@/domain/bulkOptionPrice";
-import { fetchSaxoOptionPremiumCandidatesPreview, fetchSaxoStatus } from "@/features/saxo/saxoApiClient";
+import { fetchSaxoOptionPremiumCandidatesPreview, fetchSaxoStatus, fetchSaxoPositionsSnapshot } from "@/features/saxo/saxoApiClient";
+import { attachPositionValuations } from "@/domain/saxoValuation";
 import { formatLocalDate } from "@/lib/date";
 import { formatJPY, formatNumber, formatPct, formatUSD } from "@/lib/format";
 import { consumeSaxoOauthReturnMarker, resolveInitialSaxoPanelOpen, shouldScheduleSaxoOauthReturnFocus, type SaxoOauthReturnFocusState } from "@/lib/saxoOauthReturn";
@@ -620,7 +621,8 @@ export default function App() {
         setBulkOptionPriceMessage(message);
         return message;
       }
-      const [optionSettled, stockResults] = await Promise.all([
+      const valuationBatchId = `valuation:${requestId}:${new Date().toISOString()}`;
+      const [optionSettled, stockResults, positionsSettled] = await Promise.all([
         targets.length > 0
           ? Promise.allSettled([fetchSaxoOptionPremiumCandidatesPreview(targets.map((target) => ({
             targetId: target.targetId, symbol: target.ticker, expiry: target.expiry, strike: target.strike, optionType: target.optionType,
@@ -628,15 +630,20 @@ export default function App() {
           })))])
           : Promise.resolve([]),
         Promise.allSettled(stockTargets.map(async (target) => ({ target, quote: await fetchStooqQuote(target.ticker) }))),
+        targets.length ? Promise.allSettled([fetchSaxoPositionsSnapshot()]) : Promise.resolve([]),
       ]);
       if (requestId !== bulkPriceRequestIdRef.current || requestWorkspace !== useOptionsStore.getState().activeWorkspace) return "価格取得はキャンセルされました。";
       const optionResult = optionSettled[0];
       const resultByTarget = new Map(optionResult?.status === "fulfilled" ? optionResult.value.results.map((result) => [result.targetId, result]) : []);
-      const rows = targets.map((target) => {
+      const quoteRows = targets.map((target) => {
         const result = resultByTarget.get(target.targetId);
         const optionError = optionResult?.status === "rejected" ? optionResult.reason instanceof Error ? optionResult.reason.message : "Saxo候補価格を取得できませんでした" : undefined;
         return result?.candidate ? createCurrentOptionPricePreviewRow(target, result.candidate) : { target, status: "unavailable" as const, reason: result?.error ?? optionError ?? "対象応答がありません" };
       });
+      const positionResult = positionsSettled[0];
+      const rows = positionResult?.status === "fulfilled" && positionResult.value.coverage?.status !== "partial"
+        ? attachPositionValuations(currentSimulations,quoteRows,positionResult.value.positions,positionResult.value.environment,valuationBatchId)
+        : quoteRows.map(row=>({...row,valuationReason:"Saxo評価の取得失敗・全件照合未完了"}));
       const stockRows = stockResults.map((result, index) => result.status === "fulfilled"
         ? createCurrentStockPricePreviewRow(result.value.target, result.value.quote)
         : createCurrentStockPricePreviewRow(stockTargets[index], undefined, result.reason instanceof Error ? result.reason.message : "取得理由不明"));

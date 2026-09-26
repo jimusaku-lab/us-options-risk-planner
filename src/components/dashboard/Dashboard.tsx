@@ -18,6 +18,7 @@ import type { FxQuote } from "@/lib/marketData";
 import { formatCurrentEstimateFxEvidence } from "@/domain/currentEstimateFx";
 import { formatCurrentPriceStrikeDifference, formatCurrentPriceStrikePercent, getCurrentPriceStrikeDisplay } from "@/domain/currentPriceStrikeDisplay";
 import { getBulkApplicableTargetIds, getBulkOptionPricePreviewCounts, type CurrentOptionPricePreviewRow, type CurrentStockPricePreviewRow } from "@/domain/bulkOptionPrice";
+import { parentPriceBasis, valuationProblem } from "@/domain/saxoValuation";
 import { getSaxoExitOrderReviews, type SaxoApiOrderSnapshot } from "@/features/saxo/saxoAccountSync";
 import { calculateBearPutSpreadEstimate, getBearPutSpreadLifecycle } from "@/domain/bearPutSpread";
 import { calculateVerticalSpreadEstimate, getVerticalSpreadDefinition } from "@/domain/verticalSpread";
@@ -143,6 +144,7 @@ function BulkOptionPricePreview({ rows, stockRows, diagnostics, simulations, ref
   const counts = getBulkOptionPricePreviewCounts(rows);
   const applicable = getBulkApplicableTargetIds(rows, simulations, referenceConfirmed);
   const ready = applicable.size;
+  const valuationCount = rows.filter(row=>!valuationProblem(row.saxoValuation,true)).length;
   const stockReady = stockRows.filter((row) => row.status === "ready").length;
   const applyLabel = counts.ready === 0 && referenceConfirmed
     ? `確認済み参考価格 ${ready}脚を一括反映`
@@ -160,11 +162,18 @@ function BulkOptionPricePreview({ rows, stockRows, diagnostics, simulations, ref
         <td className="text-right">{row.target.savedPriceUSD ?? "—"}</td>
         <td className="text-right">{[row.candidate?.bid, row.candidate?.ask, row.candidate?.mid, row.candidate?.last].map((v) => v ?? "—").join(" / ")}</td>
         <td className="text-right">{row.selectedPriceUSD ?? "—"}{row.selectedField ? ` (${row.selectedField})` : ""}<span className="block text-[10px] text-slate-500">参考Mid {row.referenceQuote?.mid === undefined ? "未取得" : row.referenceQuote.mid}</span></td>
-        <td>{diagnostics.get(row.target.simulationId)?.legs.find(leg => leg.legId === row.target.legId)?.evaluation === "unavailable" ? diagnostics.get(row.target.simulationId)?.legs.find(leg => leg.legId === row.target.legId)?.reason : row.status === "unavailable" ? row.reason : diagnostics.get(row.target.simulationId)?.adoption === "blocked" ? "他の残存脚が未取得・親は未反映" : row.status === "confirmable_reference" && !referenceConfirmed ? "参考価格・確認待ち" : "採用可能"}</td>
+        <td>{(() => {
+          const parent=simulations.find(s=>s.id===row.target.simulationId);
+          if(row.adoptionBlocked)return row.adoptionBlocked;
+          const basis=parent && parentPriceBasis(parent,rows,referenceConfirmed);
+          if(basis==="saxo-position") return "Saxo評価（親の全残存脚）を採用可能";
+          if(basis==="midpoint") return "中間値を採用可能";
+          return !valuationProblem(row.saxoValuation,true) ? "Saxo参考評価・確認待ち／親全脚の一致が必要" : row.reason;
+        })()}<details className="mt-1"><summary>評価根拠</summary>{row.saxoValuation ? <span>評価価格 {row.saxoValuation.currentPrice??"未取得"} / 損益USD {row.saxoValuation.profitLossOnTrade??"未取得"} / 符号付き費用USD {row.saxoValuation.tradeCostsTotal??"未取得"} / {row.saxoValuation.currentPriceType} / {row.saxoValuation.calculationReliability} / 遅延 {row.saxoValuation.delayedByMinutes===undefined?"未確認":row.saxoValuation.delayedByMinutes+"分"} / 取得 {row.saxoValuation.fetchedAt} / {row.valuationReason}</span>:row.valuationReason ?? diagnostics.get(row.target.simulationId)?.reason}</details></td>
       </tr>)}</tbody>
     </table>
     <p className="mt-2 text-xs text-slate-600">取得成功 {counts.successful}脚 / 通常 {counts.ready}脚 / 参考値・要確認 {counts.confirmableReference}脚 / 反映不可 {counts.unavailable}脚</p>
-    {counts.confirmableReference > 0 ? <label className="mt-2 flex items-start gap-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-950"><input type="checkbox" checked={referenceConfirmed} onChange={(event) => onReferenceConfirmedChange(event.target.checked)} /><span>表示中のOldIndicative {counts.confirmableReference}脚を取得時点の参考価格として使用することを確認しました</span></label> : null}
+    {counts.confirmableReference > 0 ? <label className="mt-2 flex items-start gap-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-950"><input type="checkbox" checked={referenceConfirmed} onChange={(event) => onReferenceConfirmedChange(event.target.checked)} /><span>{valuationCount ? "表示中のOldIndicative・Saxo参考評価（条件付き／遅延を含む）" : `表示中のOldIndicative ${counts.confirmableReference}脚`}を取得時点の参考価格として使用することを確認しました</span></label> : null}
     <div className="mt-2 flex items-center gap-3"><button type="button" disabled={ready + stockReady === 0} className="rounded bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300" onClick={onApply}>{stockReady > 0 ? `株価${stockReady}銘柄・${applyLabel}` : applyLabel}</button><span className="text-xs text-slate-500">合成建玉は二脚がそろう場合だけ同時に反映します。</span></div>
   </div>;
 }
@@ -521,7 +530,7 @@ availableCashJPY:
                   : !isHistoryRow && !premiumDisplay.hasPremiumInput
                   ? "未入力"
                   : referencePositionEstimate?.kind === "available"
-                  ? `参考損益（中間値） ${referencePositionEstimate.amount! >= 0 ? "+" : ""}${formatBasisAmount(referencePositionEstimate)}`
+                  ? `${referencePositionEstimate.valuationSource === "saxo-position" ? "Saxo評価（USD）" : "参考損益（中間値）"} ${formatBasisAmount(referencePositionEstimate)}`
                   : longOptionDisplay
                     ? longOptionDisplay.referenceAnnualizedReturnPct !== undefined
                       ? `参考損益（中間値） ${longOptionDisplay.referenceProfitUSD !== undefined && longOptionDisplay.referenceProfitUSD > 0 ? "+" : ""}${longOptionDisplay.referenceProfitUSD === undefined ? "未計算" : formatUSD(longOptionDisplay.referenceProfitUSD)} / ${longOptionDisplay.referenceAnnualizedReturnPct > 0 ? "+" : ""}${formatPct(longOptionDisplay.referenceAnnualizedReturnPct)}`

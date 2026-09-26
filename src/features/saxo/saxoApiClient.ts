@@ -84,7 +84,8 @@ export async function fetchSaxoAccountsSnapshot(): Promise<SaxoAccountsSnapshotR
 }
 
 export async function fetchSaxoPositionsSnapshot(): Promise<SaxoPositionsSnapshotResponse> {
-  return fetchJson("/api/saxo/positions/snapshot");
+  const response = await fetchJson<SaxoPositionsSnapshotResponse>("/api/saxo/positions/snapshot");
+  return {...response,positions:response.positions.map(position=>adaptLegacyPositionValuation(position,response.fetchedAt))};
 }
 
 export async function fetchSaxoOrdersSnapshot(): Promise<SaxoOrdersSnapshotResponse> {
@@ -185,3 +186,4 @@ function createLocalApiFetchFailureMessage(error: unknown, timeoutMessage?: stri
   }
   return "SaxoローカルAPIが起動していません。別ターミナルで `npm run dev:saxo-api` または `npm run dev:all` を起動してください。";
 }
+import { adaptLegacyPositionValuation } from "./positionValuationAdapter";

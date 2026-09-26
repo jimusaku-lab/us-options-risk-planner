@@ -1,6 +1,7 @@
 import type { TradeSimulation } from "@/types/domain";
 import { getCurrentOptionPriceTargets, type CurrentOptionPricePreviewRow } from "./bulkOptionPrice";
 import { resolveEvaluationQuote } from "./midpointEvaluation";
+import { parentPriceBasis, valuationProblem } from "./saxoValuation";
 
 export type PriceUpdateAdoption = { simulationIds: string[]; referenceConfirmed: boolean };
 export type PriceLegDiagnostic = {
@@ -18,7 +19,7 @@ export type PriceUpdateDiagnostic = {
   reason: string; summary: string; hasSavedMid: boolean;
 };
 
-export function diagnosePriceUpdate(simulation: TradeSimulation, rows: CurrentOptionPricePreviewRow[], confirmed = false, adoption?: PriceUpdateAdoption): PriceUpdateDiagnostic | undefined {
+function diagnoseMidpointUpdate(simulation: TradeSimulation, rows: CurrentOptionPricePreviewRow[], confirmed = false, adoption?: PriceUpdateAdoption): PriceUpdateDiagnostic | undefined {
   const relevant = rows.filter(row => row.target.simulationId === simulation.id);
   if (!relevant.length) return undefined;
   const targets = getCurrentOptionPriceTargets([simulation]);
@@ -62,4 +63,15 @@ export function diagnosePriceUpdate(simulation: TradeSimulation, rows: CurrentOp
     acquisition: legs.every(leg => leg.acquisition === "received") ? "received" : legs.some(leg => leg.acquisition === "received") ? "partial" : "failed",
     evaluation, adoption: unavailable || attempted && !updated ? "blocked" : waiting ? "confirmation_required" : "eligible",
     storage, reason: targets.length > 1 && unavailable ? `${reason}。残存全脚が揃うまで親の中間値を更新しません` : reason, summary, hasSavedMid };
+}
+
+export function diagnosePriceUpdate(simulation:TradeSimulation,rows:CurrentOptionPricePreviewRow[],confirmed=false,adoption?:PriceUpdateAdoption):PriceUpdateDiagnostic|undefined {
+  const result=diagnoseMidpointUpdate(simulation,rows,confirmed,adoption);
+  if(!result || parentPriceBasis(simulation,rows,true)!=="saxo-position")return result;
+  const attempted=adoption?.simulationIds.includes(simulation.id)??false;
+  const accepted=attempted?adoption!.referenceConfirmed:confirmed;
+  const relevant=rows.filter(r=>r.target.simulationId===simulation.id);
+  const waiting=relevant.some(r=>valuationProblem(r.saxoValuation,accepted));
+  const updated=attempted && !waiting && simulation.currentValuationBasis?.kind==="saxo-position" && relevant.every(r=>simulation.optionLegs.find(l=>l.id===r.target.legId)?.saxoValuation?.batchId===r.saxoValuation?.batchId);
+  return {...result,evaluation:waiting?"confirmation_required":"ready",adoption:waiting?"confirmation_required":"eligible",storage:updated?"updated":simulation.currentValuationBasis?.kind==="saxo-position"?"previous":"not_applied",reason:waiting?"Saxo参考評価の使用確認が必要":"残存全脚をSaxo評価へ揃えます",summary:updated?"Saxo評価を更新しました":waiting?"Saxo参考評価の使用確認待ち":"取得済み・Saxo評価は未反映"};
 }

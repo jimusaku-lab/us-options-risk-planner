@@ -1,4 +1,5 @@
-import type { OptionLeg, TradeSimulation } from "@/types/domain";
+import type { OptionLeg, TradeSimulation, SavedSaxoValuation } from "@/types/domain";
+import { parentPriceBasis, samePriceTarget, valuationProblem, valuationNeedsConsent, previewNeedsReferenceConsent } from "./saxoValuation";
 import type { SaxoOptionPremiumCandidate } from "@/features/saxo/saxoAccountSync";
 import { buildSaxoOptionValueSnapshot, upsertOptionValueSnapshot } from "@/domain/optionValueSnapshot";
 import { buildOptionValueObservation, resolveOptionValueEvidenceRevision, upsertTimeValueObservation } from "@/domain/timeValue";
@@ -9,14 +10,14 @@ import { isManagedTwoLegStrategy } from "@/domain/verticalSpread";
 import type { StockQuote } from "@/lib/marketData";
 import { resolveEvaluationQuote, captureReferenceQuote, type EvaluationQuote } from "@/domain/midpointEvaluation";
 
-export type CurrentOptionPriceTarget = { targetId: string; simulationId: string; legId: string; ticker: string; strategyType: TradeSimulation["strategyType"]; optionType: OptionLeg["type"]; side: OptionLeg["side"]; strike: number; expiry: string; quantity: number; savedPriceUSD?: number; accountKey?: string; uic?: number; positionId?: string; instrumentCode?: string };
-export type CurrentOptionPricePreviewRow = { target: CurrentOptionPriceTarget; candidate?: SaxoOptionPremiumCandidate; selectedPriceUSD?: number; selectedField?: "bid" | "ask"; status: "ready" | "confirmable_reference" | "unavailable"; reason: string; referenceQuote?: EvaluationQuote };
+export type CurrentOptionPriceTarget = { targetId: string; simulationId: string; legId: string; ticker: string; strategyType: TradeSimulation["strategyType"]; optionType: OptionLeg["type"]; side: OptionLeg["side"]; strike: number; expiry: string; quantity: number; savedPriceUSD?: number; contractSize?: number; accountEnvironment?: TradeSimulation["accountEnvironment"]; accountCurrency?: TradeSimulation["accountCurrency"]; accountKey?: string; uic?: number; positionId?: string; instrumentCode?: string };
+export type CurrentOptionPricePreviewRow = { target: CurrentOptionPriceTarget; candidate?: SaxoOptionPremiumCandidate; selectedPriceUSD?: number; selectedField?: "bid" | "ask"; status: "ready" | "confirmable_reference" | "unavailable"; reason: string; referenceQuote?: EvaluationQuote; saxoValuation?: SavedSaxoValuation; valuationReason?: string; adoptionBlocked?: string };
 export type CurrentStockPricePreviewRow = { ticker: string; simulationIds: string[]; savedPricesBySimulationId: Record<string, number | undefined>; quote?: StockQuote; status: "ready" | "unavailable"; reason: string };
 
 const positive = (value: number | undefined) => value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
 export type SaxoOptionLegIdentifiers = { accountKey?: string; uic?: number; positionId?: string; instrumentCode?: string };
 export function resolveSaxoOptionLegIdentifiers(simulation: TradeSimulation, leg: OptionLeg): SaxoOptionLegIdentifiers { const fixture = simulation.fixtureMeta; const legacyStandalone = simulation.optionLegs?.length === undefined || simulation.optionLegs.length === 1; return { accountKey: leg.saxoAccountKey ?? fixture?.saxoAccountKey, uic: leg.saxoUic ?? (legacyStandalone ? fixture?.saxoUic : undefined), positionId: leg.saxoPositionId ?? (legacyStandalone ? fixture?.saxoPositionId : undefined), instrumentCode: leg.brokerSymbol ?? (legacyStandalone ? fixture?.saxoInstrumentCode : undefined) }; }
-export function getCurrentOptionPriceTargets(simulations: TradeSimulation[]): CurrentOptionPriceTarget[] { return simulations.flatMap((simulation) => simulation.status !== "open" ? [] : getOperationalRemainingOptionLegs(simulation).filter(({ leg }) => positive(leg.quantity) !== undefined).map(({ leg, progress }) => ({ targetId: `${simulation.id}:${leg.id}`, simulationId: simulation.id, legId: leg.id, ticker: simulation.ticker, strategyType: simulation.strategyType, optionType: leg.type, side: leg.side, strike: leg.strikeUSD, expiry: leg.expiryDate, quantity: progress.remainingContracts!, savedPriceUSD: positive(leg.closeCostUSD) ?? positive(leg.closePlan?.closePriceUSD), ...resolveSaxoOptionLegIdentifiers(simulation, leg) }))); }
+export function getCurrentOptionPriceTargets(simulations: TradeSimulation[]): CurrentOptionPriceTarget[] { return simulations.flatMap((simulation) => simulation.status !== "open" ? [] : getOperationalRemainingOptionLegs(simulation).filter(({ leg }) => positive(leg.quantity) !== undefined).map(({ leg, progress }) => ({ targetId: `${simulation.id}:${leg.id}`, simulationId: simulation.id, legId: leg.id, ticker: simulation.ticker, strategyType: simulation.strategyType, optionType: leg.type, side: leg.side, strike: leg.strikeUSD, expiry: leg.expiryDate, quantity: progress.remainingContracts!, contractSize: leg.contractSize, accountEnvironment: simulation.accountEnvironment, accountCurrency: simulation.accountCurrency, savedPriceUSD: positive(leg.closeCostUSD) ?? positive(leg.closePlan?.closePriceUSD), ...resolveSaxoOptionLegIdentifiers(simulation, leg) }))); }
 export function selectSideAwarePremiumCandidate(candidate: SaxoOptionPremiumCandidate | undefined, side: OptionLeg["side"]): Pick<CurrentOptionPricePreviewRow, "selectedPriceUSD" | "selectedField" | "status" | "reason"> { if (!candidate || candidate.status !== "available") return { status: "unavailable", reason: candidate?.classification ?? "取得失敗" }; const field = side === "buy" ? "bid" : "ask"; const price = candidate[field]; const priceType = field === "bid" ? candidate.quoteDiagnostics?.priceTypeBid : candidate.quoteDiagnostics?.priceTypeAsk; if (["NoAccess", "NoMarket", "Pending"].includes(priceType ?? "")) return { status: "unavailable", reason: `${field === "bid" ? "Bid" : "Ask"}は${priceType}のため反映できません` }; if (priceType === "OldIndicative") return positive(price) === undefined ? { status: "unavailable", reason: `${field === "bid" ? "Bid" : "Ask"}が未取得` } : { selectedPriceUSD: price, selectedField: field, status: "confirmable_reference", reason: `${field === "bid" ? "Bid" : "Ask"}はOldIndicative（取得時点の参考値・確認が必要）` }; if (positive(price) !== undefined) return { selectedPriceUSD: price, selectedField: field, status: "ready", reason: side === "buy" ? "売却候補のBidを採用" : "買戻し候補のAskを採用" }; return { status: "unavailable", reason: [candidate.mid, candidate.last].some(positive) ? `${field === "bid" ? "Bid" : "Ask"}未取得（Mid/Lastは参考値のみ）` : `${field === "bid" ? "Bid" : "Ask"}未取得` }; }
 export function createCurrentOptionPricePreviewRow(target: CurrentOptionPriceTarget, candidate?: SaxoOptionPremiumCandidate): CurrentOptionPricePreviewRow { const selected = selectSideAwarePremiumCandidate(candidate, target.side); const referenceQuote = candidate?.status === "available" ? resolveEvaluationQuote({ bid: candidate.bid, ask: candidate.ask, priceTypeBid: candidate.quoteDiagnostics?.priceTypeBid, priceTypeAsk: candidate.quoteDiagnostics?.priceTypeAsk, fetchedAt: candidate.fetchedAt, source: candidate.source, sourceTimestamp: candidate.sourceTimestamp, delayedByMinutes: candidate.quoteDiagnostics?.delayedByMinutes }) : undefined; return { target, candidate, ...selected, referenceQuote,
     ...(referenceQuote?.kind === "confirmable_reference" && selected.status === "ready" ? { status: "confirmable_reference" as const, reason: "片側OldIndicative・中間値の使用確認が必要" } : {}),
@@ -24,21 +25,45 @@ export function createCurrentOptionPricePreviewRow(target: CurrentOptionPriceTar
 export function getCurrentStockPriceTargets(simulations: TradeSimulation[]): Array<{ ticker: string; simulationIds: string[]; savedPricesBySimulationId: Record<string, number | undefined> }> { const grouped=new Map<string,{simulationIds:string[];savedPricesBySimulationId:Record<string,number|undefined>}>();for(const simulation of simulations){if(simulation.status!=="open")continue;const ticker=simulation.ticker.trim().toUpperCase();if(!ticker)continue;const current=grouped.get(ticker)??{simulationIds:[],savedPricesBySimulationId:{}};current.simulationIds.push(simulation.id);current.savedPricesBySimulationId[simulation.id]=Number.isFinite(simulation.currentPriceUSD)?simulation.currentPriceUSD:undefined;grouped.set(ticker,current);}return Array.from(grouped,([ticker,target])=>({ticker,...target})); }
 export function createCurrentStockPricePreviewRow(target:{ticker:string;simulationIds:string[];savedPricesBySimulationId:Record<string,number|undefined>},quote?:StockQuote,error?:string):CurrentStockPricePreviewRow { if(!quote||quote.symbol.trim().toUpperCase()!==target.ticker||!Number.isFinite(quote.price)||quote.price<=0)return {...target,status:"unavailable",reason:error??"現在株価を取得できません"};return {...target,quote,status:"ready",reason:"取得済み（日次・遅延値の可能性あり）"}; }
 export type BulkOptionPricePreviewCounts = { successful: number; ready: number; confirmableReference: number; unavailable: number };
-export function getBulkOptionPricePreviewCounts(rows: CurrentOptionPricePreviewRow[]): BulkOptionPricePreviewCounts { const ready = rows.filter((row) => row.status === "ready").length; const confirmableReference = rows.filter((row) => row.status === "confirmable_reference").length; return { successful: ready + confirmableReference, ready, confirmableReference, unavailable: rows.length - ready - confirmableReference }; }
-export function getBulkApplicableTargetIds(rows: CurrentOptionPricePreviewRow[], simulations: TradeSimulation[], includeConfirmedReferences = false): Set<string> { const ids = new Set(rows.filter((row) => (row.status === "ready" || (includeConfirmedReferences && row.status === "confirmable_reference")) && (row.selectedPriceUSD !== undefined || row.referenceQuote?.mid !== undefined && row.referenceQuote.kind !== "unavailable")).map((row) => row.target.targetId)); for (const simulation of simulations) { if (!isManagedTwoLegStrategy(simulation)) continue; const legIds = getOperationalRemainingOptionLegs(simulation).map(({ leg }) => `${simulation.id}:${leg.id}`); if (legIds.length > 0 && legIds.some((id) => !ids.has(id))) legIds.forEach((id) => ids.delete(id)); } return ids; }
+export function getBulkOptionPricePreviewCounts(rows: CurrentOptionPricePreviewRow[]): BulkOptionPricePreviewCounts {
+ const ready=rows.filter(row=>!previewNeedsReferenceConsent(row) && (row.status==="ready" || !valuationProblem(row.saxoValuation))).length;
+ const confirmableReference=rows.filter(previewNeedsReferenceConsent).length;
+ return {successful:ready+confirmableReference,ready,confirmableReference,unavailable:rows.length-ready-confirmableReference};
+}
+export function getBulkApplicableTargetIds(rows: CurrentOptionPricePreviewRow[], simulations: TradeSimulation[], includeConfirmedReferences = false): Set<string> {
+ const ids=new Set(rows.filter(row=>!row.adoptionBlocked && (row.status==="ready" || includeConfirmedReferences && row.status==="confirmable_reference") && (row.selectedPriceUSD!==undefined || row.referenceQuote?.mid!==undefined && row.referenceQuote.kind!=="unavailable")).map(row=>row.target.targetId));
+ for(const simulation of simulations){
+  if(parentPriceBasis(simulation,rows,includeConfirmedReferences)){getCurrentOptionPriceTargets([simulation]).forEach(t=>ids.add(t.targetId));continue;}
+  if(!isManagedTwoLegStrategy(simulation))continue;
+  const legIds=getOperationalRemainingOptionLegs(simulation).map(({leg})=>`${simulation.id}:${leg.id}`);
+  if(legIds.length>0 && legIds.some(id=>!ids.has(id)))legIds.forEach(id=>ids.delete(id));
+ }
+ return ids;
+}
 export function applyCurrentOptionPricePreview(simulations: TradeSimulation[], rows: CurrentOptionPricePreviewRow[], options: { includeConfirmedReferences?: boolean; capturedAt?: string; batchId?: string } = {}): TradeSimulation[] {
   const includeConfirmedReferences = options.includeConfirmedReferences ?? false;
   const capturedAt = options.capturedAt ?? new Date().toISOString();
   const batchId = options.batchId ?? `price-update:${capturedAt}`;
   const applicable = getBulkApplicableTargetIds(rows, simulations, includeConfirmedReferences);
   const currentTargets = new Map(getCurrentOptionPriceTargets(simulations).map((target) => [target.targetId, target]));
-  const update = new Map(rows.filter((row) => { const current = currentTargets.get(row.target.targetId); return applicable.has(row.target.targetId) && (row.selectedPriceUSD !== undefined || row.referenceQuote?.mid !== undefined && row.referenceQuote.kind !== "unavailable") && current !== undefined && current.quantity === row.target.quantity && current.side === row.target.side && current.optionType === row.target.optionType && current.strike === row.target.strike && current.expiry === row.target.expiry && current.savedPriceUSD === row.target.savedPriceUSD; }).map((row) => [row.target.targetId, row]));
+  const update = new Map(rows.filter((row) => { const current = currentTargets.get(row.target.targetId); return applicable.has(row.target.targetId) && current !== undefined && samePriceTarget(current,row.target) && rows.filter(r=>r.target.targetId===row.target.targetId).length===1; }).map((row) => [row.target.targetId, row]));
   for (const simulation of simulations) {
     if (!isManagedTwoLegStrategy(simulation)) continue;
     const ids = getOperationalRemainingOptionLegs(simulation).map(({leg}) => simulation.id+":"+leg.id);
     if (ids.some(id=>!update.has(id))) ids.forEach(id=>update.delete(id));
   }
   return simulations.map((simulation) => {
+    const basis=parentPriceBasis(simulation,rows,includeConfirmedReferences);
+    const specificationLeg=(leg:OptionLeg,row:CurrentOptionPricePreviewRow):OptionLeg=>{
+      const v=row.saxoValuation;
+      return leg.contractSize===undefined && v?.contractSizeSource==="InstrumentDetails.ContractSize" && Number.isInteger(v.contractSize) && v.contractSize!>0
+        ? {...leg,contractSize:v.contractSize,contractSizeEvidence:{source:"InstrumentDetails.ContractSize",fetchedAt:v.fetchedAt,batchId:v.batchId}}:leg;
+    };
+    if(basis==="saxo-position"){
+      const optionLegs=simulation.optionLegs.map(leg=>{const row=update.get(`${simulation.id}:${leg.id}`);return row?.saxoValuation?{...specificationLeg(leg,row),saxoValuation:{...row.saxoValuation,confirmedAt:valuationNeedsConsent(row.saxoValuation)?capturedAt:undefined}}:leg;});
+      const evidence=optionLegs.find(l=>update.has(`${simulation.id}:${l.id}`))!.saxoValuation!;
+      return {...simulation,optionLegs,currentValuationBasis:{kind:basis,batchId:evidence.batchId,capturedAt}};
+    }
     const referenceReady = getOperationalRemainingOptionLegs(simulation).every(({leg}) => {
       const row=update.get(simulation.id+":"+leg.id);
       return row && captureReferenceQuote(row.referenceQuote, batchId, includeConfirmedReferences ? capturedAt : undefined) !== undefined;
@@ -46,10 +71,11 @@ export function applyCurrentOptionPricePreview(simulations: TradeSimulation[], r
     const optionLegs = simulation.optionLegs.map((leg) => {
       const row = update.get(`${simulation.id}:${leg.id}`);
       if (!row) return leg;
+      const verifiedLeg=specificationLeg(leg,row);
       const adoptedReference = referenceReady ? captureReferenceQuote(row.referenceQuote, batchId, includeConfirmedReferences ? capturedAt : undefined) : undefined;
       if (row.selectedPriceUSD === undefined || !row.selectedField) {
         const referenceQuote = adoptedReference;
-        return referenceQuote ? { ...leg, referenceQuote } : leg;
+        return referenceQuote ? { ...verifiedLeg, referenceQuote } : leg;
       }
       const observedAt = row.candidate?.fetchedAt ?? capturedAt;
       const snapshot = leg.side === "buy" ? buildSaxoOptionValueSnapshot(simulation, leg, row.selectedPriceUSD, observedAt) : null;
@@ -58,10 +84,10 @@ export function applyCurrentOptionPricePreview(simulations: TradeSimulation[], r
       const observation = leg.contractSize && Number.isInteger(leg.contractSize) && leg.contractSize > 0 ? buildOptionValueObservation({ observationId: `${row.target.targetId}:${observedAt}`, legId: leg.id, batchId, evidenceRevision: resolveOptionValueEvidenceRevision({ legId: leg.id, entryExecutions: simulation.optionEntryExecutions, closeExecutions: simulation.optionCloseExecutions }), capturedAt: observedAt, side: leg.side, optionType: leg.type, optionPriceUSD: row.selectedPriceUSD, underlyingPriceUSD: simulation.currentPriceUSD, underlyingSource: "保存済み現在株価", strikeUSD: leg.strikeUSD, expiry: leg.expiryDate, quantity: Math.abs(row.target.quantity), contractSize: leg.contractSize, selectedField: row.selectedField, source: "saxo", quality: row.candidate?.quoteDiagnostics ? ((row.selectedField === "bid" ? row.candidate.quoteDiagnostics.priceTypeBid : row.candidate.quoteDiagnostics.priceTypeAsk) === "OldIndicative" ? "old_indicative" : ((row.selectedField === "bid" ? row.candidate.quoteDiagnostics.priceTypeBid : row.candidate.quoteDiagnostics.priceTypeAsk) ? "current" : "unknown")) : "unknown", feeUSD: resolvedFee.kind === "resolved" ? resolvedFee.amountUSD : undefined, feeSource: resolvedFee.kind === "resolved" ? resolvedFee.source : undefined }) : null;
       const valueObservations = observation ? upsertTimeValueObservation(leg.valueObservations, observation) : leg.valueObservations;
       const priceType = row.selectedField === "bid" ? row.candidate?.quoteDiagnostics?.priceTypeBid : row.candidate?.quoteDiagnostics?.priceTypeAsk;
-      return { ...leg, referenceQuote: adoptedReference ?? leg.referenceQuote, closeCostUSD: row.selectedPriceUSD, closePlan: { enabled: true, ...(leg.closePlan ?? {}), closePriceUSD: row.selectedPriceUSD, priceSource: "saxo" as const, priceSelectedField: row.selectedField, priceFetchedAt: observedAt, priceQuoteStatus: row.candidate?.status, priceType, priceReferenceConfirmed: row.status === "confirmable_reference" ? true : undefined, priceReferenceConfirmedAt: row.status === "confirmable_reference" ? capturedAt : undefined }, valueSnapshots, valueObservations };
+      return { ...verifiedLeg, referenceQuote: adoptedReference ?? leg.referenceQuote, closeCostUSD: row.selectedPriceUSD, closePlan: { enabled: true, ...(leg.closePlan ?? {}), closePriceUSD: row.selectedPriceUSD, priceSource: "saxo" as const, priceSelectedField: row.selectedField, priceFetchedAt: observedAt, priceQuoteStatus: row.candidate?.status, priceType, priceReferenceConfirmed: row.status === "confirmable_reference" ? true : undefined, priceReferenceConfirmedAt: row.status === "confirmable_reference" ? capturedAt : undefined }, valueSnapshots, valueObservations };
     });
     if (optionLegs.every((leg, i) => leg === simulation.optionLegs[i])) return simulation;
-    const nextSimulation = { ...simulation, optionLegs };
+    const nextSimulation:TradeSimulation = { ...simulation, optionLegs, ...(basis==="midpoint"?{currentValuationBasis:{kind:basis,batchId,capturedAt}}:{}) };
     const parent = recordParentTimeValueObservation(nextSimulation, simulation.timeValueParentHistory, batchId);
     if (parent.updated) return { ...nextSimulation, timeValueParentHistory: parent.observations, timeValueParentUpdateReason: undefined };
     return { ...nextSimulation, timeValueParentUpdateReason: parent.reason };

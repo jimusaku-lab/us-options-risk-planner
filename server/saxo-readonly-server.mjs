@@ -1482,6 +1482,11 @@ function normalizeAccountSnapshot(account, balance, margin) {
   };
 }
 
+function normalizePositionValuation(view, fetchedAt) {
+  const number = key => typeof view?.[key] === "number" && Number.isFinite(view[key]) ? view[key] : undefined;
+  const text = key => typeof view?.[key] === "string" ? view[key] : undefined;
+  return { currentPrice: number("CurrentPrice"), currentPriceType: text("CurrentPriceType"), calculationReliability: text("CalculationReliability"), profitLossOnTrade: number("ProfitLossOnTrade"), tradeCostsTotal: number("TradeCostsTotal"), delayedByMinutes: number("CurrentPriceDelayMinutes"), source: "Saxo.PositionView", fetchedAt };
+}
 export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
   const accountKey = firstString(raw, ["AccountKey", "AccountId", "AccountNumber"]) ?? "";
   const account = accountsByKey.get(accountKey);
@@ -1591,6 +1596,7 @@ export function normalizePosition(raw, accountsByKey, fetchedAt, index) {
     expiry,
     contractSize,
     contractSizeSourceField: contractSizeMatch?.matchedName,
+    valuation: normalizePositionValuation(raw?.PositionView, fetchedAt),
     premiumOpenPrice: kind === "option" ? premiumOpenPrice : undefined,
     currentOptionPrice,
     instrumentCode,
@@ -1646,6 +1652,13 @@ export async function enrichPositionUnderlyingIdentities(positions, clientKey, f
     );
     const specification = {
       ...position,
+      valuation: position.valuation ? {
+        ...position.valuation,
+        quoteCurrency: typeof optionDetail?.CurrencyCode === "string" && /^[A-Z]{3}$/.test(optionDetail.CurrencyCode) ? optionDetail.CurrencyCode : undefined,
+        quoteCurrencySource: typeof optionDetail?.CurrencyCode === "string" && /^[A-Z]{3}$/.test(optionDetail.CurrencyCode) ? "InstrumentDetails.CurrencyCode" : undefined,
+        contractSize: typeof optionDetail?.ContractSize === "number" && Number.isInteger(optionDetail.ContractSize) && optionDetail.ContractSize > 0 ? optionDetail.ContractSize : undefined,
+        contractSizeSource: typeof optionDetail?.ContractSize === "number" && Number.isInteger(optionDetail.ContractSize) && optionDetail.ContractSize > 0 ? "InstrumentDetails.ContractSize" : undefined,
+      } : undefined,
       currency: effectiveCurrency,
       currencySourceField: position.currencySourceField ?? (detailCurrency ? "InstrumentDetails.CurrencyCode" : undefined),
       contractSize: effectiveContractSize,

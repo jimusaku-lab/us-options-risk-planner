@@ -277,6 +277,7 @@ export type OptionLeg = {
   quantity: number;
   /** Broker-confirmed option contract multiplier. Bear put spreads never assume 100. */
   contractSize?: number;
+  contractSizeEvidence?: { source: "InstrumentDetails.ContractSize"; fetchedAt: string; batchId: string };
   expiryDate: string;
   isCovered?: boolean;
   putIntent?: PutIntent;
@@ -297,6 +298,7 @@ export type OptionLeg = {
   saxoHistoryCandidateIds?: string[];
   valueSnapshots?: OptionValueSnapshot[];
   valueObservations?: OptionValueObservation[];
+  saxoValuation?: SavedSaxoValuation;
   referenceQuote?: { priceTypeBid?: string; priceTypeAsk?: string; referenceConfirmedAt?: string; bidUSD?: number; askUSD?: number; midUSD?: number; spreadUSD?: number; spreadRate?: number; quality: "current" | "old_indicative" | "unknown"; fetchedAt: string; source: string; sourceTimestamp?: string; delayedByMinutes?: number; batchId?: string; basisVersion: "r15-midpoint-v1" };
 };
 
@@ -582,7 +584,27 @@ export type OptionEntryExecution = {
   memo?: string;
 };
 
+export type SaxoPositionValuation = {
+  contractSize?: number;
+  contractSizeSource?: "InstrumentDetails.ContractSize";
+  currentPrice?: number;
+  currentPriceType?: string;
+  calculationReliability?: string;
+  profitLossOnTrade?: number;
+  tradeCostsTotal?: number;
+  quoteCurrency?: string;
+  quoteCurrencySource?: "InstrumentDetails.CurrencyCode";
+  delayedByMinutes?: number;
+  sourceTimestamp?: string;
+  fetchedAt: string;
+  source: "Saxo.PositionView";
+};
+export type SavedSaxoValuation = SaxoPositionValuation & {
+  batchId: string; confirmedAt?: string;
+  identity: { accountKey: string; environment: "live" | "sim"; positionId?: string; uic?: number; ticker: string; optionType: "call" | "put"; strike: number; expiry: string; side: "buy" | "sell"; quantity: number };
+};
 export type TradeSimulation = {
+  currentValuationBasis?: { kind: "midpoint" | "saxo-position"; batchId: string; capturedAt: string };
   /** Parent view references; canonical entry fills live in the ledger envelope. */
   strategyGroupId?: string;
   strategyContractVerification?: { state: "verified" | "unknown" | "incompatible"; source?: string; confirmedAt?: string };
