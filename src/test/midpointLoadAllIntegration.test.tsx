@@ -115,7 +115,7 @@ describe("R15 App all-fetch to common price preview", () => {
     expect(saved.status).toBe("open");
     expect(JSON.parse(localStorage.getItem("us-options-simulations-v2")!).live[0].optionLegs).toEqual(saved.optionLegs);
   });
-  it("keeps mixed parent results, opens the failed parent without refetching, then explicitly retries only its residual legs", async () => {
+  it("uses only whole-portfolio fetch and keeps mixed results compact, atomic and persistent", async () => {
     const failed = { ...fixture(), ticker: "BAD" };
     const good = { ...fixture(), id: "good-parent", ticker: "GOOD" };
     useOptionsStore.setState({ simulations: [failed, good], simulationsByWorkspace: { demo: [], live: [failed, good] } });
@@ -125,31 +125,35 @@ describe("R15 App all-fetch to common price preview", () => {
     fireEvent.click(button);
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(await within(dialog).findByRole("checkbox", { name: /OldIndicative/ }));
+    expect(within(dialog).getByText("価格の取得根拠・診断").closest("details")!.open).toBe(false);
     fireEvent.click(within(dialog).getByRole("button", { name: /一括反映/ }));
     await waitFor(() => expect(useOptionsStore.getState().simulations[1].optionLegs[0].referenceQuote).toBeDefined());
-    const goodSaved = structuredClone(useOptionsStore.getState().simulations[1]);
     expect(useOptionsStore.getState().simulations[0].optionLegs.every(leg => !leg.referenceQuote)).toBe(true);
-    const badRow = screen.getAllByRole("row").find(row => row.textContent?.includes("BAD"))!;
-    expect(badRow.textContent).toContain("Bidが未取得");
-    expect(badRow.textContent).not.toContain("保存済み参考値");
-    fireEvent.click(within(badRow).getByRole("button", { name: "取得結果を確認" }));
-    expect(premiumCalls).toBe(1);
-    const result = await screen.findByRole("dialog");
-    expect(within(result).getByRole("region", { name: "BADの価格取得結果" })).toBeInTheDocument();
-    expect(within(result).queryByRole("region", { name: "GOODの価格取得結果" })).toBeNull();
+    for (const ticker of ["BAD", "GOOD"]) {
+      const row = screen.getAllByRole("row").find(row => row.textContent?.includes(ticker))!;
+      expect(row.textContent).not.toMatch(/Bidが未取得|保存済み参考値|中間値を更新|未保持|OldIndicative/);
+      expect(within(row).queryByRole("button", { name: /取得結果|候補価格|まとめて更新/ })).toBeNull();
+    }
     missingFirstBid = false;
-    fireEvent.click(within(result).getByRole("button", { name: "この建玉の残存脚を再取得" }));
+    fireEvent.click(button);
+    const result = await screen.findByRole("dialog");
     await waitFor(() => expect(premiumCalls).toBe(2));
-    expect(requestedTargets[1]).toEqual(["mid-parent:mid-long", "mid-parent:mid-short"]);
+    expect(requestedTargets[1]).toEqual(["mid-parent:mid-long", "mid-parent:mid-short", "good-parent:mid-long", "good-parent:mid-short"]);
     fireEvent.click(await within(result).findByRole("checkbox", { name: /OldIndicative/ }));
     fireEvent.click(within(result).getByRole("button", { name: /一括反映/ }));
-    await waitFor(() => expect(useOptionsStore.getState().simulations[0].optionLegs.every(leg => !!leg.referenceQuote)).toBe(true));
-    expect(useOptionsStore.getState().simulations[1]).toEqual(goodSaved);
+    await waitFor(() => expect(useOptionsStore.getState().simulations.every(simulation => simulation.optionLegs.every(leg => !!leg.referenceQuote))).toBe(true));
+    expect(useOptionsStore.getState().simulations[1].optionEntryExecutions).toEqual(good.optionEntryExecutions);
     expect(persistence.mock.calls.filter(([key]) => key === "us-options-simulations-v2")).toHaveLength(2);
+    const recovered = structuredClone(useOptionsStore.getState().simulations[0]);
+    missingFirstBid = true;
+    fireEvent.click(button);
+    const retry = await screen.findByRole("dialog");
+    fireEvent.click(await within(retry).findByRole("checkbox", { name: /OldIndicative/ }));
+    fireEvent.click(within(retry).getByRole("button", { name: /一括反映/ }));
+    expect(useOptionsStore.getState().simulations[0]).toEqual(recovered);
     const envelope = JSON.parse(localStorage.getItem("us-options-simulations-v2")!);
     expect(envelope.live.map((simulation: TradeSimulation) => simulation.optionLegs)).toEqual(useOptionsStore.getState().simulations.map(simulation => simulation.optionLegs));
   });
-
   it("keeps account/history completion separate when current helper has no bulk capability", async () => {
     capability = false;
     const button = await mountAndReconnect();

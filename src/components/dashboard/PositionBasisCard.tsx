@@ -8,13 +8,13 @@ export function formatBasisAmount(result: BasisResult): string {
   return result.currency === "JPY" ? (result.amount >= 0 ? "+" : "-")+Math.abs(result.amount).toLocaleString("ja-JP",{maximumFractionDigits:0})+"円"
     : (result.amount >= 0 ? "+" : "-")+"$"+Math.abs(result.amount).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 }
-export function BasisMetric({result,label="参考損益（中間値）"}:{result:BasisResult;label?:string}) {
+export function BasisMetric({result,label="参考損益（中間値）",compact=false}:{result:BasisResult;label?:string;compact?:boolean}) {
   const tone=(value:number|undefined)=>value===undefined||value===0?"text-slate-700":value>0?"text-emerald-700":"text-rose-700";
   return <div className="text-sm"><span className="block text-xs font-semibold">{label}</span>
     <span className={`block font-bold ${tone(result.amount)}`}>{formatBasisAmount(result)}</span>
-    {result.kind==="missing" ? <span className="block text-xs text-amber-800">{result.reason}</span> : <>
+    {result.kind==="missing" ? compact ? null : <span className="block text-xs text-amber-800">{result.reason}</span> : <>
       <span className={`block text-xs ${tone(result.periodReturnPct)}`}>参考損益率 {result.periodReturnPct===undefined?"未計算":result.periodReturnPct.toFixed(1)+"%"}</span>
-      {result.rateReason ? <span className="block text-xs text-slate-500">{result.rateReason}</span>:null}
+      {!compact && result.rateReason ? <span className="block text-xs text-slate-500">{result.rateReason}</span>:null}
     </>}
   </div>;
 }

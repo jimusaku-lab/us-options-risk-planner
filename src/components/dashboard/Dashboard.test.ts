@@ -5,6 +5,7 @@ import type { TradeSimulation } from "@/types/domain";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import { getSimulationTickerDisplayLabel } from "./Dashboard";
 import { Dashboard } from "./Dashboard";
+import { BasisMetric } from "./PositionBasisCard";
 import { createCurrentOptionPricePreviewRow, getCurrentOptionPriceTargets } from "@/domain/bulkOptionPrice";
 import { captureReferenceQuote, resolveEvaluationQuote } from "@/domain/midpointEvaluation";
 function explicitFixtureQuotes(s: TradeSimulation) { s.optionLegs = s.optionLegs.map(leg => ({...leg, contractSize:100, referenceQuote: leg.closeCostUSD === undefined ? undefined : captureReferenceQuote(resolveEvaluationQuote({bid:leg.closeCostUSD,ask:leg.closeCostUSD,priceTypeBid:"Tradable",priceTypeAsk:"Tradable",source:"fixture",fetchedAt:"2026-09-26T01:00:00Z"}),"fixture")})); return s; }
@@ -75,11 +76,28 @@ afterEach(() => {
   cleanup();
 });
 
-it("opens shared Bid/Ask preview for missing Mid, not the manual close input, after capability recovery", () => {
+it("omits reason and rateReason only in compact metrics while preserving the detailed calculation evidence", () => {
+ const missing = { basis: "reference" as const, kind: "missing" as const, currency: "USD" as const, evaluatedLegIds: ["leg"], reason: "価格の不足理由" };
+ const {rerender} = render(createElement(BasisMetric, {result: missing, compact: true}));
+ expect(screen.getByText("未計算")).toBeTruthy();
+ expect(screen.queryByText(missing.reason)).toBeNull();
+ rerender(createElement(BasisMetric, {result: missing}));
+ expect(screen.getByText(missing.reason)).toBeTruthy();
+ const available = {...missing, kind: "available" as const, amount: 120, rateReason: "率の不足理由"};
+ rerender(createElement(BasisMetric, {result: available, compact: true}));
+ expect(screen.getByText("+$120.00")).toBeTruthy();
+ expect(screen.getByText("参考損益率 未計算")).toBeTruthy();
+ expect(screen.queryByText(available.rateReason)).toBeNull();
+ rerender(createElement(BasisMetric, {result: available}));
+ expect(screen.getByText(available.rateReason)).toBeTruthy();
+});
+
+it("opens shared whole-portfolio preview from the management bar after capability recovery", () => {
  const simulation=createSimulation(), fetch=vi.fn(), manual=vi.fn();
  const props={simulations:[simulation],selectedId:simulation.id,onSelect:vi.fn(),onEdit:vi.fn(),onDelete:vi.fn(),workspace:"live" as const,accountInputs,historyOpen:false,onHistoryOpenChange:vi.fn(),onFetchBulkOptionPrices:fetch,onCurrentEstimateAction:manual,bulkOptionPriceAvailable:false};
  const {rerender}=render(createElement(Dashboard,props));
- fireEvent.click(screen.getByRole("button",{name:"Bid/Ask候補価格を取得"}));
+ expect(screen.queryByRole("button",{name:"Bid/Ask候補価格を取得"})).toBeNull();
+ fireEvent.click(screen.getByRole("button",{name:"価格を一括更新"}));
  expect(fetch).toHaveBeenCalledTimes(1);expect(manual).not.toHaveBeenCalled();expect(screen.getByRole("dialog")).toBeTruthy();
  fireEvent.click(screen.getByRole("button",{name:"現在オプション価格の確認を閉じる"}));
  expect(screen.queryByRole("dialog")).toBeNull();
@@ -463,8 +481,8 @@ describe("Dashboard close decision actions", () => {
     const action = vi.fn();
     const simulation = currentShortPut("accept", false);
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onCurrentEstimateAction: action }));
-    expect(screen.getByText("中間値の価格をまだ取得していません")).toBeTruthy();
-    expect(screen.getByText("Bid/Ask価格取得は利用できません")).toBeTruthy();
+    expect(screen.queryByText("中間値の価格をまだ取得していません")).toBeNull();
+    expect(screen.queryByText("Bid/Ask価格取得は利用できません")).toBeNull();
     expect(screen.queryByRole("button", { name: "不足情報を確認" })).toBeNull();
     expect(action).not.toHaveBeenCalled();
   });
@@ -509,7 +527,8 @@ describe("Dashboard close decision actions", () => {
     expect(screen.getByText("建玉時ネット支払額")).toBeTruthy();
     expect(screen.getByText("参考損益（中間値）")).toBeTruthy();
     expect(screen.queryByText("現在決済年率")).toBeNull();
-    expect(screen.getByText(/契約倍率 未確認/)).toBeTruthy();
+    expect(screen.queryByText(/契約倍率 未確認/)).toBeNull();
+    expect(screen.getAllByText("未計算").length).toBeGreaterThan(0);
     expect(screen.queryByText("プレミアム年率")).toBeNull();
   });
 
@@ -770,28 +789,30 @@ describe("Dashboard close decision actions", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("reopens a parent failure diagnostic without fetching or claiming an absent saved reference, and retries explicitly", () => {
+  it("keeps rows compact and exposes diagnostics only inside optional bulk details", () => {
     const simulation = createSimulation({ ticker: "TEST", optionLegs: [{ ...createSimulation().optionLegs[0], id: "leg", contractSize: 100 }] });
     const fetch = vi.fn();
     const row = createCurrentOptionPricePreviewRow(getCurrentOptionPriceTargets([simulation])[0], { environment: "live", source: "fixture", status: "available", classification: "available", message: "fixture", fetchedAt: "2026-09-26T00:00:00Z", ask: 2, quoteDiagnostics: { priceTypeBid: "Indicative", priceTypeAsk: "Indicative" } });
     const props = { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live" as const, accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onFetchBulkOptionPrices: fetch, bulkOptionPricePreview: [row] };
     const mounted = render(createElement(Dashboard, props));
-    expect(screen.queryByText("今回未更新・保存済み参考値")).toBeNull();
-    expect(screen.getByText("中間値を取得できませんでした")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "取得結果を確認" }));
-    expect(fetch).not.toHaveBeenCalled();
-    expect(screen.getByRole("region", { name: "TESTの価格取得結果" }).textContent).toContain("Bidが未取得");
-    expect(screen.getByRole("region", { name: "TESTの価格取得結果" }).textContent).toContain("保存: 中間値なし");
-    fireEvent.click(screen.getByRole("button", { name: "この建玉の残存脚を再取得" }));
-    expect(fetch).toHaveBeenCalledExactlyOnceWith(simulation.id);
+    expect(screen.queryByText("中間値を取得できませんでした")).toBeNull();
+    expect(screen.queryByText(/Bidが未取得/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "取得結果を確認" })).toBeNull();
+    expect(screen.queryByText(/今回の取得結果は未保持です/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "価格を一括更新" }));
+    expect(fetch).toHaveBeenCalledExactlyOnceWith();
+    const details = screen.getByText("価格の取得根拠・診断").closest("details")!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain("Bidが未取得");
+    expect(screen.queryByRole("button", { name: "この建玉の残存脚を再取得" })).toBeNull();
+    expect(screen.getByRole("dialog").querySelector("tbody")?.textContent).toContain("Bidが未取得");
     mounted.rerender(createElement(Dashboard, { ...props, bulkOptionPriceLoading: true }));
-    expect(screen.getByRole("button", { name: "この建玉の残存脚を再取得" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "全建玉の価格を再取得" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "現在オプション価格の確認を閉じる" }));
     mounted.rerender(createElement(Dashboard, { ...props, bulkOptionPricePreview: undefined }));
-    expect(screen.getByText(/今回の取得結果は未保持です/)).toBeInTheDocument();
+    expect(screen.queryByText(/今回の取得結果は未保持です/)).toBeNull();
     expect(screen.queryByText("中間値を取得できませんでした")).toBeNull();
   });
-
   it("offers a direct 3-A review for a historical long-option entry conflict", () => {
     const onHistoryEntryAction = vi.fn();
     const simulation = createSimulation({
