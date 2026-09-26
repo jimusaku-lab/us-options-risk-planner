@@ -2,11 +2,15 @@ import type { SavedSaxoValuation, TradeSimulation } from "@/types/domain";
 import type { SaxoApiPositionSnapshot } from "@/features/saxo/saxoAccountSync";
 import { getCurrentOptionPriceTargets, type CurrentOptionPricePreviewRow, type CurrentOptionPriceTarget } from "./bulkOptionPrice";
 import { moneySum } from "./spreadCashflows";
+import { calculateQuoteBasisEvaluation } from "./quoteBasisEvaluation";
+import { captureReferenceQuote } from "./midpointEvaluation";
+import type { FxQuote } from "@/lib/marketData";
 
 const finite = (n: number | undefined): n is number => typeof n === "number" && Number.isFinite(n);
 const ticker = (s: string | undefined) => s?.trim().toUpperCase();
-export function previewNeedsReferenceConsent(row:CurrentOptionPricePreviewRow):boolean {
-  return row.status==="confirmable_reference" || (!valuationProblem(row.saxoValuation,true) && valuationNeedsConsent(row.saxoValuation!) && row.referenceQuote?.kind!=="available");
+export function previewNeedsReferenceConsent(row:CurrentOptionPricePreviewRow, simulation?:TradeSimulation, rows:CurrentOptionPricePreviewRow[]=[row], fx?:FxQuote|null):boolean {
+  return row.status==="confirmable_reference" || (!valuationProblem(row.saxoValuation,true) && valuationNeedsConsent(row.saxoValuation!) &&
+    (row.referenceQuote?.kind!=="available" || !!simulation && parentPriceBasis(simulation,rows,true,fx)==="saxo-position"));
 }
 export function valuationNeedsConsent(v: SavedSaxoValuation): boolean {
   return v.calculationReliability !== "Ok" || v.currentPriceType !== "Tradable" || (v.delayedByMinutes !== undefined && v.delayedByMinutes > 0);
@@ -76,7 +80,7 @@ export function attachPositionValuations(simulations: TradeSimulation[], rows: C
   });
 }
 
-export function parentPriceBasis(simulation: TradeSimulation, rows: CurrentOptionPricePreviewRow[], confirmed: boolean): "midpoint" | "saxo-position" | undefined {
+export function parentPriceBasis(simulation: TradeSimulation, rows: CurrentOptionPricePreviewRow[], confirmed: boolean, fx?: FxQuote | null): "midpoint" | "saxo-position" | undefined {
   const targets = getCurrentOptionPriceTargets([simulation]);
   if (!targets.length) return undefined;
   const picked = targets.map(t => {
@@ -85,8 +89,20 @@ export function parentPriceBasis(simulation: TradeSimulation, rows: CurrentOptio
     return row && !row.adoptionBlocked && samePriceTarget(row.target,t) ? row : undefined;
   });
   if (picked.some(r => !r)) return undefined;
-  if (picked.every(r => r!.referenceQuote?.kind === "available" || confirmed && r!.referenceQuote?.kind === "confirmable_reference")) return "midpoint";
-  if (picked.some((r,index) => valuationProblem(r!.saxoValuation,confirmed) || !sameTarget(r!.saxoValuation!,targets[index],simulation))) return undefined;
+  const hasMidpoint = picked.every(r => r!.referenceQuote?.kind === "available" || confirmed && r!.referenceQuote?.kind === "confirmable_reference");
+  if (hasMidpoint) {
+    // Same economic calculator as the display, with only verified candidates.
+    // A price is not sufficient evidence of computable app P/L.
+    const candidate = { ...simulation, optionLegs: simulation.optionLegs.map(leg => {
+      const row = picked.find(r => r!.target.legId === leg.id);
+      if (!row) return leg;
+      const v = row.saxoValuation;
+      const contractSize = leg.contractSize === undefined && v?.contractSizeSource === "InstrumentDetails.ContractSize" && Number.isInteger(v.contractSize) && v.contractSize! > 0 ? v.contractSize : leg.contractSize;
+      return { ...leg, contractSize, referenceQuote: captureReferenceQuote(row.referenceQuote, "unpersisted-basis-preview", confirmed ? row.candidate?.fetchedAt : undefined) };
+    }) };
+    if (calculateQuoteBasisEvaluation(candidate,fx).reference.kind === "available") return "midpoint";
+  }
+  if (picked.some((r,index) => valuationProblem(r!.saxoValuation,confirmed) || !sameTarget(r!.saxoValuation!,targets[index],simulation))) return hasMidpoint ? "midpoint" : undefined;
   const batchIds = new Set(picked.map(r => r!.saxoValuation!.batchId));
   return batchIds.size === 1 ? "saxo-position" : undefined;
 }

@@ -31,6 +31,16 @@ let lastSyncedAt;
 let cachedClient = null;
 let cachedCapabilities = null;
 let lastConnectionError = null;
+let authenticationContextGeneration = 0;
+let accessTokenRefresh = null;
+let keychainMutationQueue = Promise.resolve();
+let keychainExecFileAsync = execFileAsync;
+
+function advanceAuthenticationContextGeneration() {
+  authenticationContextGeneration += 1;
+  cachedClient = null;
+  cachedCapabilities = null;
+}
 let tokenPersistenceStatus = {
   supported: process.platform === "darwin",
   enabled: false,
@@ -59,7 +69,7 @@ if (!IS_TEST_PROCESS) {
   });
 }
 
-async function handleRequest(request, response) {
+export async function handleRequest(request, response) {
   const requestUrl = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
   setCorsHeaders(request, response);
 
@@ -108,6 +118,7 @@ async function handleRequest(request, response) {
     process.env.SAXO_CLIENT_ID = clientId;
     process.env.SAXO_ENVIRONMENT = environment;
     tokenState = null;
+    advanceAuthenticationContextGeneration();
     lastConnectionError = null;
     cachedClient = null;
     cachedCapabilities = null;
@@ -140,6 +151,7 @@ async function handleRequest(request, response) {
 
   if (request.method === "POST" && path === "/api/saxo/logout") {
     tokenState = null;
+    advanceAuthenticationContextGeneration();
     lastConnectionError = null;
     cachedClient = null;
     cachedCapabilities = null;
@@ -380,6 +392,7 @@ async function handleAuthCallback(requestUrl, response) {
   });
 
   tokenState = normalizeToken(token, pkce.codeVerifier);
+  advanceAuthenticationContextGeneration();
   lastConnectionError = null;
   lastSyncedAt = new Date().toISOString();
   sendAuthSuccessHtml(response, pkce.returnUrl);
@@ -412,35 +425,57 @@ async function ensureAccessToken() {
     lastConnectionError = "Saxo接続の期限が切れました。再接続してください。";
     throw new HttpError(401, "token_expired", lastConnectionError);
   }
-  if (tokenState.refreshExpiresAt && Date.now() >= tokenState.refreshExpiresAt) {
-    tokenState = null;
-    cachedClient = null;
-    cachedCapabilities = null;
-    await markKeychainTokenInvalid("Saxo接続の期限が切れました。Saxo公式画面で再ログインしてください。");
-    lastConnectionError = "Saxo接続の期限が切れました。再接続してください。";
-    throw new HttpError(401, "token_expired", lastConnectionError);
+  const context = authenticationContextGeneration;
+  const previous = tokenState;
+  if (accessTokenRefresh?.context === context && accessTokenRefresh.previous === previous) {
+    return accessTokenRefresh.promise;
   }
-
-  try {
-    const wasPersisted = Boolean(tokenState.persisted);
-    const token = await exchangeToken({
-      grant_type: "refresh_token",
-      refresh_token: tokenState.refreshToken,
-    });
-    tokenState = normalizeToken(token, tokenState.codeVerifier);
-    tokenState.persisted = wasPersisted;
-    if (wasPersisted) {
-      await saveTokenStateToKeychain("refresh");
+  const operation = { context, previous, promise: null };
+  const isCurrent = () => authenticationContextGeneration === context && tokenState === previous;
+  const contextChanged = () => new HttpError(401, "authentication_context_changed", "Saxo接続状態が変わりました。接続状態を再確認してください。");
+  operation.promise = (async () => {
+    let token;
+    try {
+      if (previous.refreshExpiresAt && Date.now() >= previous.refreshExpiresAt) throw new Error("refresh_expired");
+      token = await exchangeToken({
+        grant_type: "refresh_token",
+        refresh_token: previous.refreshToken,
+      });
+      if (!token?.access_token) throw new Error("invalid_token_response");
+    } catch {
+      if (!isCurrent()) throw contextChanged();
+      tokenState = null;
+      advanceAuthenticationContextGeneration();
+      lastConnectionError = "Saxo接続の期限が切れました。再接続してください。";
+      await markKeychainTokenInvalid("Saxo接続の期限が切れました。Saxo公式画面で再ログインしてください。");
+      throw new HttpError(401, "token_expired", "Saxo接続の期限が切れました。再接続してください。");
     }
+    if (!isCurrent()) throw contextChanged();
+    tokenState = normalizeToken(token, previous.codeVerifier);
+    tokenState.persisted = Boolean(previous.persisted);
+    // Normal refresh retains the authenticated context generation.
+    if (previous.persisted) {
+      try {
+        await saveTokenStateToKeychain("refresh");
+      } catch {
+        if (authenticationContextGeneration !== context) throw contextChanged();
+        tokenPersistenceStatus = {
+          ...tokenPersistenceStatus,
+          status: "save_failed",
+          message: "接続の更新は成功しましたが、Keychainへの保存に失敗しました。現在の接続は利用できます。",
+          saveErrorAt: new Date().toISOString(),
+        };
+      }
+    }
+    if (authenticationContextGeneration !== context) throw contextChanged();
     lastConnectionError = null;
     return tokenState.accessToken;
-  } catch {
-    tokenState = null;
-    cachedClient = null;
-    cachedCapabilities = null;
-    await markKeychainTokenInvalid("Saxo接続の期限が切れました。Saxo公式画面で再ログインしてください。");
-    lastConnectionError = "Saxo接続の期限が切れました。再接続してください。";
-    throw new HttpError(401, "token_expired", lastConnectionError);
+  })();
+  accessTokenRefresh = operation;
+  try {
+    return await operation.promise;
+  } finally {
+    if (accessTokenRefresh === operation) accessTokenRefresh = null;
   }
 }
 
@@ -2471,13 +2506,15 @@ async function enableTokenPersistence() {
   if (!tokenState?.refreshToken) {
     throw new HttpError(400, "not_connected", "Saxo接続後に接続保持を有効化してください。");
   }
+  const context = authenticationContextGeneration;
   await saveTokenStateToKeychain("manual_enable");
-  tokenState.persisted = true;
+  if (authenticationContextGeneration === context && tokenState) tokenState.persisted = true;
 }
 
 async function disableTokenPersistence() {
-  await deleteTokenStateFromKeychain();
+  // Prevent an already-running refresh from scheduling a later Keychain save.
   if (tokenState) tokenState.persisted = false;
+  await deleteTokenStateFromKeychain();
   tokenPersistenceStatus = {
     ...tokenPersistenceStatus,
     enabled: false,
@@ -2545,6 +2582,7 @@ async function restoreTokenStateFromKeychain() {
     refreshExpiresAt: payload.refreshExpiresAt,
     persisted: true,
   };
+  advanceAuthenticationContextGeneration();
 
   try {
     if (!tokenState.accessToken || (tokenState.expiresAt && Date.now() >= tokenState.expiresAt - 60_000)) {
@@ -2569,6 +2607,8 @@ async function restoreTokenStateFromKeychain() {
 
 async function saveTokenStateToKeychain(reason) {
   if (!tokenPersistenceStatus.supported || !tokenState?.refreshToken) return;
+  const context = authenticationContextGeneration;
+  const snapshot = tokenState;
   const payload = {
     version: 1,
     environment: getEnvironment(),
@@ -2580,7 +2620,8 @@ async function saveTokenStateToKeychain(reason) {
     refreshExpiresAt: tokenState.refreshExpiresAt,
     savedAt: new Date().toISOString(),
   };
-  await writeKeychainPassword(JSON.stringify(payload));
+  await writeKeychainPassword(JSON.stringify(payload), () => authenticationContextGeneration === context && tokenState === snapshot);
+  if (authenticationContextGeneration !== context || tokenState !== snapshot) return;
   tokenPersistenceStatus = {
     ...tokenPersistenceStatus,
     enabled: true,
@@ -2596,7 +2637,9 @@ async function saveTokenStateToKeychain(reason) {
 
 async function markKeychainTokenInvalid(message) {
   if (!tokenPersistenceStatus.supported) return;
-  await deleteTokenStateFromKeychain();
+  const context = authenticationContextGeneration;
+  await deleteTokenStateFromKeychain(() => authenticationContextGeneration === context && tokenState === null);
+  if (authenticationContextGeneration !== context || tokenState !== null) return;
   tokenPersistenceStatus = {
     ...tokenPersistenceStatus,
     enabled: false,
@@ -2624,32 +2667,63 @@ async function readKeychainTokenPayload() {
   }
 }
 
-async function writeKeychainPassword(payload) {
-  await execFileAsync("security", [
+function serializeKeychainMutation(operation) {
+  const result = keychainMutationQueue.then(operation);
+  keychainMutationQueue = result.catch(() => {});
+  return result;
+}
+
+async function writeKeychainPassword(payload, isCurrent = () => true) {
+  const account = getKeychainAccountName();
+  return serializeKeychainMutation(async () => {
+  if (!isCurrent()) return;
+  try {
+  await keychainExecFileAsync("security", [
     "add-generic-password",
     "-U",
     "-s",
     KEYCHAIN_SERVICE,
     "-a",
-    getKeychainAccountName(),
+    account,
     "-w",
     payload,
   ]);
+  } catch {
+    throw new HttpError(500, "keychain_save_failed", "接続情報を保存できませんでした。現在の接続を保ったまま、Keychainの状態を確認してください。");
+  }
+  });
 }
 
-async function deleteTokenStateFromKeychain() {
+async function deleteTokenStateFromKeychain(isCurrent = () => true) {
   if (!tokenPersistenceStatus.supported) return;
+  const account = getKeychainAccountName();
+  return serializeKeychainMutation(async () => {
+  if (!isCurrent()) return;
   try {
-    await execFileAsync("security", [
+    await keychainExecFileAsync("security", [
       "delete-generic-password",
       "-s",
       KEYCHAIN_SERVICE,
       "-a",
-      getKeychainAccountName(),
+      account,
     ]);
   } catch {
     // Missing Keychain items are fine; logout and disable should be idempotent.
   }
+  });
+}
+
+export function configureKeychainPersistenceForTest({ executor, token, persistenceStatus } = {}) {
+  if (!IS_TEST_PROCESS) throw new Error("test_only");
+  if (executor) keychainExecFileAsync = executor;
+  tokenState = token ?? null;
+  advanceAuthenticationContextGeneration();
+  if (persistenceStatus) tokenPersistenceStatus = { ...tokenPersistenceStatus, ...persistenceStatus };
+}
+
+export function getAuthenticationGenerationForTest() {
+  if (!IS_TEST_PROCESS) throw new Error("test_only");
+  return authenticationContextGeneration;
 }
 
 function getKeychainAccountName() {

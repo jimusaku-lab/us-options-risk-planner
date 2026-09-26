@@ -95,6 +95,7 @@ import { WheelPanel } from "@/components/wheel/WheelPanel";
 import { exportSimulationsCsv, exportWorkspaceJson, parseWorkspaceJson } from "@/lib/export";
 import { fetchStooqQuote, fetchUsdJpyRate, normalizeTicker, type FxQuote } from "@/lib/marketData";
 import { applyCurrentPricePreview, createCurrentOptionPricePreviewRow, createCurrentStockPricePreviewRow, getCurrentOptionPriceTargets, getCurrentStockPriceTargets, type CurrentOptionPricePreviewRow, type CurrentStockPricePreviewRow } from "@/domain/bulkOptionPrice";
+import { summarizePriceAdoption } from "@/domain/priceAdoptionProjection";
 import { fetchSaxoOptionPremiumCandidatesPreview, fetchSaxoStatus, fetchSaxoPositionsSnapshot } from "@/features/saxo/saxoApiClient";
 import { attachPositionValuations } from "@/domain/saxoValuation";
 import { formatLocalDate } from "@/lib/date";
@@ -293,6 +294,8 @@ export default function App() {
   const [bulkStockPricePreview, setBulkStockPricePreview] = useState<CurrentStockPricePreviewRow[] | null>(null);
   const [bulkPricePreviewWorkspace, setBulkPricePreviewWorkspace] = useState<string | null>(null);
   const bulkPriceRequestIdRef = useRef(0);
+  const fxRefreshRequestRef = useRef(0);
+  const stockRefreshRequestRef = useRef(0);
   const [bulkOptionPriceMessage, setBulkOptionPriceMessage] = useState("");
   const [bulkOptionPriceLoading, setBulkOptionPriceLoading] = useState(false);
   const [bulkOptionPriceCapability, setBulkOptionPriceCapability] = useState<"available" | "unavailable" | "checking">("checking");
@@ -377,18 +380,23 @@ export default function App() {
     };
   }, [oauthReturnPending]);
   const selected = simulations.find((simulation) => simulation.id === selectedSimulationId) ?? simulations[0];
+  useEffect(() => () => {
+    fxRefreshRequestRef.current++;
+    stockRefreshRequestRef.current++;
+  }, [activeWorkspace]);
   useEffect(() => {
     if (activeWorkspace !== "live") {
       setSameDayUsdJpyQuote(null);
       return;
     }
     let cancelled = false;
+    const requestId = fxRefreshRequestRef.current;
     fetchUsdJpyRate()
       .then((quote) => {
-        if (!cancelled) setSameDayUsdJpyQuote(quote);
+        if (!cancelled && requestId === fxRefreshRequestRef.current) setSameDayUsdJpyQuote(quote);
       })
       .catch(() => {
-        if (!cancelled) setSameDayUsdJpyQuote(null);
+        if (!cancelled && requestId === fxRefreshRequestRef.current) setSameDayUsdJpyQuote(null);
       });
     return () => {
       cancelled = true;
@@ -510,7 +518,11 @@ export default function App() {
   const canUseExternalQuotes = true;
   const externalQuoteModeLabel = "株価更新では銘柄ティッカー、為替更新ではUSD/JPY取得リクエストだけを外部サービスへ送信します。";
   const refreshAllQuotes = async () => {
-    const tickers = Array.from(new Set(simulations.map((simulation) => normalizeTicker(simulation.ticker)).filter(Boolean)));
+    const requestState = useOptionsStore.getState();
+    const requestId = ++stockRefreshRequestRef.current;
+    const originals = new Map(requestState.simulations.map(s=>[s.id,s]));
+    const isCurrent = () => requestId === stockRefreshRequestRef.current && requestState.activeWorkspace === useOptionsStore.getState().activeWorkspace;
+    const tickers = Array.from(new Set(requestState.simulations.map((simulation) => normalizeTicker(simulation.ticker)).filter(Boolean)));
     if (tickers.length === 0) {
       setQuoteStatus("先に建玉の銘柄を入力してください。");
       return;
@@ -518,6 +530,7 @@ export default function App() {
     setQuoteStatus(`株価を一括取得中... ${tickers.length}銘柄`);
     try {
       const results = await Promise.allSettled(tickers.map(async (ticker) => [ticker, await fetchStooqQuote(ticker)] as const));
+      if (!isCurrent()) return;
       const quoteByTicker = new Map(
         results
           .filter((result): result is PromiseFulfilledResult<readonly [string, Awaited<ReturnType<typeof fetchStooqQuote>>]> => result.status === "fulfilled")
@@ -533,43 +546,56 @@ export default function App() {
         return;
       }
 
-      simulations.forEach((simulation) => {
+      const latest = useOptionsStore.getState().simulations;
+      const next = latest.map((simulation) => {
+        const original = originals.get(simulation.id);
         const ticker = normalizeTicker(simulation.ticker);
         const quote = quoteByTicker.get(ticker);
-        if (quote) {
-          upsertSimulation({ ...simulation, ticker, currentPriceUSD: quote.price });
-        }
+        if (!original || normalizeTicker(original.ticker) !== ticker || simulation.currentPriceUSD !== original.currentPriceUSD || !quote || normalizeTicker(quote.symbol) !== ticker || !Number.isFinite(quote.price) || quote.price <= 0) return simulation;
+        return simulation.currentPriceUSD === quote.price ? simulation : { ...simulation, currentPriceUSD:quote.price };
       });
-      if (selectedSimulationId) selectSimulation(selectedSimulationId);
+      const updated=next.filter((s,i)=>s!==latest[i]).length;
+      if (updated) applySimulationBatch(next);
       const latestQuote = quoteByTicker.values().next().value;
       setQuoteStatus(
         failures.length > 0
-          ? `株価を${quoteByTicker.size}銘柄に反映しました。取得失敗: ${failures.join(" / ")}`
-          : `株価を${quoteByTicker.size}銘柄すべてに反映しました。${latestQuote?.date ?? ""} ${latestQuote?.time ?? ""}`,
+          ? `株価を${updated}建玉に反映しました。取得失敗: ${failures.join(" / ")}`
+          : `株価を${updated}建玉に反映しました。${latestQuote?.date ?? ""} ${latestQuote?.time ?? ""}`,
       );
     } catch (error) {
+      if (!isCurrent()) return;
       setQuoteStatus(error instanceof Error ? `${error.message} 既存の株価は変更していません。` : "株価を取得できませんでした。既存の株価は変更していません。");
     }
   };
   const refreshAllFx = async () => {
-    if (simulations.length === 0) {
+    const requestState=useOptionsStore.getState();
+    const requestId=++fxRefreshRequestRef.current;
+    const originals=new Map(requestState.simulations.map(s=>[s.id,s]));
+    const isCurrent=()=>requestId===fxRefreshRequestRef.current && requestState.activeWorkspace===useOptionsStore.getState().activeWorkspace;
+    if (requestState.simulations.length === 0) {
       setQuoteStatus("先に建玉を登録してください。");
       return;
     }
     setQuoteStatus("USD/JPYを一括更新中...");
     try {
       const quote = await fetchUsdJpyRate();
+      if (!isCurrent()) return;
       setSameDayUsdJpyQuote(quote);
-      simulations.forEach((simulation) => {
-        upsertSimulation({ ...simulation, fxRateJPY: quote.rate });
+      const latest=useOptionsStore.getState().simulations;
+      const next=latest.map((simulation) => {
+        const original=originals.get(simulation.id);
+        if (!original || simulation.fxRateJPY!==original.fxRateJPY || simulation.fxRateJPY===quote.rate) return simulation;
+        return { ...simulation, fxRateJPY:quote.rate };
       });
-      if (selectedSimulationId) selectSimulation(selectedSimulationId);
+      const updated=next.filter((s,i)=>s!==latest[i]).length;
+      if(updated) applySimulationBatch(next);
       setQuoteStatus(
         `USD/JPY ${quote.rate.toLocaleString("en-US", {
           maximumFractionDigits: 3,
-        })} を全建玉に反映しました。${quote.date ?? ""} ${quote.time ?? ""}`,
+        })} を${updated}建玉に反映しました。${quote.date ?? ""} ${quote.time ?? ""}`,
       );
     } catch (error) {
+      if (!isCurrent()) return;
       setQuoteStatus(
         error instanceof Error
           ? `${error.message} 既存の為替レートは変更していません。`
@@ -675,22 +701,16 @@ export default function App() {
     const latest = useOptionsStore.getState().simulations;
     const rows = bulkOptionPricePreview.filter(row => !simulationId || row.target.simulationId === simulationId);
     const stocks = bulkStockPricePreview.filter(row => !simulationId || row.simulationIds.includes(simulationId)).map(row => simulationId ? { ...row, simulationIds: [simulationId] } : row);
-    setBulkOptionPriceAdoption({ simulationIds: [...new Set(rows.map(row => row.target.simulationId))], referenceConfirmed: bulkOptionPriceReferenceConfirmed });
-    const next = applyCurrentPricePreview(latest, rows, stocks, { includeConfirmedReferences: bulkOptionPriceReferenceConfirmed });
+    const next = applyCurrentPricePreview(latest, rows, stocks, { includeConfirmedReferences: bulkOptionPriceReferenceConfirmed, currentFx:sameDayUsdJpyQuote });
     const changed = next.filter((simulation, index) => simulation !== latest[index]).length;
     if (changed === 0) {
       setBulkOptionPriceMessage("反映できる候補はありません。Mid/Lastのみや片脚欠損は個別に確認してください。");
       return;
     }
     applySimulationBatch(next);
+    setBulkOptionPriceAdoption({ simulationIds: [...new Set(rows.map(row => row.target.simulationId))], referenceConfirmed: bulkOptionPriceReferenceConfirmed });
     setBulkOptionPriceReferenceConfirmed(false);
-    const spreads = next.filter((simulation) => isVerticalSpreadType(simulation.strategyType) && simulation.status === "open");
-    const available = spreads.filter((simulation) => simulation.strategyType === "bear_put_spread" ? calculateBearPutSpreadEstimate(simulation).kind === "available" : calculateVerticalSpreadEstimate(simulation).kind === "available").length;
-    const reasons = Array.from(new Set(spreads.flatMap((simulation) => {
-      const estimate = simulation.strategyType === "bear_put_spread" ? calculateBearPutSpreadEstimate(simulation) : calculateVerticalSpreadEstimate(simulation);
-      return estimate.kind === "missing" ? estimate.reasons : [];
-    })));
-    setBulkOptionPriceMessage(`${changed}建玉の取得成功分を一回の保存で反映しました。現在見込み計算可能 ${available}件${reasons.length ? ` / 未計算: ${reasons.join(" / ")}` : ""}`);
+    setBulkOptionPriceMessage(summarizePriceAdoption(latest, next, useOptionsStore.getState().simulations, sameDayUsdJpyQuote).message);
   };
   const closeBulkOptionPriceDialog = () => {
     bulkPriceRequestIdRef.current += 1;
@@ -2066,7 +2086,12 @@ export default function App() {
       })
       .filter((entry): entry is [string, StockHoldingEvaluation] => Boolean(entry[1])),
   );
+  const hasUnappliedCurrentPricePreview = bulkPricePreviewWorkspace === activeWorkspace && !bulkOptionPriceAdoption && (
+    (bulkOptionPricePreview ?? []).some((row) => row.status === "ready" || row.status === "confirmable_reference") ||
+    (bulkStockPricePreview ?? []).some((row) => row.status === "ready")
+  );
   const saxoReadOnlyPanelProps = {
+    isDetailOpen: isSaxoDetailOpen,
     strategyLedger: useOptionsStore.getState().strategyLedgersByWorkspace[activeWorkspace],
     onCommitSpread: async (prepared: import("@/domain/strategyLedger").PreparedStrategyImport, requestRevision: number) => {
       const result = await useOptionsStore.getState().commitSpreadImport(prepared, requestRevision);
@@ -2101,12 +2126,15 @@ export default function App() {
     onOpenExitOrderRule: openSaxoExitOrderRule,
     onDownloadJson: downloadJson,
     onPendingStateChange: setSaxoHasPendingReflection,
+    hasUnappliedCurrentPricePreview,
     onPreviewCurrentPrices: import.meta.env.GITHUB_PAGES === "true" ? undefined : previewBulkOptionPrices,
     oauthReconnectReturn: oauthReturnPending,
     bulkFetchButtonRef: saxoBulkFetchButtonRef,
   };
   const saxoPanelSubtitle = saxoHasPendingReflection
     ? "API接続・取得・反映待ちは必要時だけ確認します。"
+    : hasUnappliedCurrentPricePreview
+      ? "取得済みの価格候補が未反映です。内容を確認してから適用できます。"
     : "反映待ち候補がないため、接続・同期は必要時だけ開きます。";
   const pendingSaxoStockSettlementItems = saxoHistoryCandidates.filter(
     (item) => getSaxoHistoryCandidateTarget(item) === "stock_settlement",
@@ -2196,6 +2224,7 @@ export default function App() {
                 currentEstimateFxQuote={sameDayUsdJpyQuote}
                 onRefreshFx={refreshAllFx}
                 bulkOptionPricePreview={bulkOptionPricePreview}
+                bulkOptionPricePreviewWorkspace={bulkPricePreviewWorkspace}
                 bulkOptionPriceOpenRequest={bulkOptionPriceOpenRequest}
                 bulkOptionPriceScope={bulkOptionPriceScope}
                 bulkOptionPriceAdoption={bulkOptionPriceAdoption}
@@ -2484,6 +2513,7 @@ export default function App() {
               currentEstimateFxQuote={sameDayUsdJpyQuote}
               onRefreshFx={refreshAllFx}
               bulkOptionPricePreview={bulkOptionPricePreview}
+              bulkOptionPricePreviewWorkspace={bulkPricePreviewWorkspace}
               bulkOptionPriceOpenRequest={bulkOptionPriceOpenRequest}
                 bulkOptionPriceScope={bulkOptionPriceScope}
                 bulkOptionPriceAdoption={bulkOptionPriceAdoption}

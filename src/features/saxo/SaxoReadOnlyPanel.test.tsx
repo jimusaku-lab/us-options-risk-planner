@@ -252,6 +252,21 @@ const accountInputs: AccountInputs = {
   },
 };
 
+it("keeps unapplied current-price preview visible without inflating account/history action count", () => {
+  const summary = createReflectionSummary({ mappedSnapshots: [], accountInputs, positionRows: [], simulations: [], stockTransfers: [], orders: [], historyEndpoints: [], historyReflectionStates: {} });
+  const callbacks = { onShowMapping: vi.fn(), onShowSnapshot: vi.fn(), onShowPositions: vi.fn(), onShowOrders: vi.fn(), onShowHistory: vi.fn(), onOpenHistoryAction: vi.fn() };
+  const { rerender } = render(<ReflectionPendingSummary summary={summary} {...callbacks} hasUnappliedCurrentPricePreview />);
+  expect(summary.requiredActionCount).toBe(0);
+  expect(screen.getByRole("heading", { name: "価格候補が未反映です" })).toBeInTheDocument();
+  expect(screen.getByTestId("unapplied-current-price-preview")).toHaveTextContent("まだ保存されていません");
+  expect(screen.getByLabelText("Saxo確認の現在地")).toHaveTextContent("現在地: 価格候補の確認待ち");
+  expect(screen.getByLabelText("Saxo確認の現在地")).toHaveTextContent("次にすること: 未反映候補を確認・反映");
+  expect(screen.getByLabelText("Saxo確認の現在地")).toHaveTextContent("完了まで: 価格候補の確認・反映が残っています");
+  rerender(<ReflectionPendingSummary summary={summary} {...callbacks} />);
+  expect(screen.queryByTestId("unapplied-current-price-preview")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "今回の確認は完了しました" })).toBeInTheDocument();
+});
+
 const stockSettlementHistory: SaxoHistoryDiscoveryItem = {
   id: "anonymous-stock-sale",
   kind: "trade",

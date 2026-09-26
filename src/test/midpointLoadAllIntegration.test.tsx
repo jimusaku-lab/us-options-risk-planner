@@ -80,6 +80,22 @@ async function mountAndReconnect() {
   return button;
 }
 describe("R15 App all-fetch to common price preview", () => {
+  it("rechecks status on detail reopen without fetching prices or changing saved positions", async () => {
+    await mountAndReconnect();
+    await waitFor(() => expect(screen.getAllByText(/Saxo接続中/).length).toBeGreaterThan(0));
+    const before = structuredClone(useOptionsStore.getState().simulations);
+    const summary = screen.getByText("Saxo API詳細");
+    const details = summary.closest("details")!;
+    details.open = false; fireEvent(details, new Event("toggle"));
+    const callsBefore = statusCalls;
+    connected = false;
+    details.open = true; fireEvent(details, new Event("toggle"));
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(callsBefore));
+    await waitFor(() => expect(screen.queryByText(/Saxo接続中/)).toBeNull());
+    expect(screen.getByRole("button", { name: "Saxo接続" })).toBeInTheDocument();
+    expect(premiumCalls).toBe(0);
+    expect(useOptionsStore.getState().simulations).toEqual(before);
+  });
   it("rechecks reconnect capability, previews without persistence, cancels, then adopts once with explicit reference confirmation", async () => {
     const button = await mountAndReconnect();
     const before = structuredClone(useOptionsStore.getState().simulations);

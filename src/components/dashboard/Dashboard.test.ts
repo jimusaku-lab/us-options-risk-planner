@@ -105,6 +105,17 @@ it("opens shared whole-portfolio preview from the management bar after capabilit
  expect(screen.getByRole("dialog")).toBeTruthy();expect(fetch).toHaveBeenCalledTimes(1);
 });
 
+it("reopens same-workspace unapplied price candidates without fetching again", () => {
+ const simulation=createSimulation(), fetch=vi.fn();
+ const row=createCurrentOptionPricePreviewRow(getCurrentOptionPriceTargets([simulation])[0], { environment:"live", source:"fixture", status:"available", classification:"available", message:"fixture", fetchedAt:"2026-09-27T00:00:00Z", ask:2.1, quoteDiagnostics:{priceTypeAsk:"Tradable"} });
+ const props={simulations:[simulation],selectedId:simulation.id,onSelect:vi.fn(),onEdit:vi.fn(),onDelete:vi.fn(),workspace:"live" as const,accountInputs,historyOpen:false,onHistoryOpenChange:vi.fn(),onFetchBulkOptionPrices:fetch,bulkOptionPricePreview:[row],bulkOptionPricePreviewWorkspace:"live"};
+ render(createElement(Dashboard,props));
+ fireEvent.click(screen.getByRole("button",{name:"未反映候補を確認・反映"}));
+ expect(fetch).not.toHaveBeenCalled();
+ expect(screen.getByRole("dialog")).toBeInTheDocument();
+ expect(screen.getByRole("dialog").textContent).toContain("195");
+});
+
 describe("synthetic leg history", () => {
   it("renders four current strategies with one metric order and canonical denominators", () => {
     const spread=createSimulation({id:"spread",ticker:"SPRD",strategyType:"bear_put_spread",entryDate:"2026-09-01",expiryDate:"2026-10-02",optionLegs:[

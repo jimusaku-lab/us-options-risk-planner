@@ -7,7 +7,7 @@ import { recordParentTimeValueObservation } from "@/domain/timeValueParent";
 import { resolveCloseCommissionUSD } from "@/domain/closeCommissionStandard";
 import { getOperationalRemainingOptionLegs } from "@/domain/optionCloseExecutions";
 import { isManagedTwoLegStrategy } from "@/domain/verticalSpread";
-import type { StockQuote } from "@/lib/marketData";
+import type { StockQuote, FxQuote } from "@/lib/marketData";
 import { resolveEvaluationQuote, captureReferenceQuote, type EvaluationQuote } from "@/domain/midpointEvaluation";
 
 export type CurrentOptionPriceTarget = { targetId: string; simulationId: string; legId: string; ticker: string; strategyType: TradeSimulation["strategyType"]; optionType: OptionLeg["type"]; side: OptionLeg["side"]; strike: number; expiry: string; quantity: number; savedPriceUSD?: number; contractSize?: number; accountEnvironment?: TradeSimulation["accountEnvironment"]; accountCurrency?: TradeSimulation["accountCurrency"]; accountKey?: string; uic?: number; positionId?: string; instrumentCode?: string };
@@ -25,26 +25,27 @@ export function createCurrentOptionPricePreviewRow(target: CurrentOptionPriceTar
 export function getCurrentStockPriceTargets(simulations: TradeSimulation[]): Array<{ ticker: string; simulationIds: string[]; savedPricesBySimulationId: Record<string, number | undefined> }> { const grouped=new Map<string,{simulationIds:string[];savedPricesBySimulationId:Record<string,number|undefined>}>();for(const simulation of simulations){if(simulation.status!=="open")continue;const ticker=simulation.ticker.trim().toUpperCase();if(!ticker)continue;const current=grouped.get(ticker)??{simulationIds:[],savedPricesBySimulationId:{}};current.simulationIds.push(simulation.id);current.savedPricesBySimulationId[simulation.id]=Number.isFinite(simulation.currentPriceUSD)?simulation.currentPriceUSD:undefined;grouped.set(ticker,current);}return Array.from(grouped,([ticker,target])=>({ticker,...target})); }
 export function createCurrentStockPricePreviewRow(target:{ticker:string;simulationIds:string[];savedPricesBySimulationId:Record<string,number|undefined>},quote?:StockQuote,error?:string):CurrentStockPricePreviewRow { if(!quote||quote.symbol.trim().toUpperCase()!==target.ticker||!Number.isFinite(quote.price)||quote.price<=0)return {...target,status:"unavailable",reason:error??"現在株価を取得できません"};return {...target,quote,status:"ready",reason:"取得済み（日次・遅延値の可能性あり）"}; }
 export type BulkOptionPricePreviewCounts = { successful: number; ready: number; confirmableReference: number; unavailable: number };
-export function getBulkOptionPricePreviewCounts(rows: CurrentOptionPricePreviewRow[]): BulkOptionPricePreviewCounts {
- const ready=rows.filter(row=>!previewNeedsReferenceConsent(row) && (row.status==="ready" || !valuationProblem(row.saxoValuation))).length;
- const confirmableReference=rows.filter(previewNeedsReferenceConsent).length;
+export function getBulkOptionPricePreviewCounts(rows: CurrentOptionPricePreviewRow[], simulations:TradeSimulation[] = [], currentFx?:FxQuote|null): BulkOptionPricePreviewCounts {
+ const needsConsent=(row:CurrentOptionPricePreviewRow)=>previewNeedsReferenceConsent(row,simulations.find(s=>s.id===row.target.simulationId),rows,currentFx);
+ const ready=rows.filter(row=>!needsConsent(row) && (row.status==="ready" || !valuationProblem(row.saxoValuation))).length;
+ const confirmableReference=rows.filter(needsConsent).length;
  return {successful:ready+confirmableReference,ready,confirmableReference,unavailable:rows.length-ready-confirmableReference};
 }
-export function getBulkApplicableTargetIds(rows: CurrentOptionPricePreviewRow[], simulations: TradeSimulation[], includeConfirmedReferences = false): Set<string> {
+export function getBulkApplicableTargetIds(rows: CurrentOptionPricePreviewRow[], simulations: TradeSimulation[], includeConfirmedReferences = false, currentFx?: FxQuote | null): Set<string> {
  const ids=new Set(rows.filter(row=>!row.adoptionBlocked && (row.status==="ready" || includeConfirmedReferences && row.status==="confirmable_reference") && (row.selectedPriceUSD!==undefined || row.referenceQuote?.mid!==undefined && row.referenceQuote.kind!=="unavailable")).map(row=>row.target.targetId));
  for(const simulation of simulations){
-  if(parentPriceBasis(simulation,rows,includeConfirmedReferences)){getCurrentOptionPriceTargets([simulation]).forEach(t=>ids.add(t.targetId));continue;}
+  if(parentPriceBasis(simulation,rows,includeConfirmedReferences,currentFx)){getCurrentOptionPriceTargets([simulation]).forEach(t=>ids.add(t.targetId));continue;}
   if(!isManagedTwoLegStrategy(simulation))continue;
   const legIds=getOperationalRemainingOptionLegs(simulation).map(({leg})=>`${simulation.id}:${leg.id}`);
   if(legIds.length>0 && legIds.some(id=>!ids.has(id)))legIds.forEach(id=>ids.delete(id));
  }
  return ids;
 }
-export function applyCurrentOptionPricePreview(simulations: TradeSimulation[], rows: CurrentOptionPricePreviewRow[], options: { includeConfirmedReferences?: boolean; capturedAt?: string; batchId?: string } = {}): TradeSimulation[] {
+export function applyCurrentOptionPricePreview(simulations: TradeSimulation[], rows: CurrentOptionPricePreviewRow[], options: { includeConfirmedReferences?: boolean; capturedAt?: string; batchId?: string; currentFx?: FxQuote | null } = {}): TradeSimulation[] {
   const includeConfirmedReferences = options.includeConfirmedReferences ?? false;
   const capturedAt = options.capturedAt ?? new Date().toISOString();
   const batchId = options.batchId ?? `price-update:${capturedAt}`;
-  const applicable = getBulkApplicableTargetIds(rows, simulations, includeConfirmedReferences);
+  const applicable = getBulkApplicableTargetIds(rows, simulations, includeConfirmedReferences,options.currentFx);
   const currentTargets = new Map(getCurrentOptionPriceTargets(simulations).map((target) => [target.targetId, target]));
   const update = new Map(rows.filter((row) => { const current = currentTargets.get(row.target.targetId); return applicable.has(row.target.targetId) && current !== undefined && samePriceTarget(current,row.target) && rows.filter(r=>r.target.targetId===row.target.targetId).length===1; }).map((row) => [row.target.targetId, row]));
   for (const simulation of simulations) {
@@ -53,7 +54,7 @@ export function applyCurrentOptionPricePreview(simulations: TradeSimulation[], r
     if (ids.some(id=>!update.has(id))) ids.forEach(id=>update.delete(id));
   }
   return simulations.map((simulation) => {
-    const basis=parentPriceBasis(simulation,rows,includeConfirmedReferences);
+    const basis=parentPriceBasis(simulation,rows,includeConfirmedReferences,options.currentFx);
     const specificationLeg=(leg:OptionLeg,row:CurrentOptionPricePreviewRow):OptionLeg=>{
       const v=row.saxoValuation;
       return leg.contractSize===undefined && v?.contractSizeSource==="InstrumentDetails.ContractSize" && Number.isInteger(v.contractSize) && v.contractSize!>0
@@ -93,4 +94,4 @@ export function applyCurrentOptionPricePreview(simulations: TradeSimulation[], r
     return { ...nextSimulation, timeValueParentUpdateReason: parent.reason };
   });
 }
-export function applyCurrentPricePreview(simulations:TradeSimulation[],optionRows:CurrentOptionPricePreviewRow[],stockRows:CurrentStockPricePreviewRow[],options:{includeConfirmedReferences?:boolean;capturedAt?:string}={}):TradeSimulation[]{const withOptions=applyCurrentOptionPricePreview(simulations,optionRows,options);const stocks=new Map(stockRows.filter(row=>row.status==="ready"&&row.quote).map(row=>[row.ticker,row]));return withOptions.map(simulation=>{if(simulation.status!=="open")return simulation;const row=stocks.get(simulation.ticker.trim().toUpperCase());if(!row?.quote||!row.simulationIds.includes(simulation.id)||simulation.currentPriceUSD!==row.savedPricesBySimulationId[simulation.id]||simulation.currentPriceUSD===row.quote.price)return simulation;return {...simulation,currentPriceUSD:row.quote.price};});}
+export function applyCurrentPricePreview(simulations:TradeSimulation[],optionRows:CurrentOptionPricePreviewRow[],stockRows:CurrentStockPricePreviewRow[],options:{includeConfirmedReferences?:boolean;capturedAt?:string;batchId?:string;currentFx?:FxQuote|null}={}):TradeSimulation[]{const withOptions=applyCurrentOptionPricePreview(simulations,optionRows,options);const stocks=new Map(stockRows.filter(row=>row.status==="ready"&&row.quote).map(row=>[row.ticker,row]));return withOptions.map(simulation=>{if(simulation.status!=="open")return simulation;const row=stocks.get(simulation.ticker.trim().toUpperCase());if(!row?.quote||!row.simulationIds.includes(simulation.id)||simulation.currentPriceUSD!==row.savedPricesBySimulationId[simulation.id]||simulation.currentPriceUSD===row.quote.price)return simulation;return {...simulation,currentPriceUSD:row.quote.price};});}

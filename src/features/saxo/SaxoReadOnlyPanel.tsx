@@ -179,7 +179,9 @@ export function SaxoReadOnlyPanel({
   onOpenExitOrderRule,
   onDownloadJson,
   onPendingStateChange,
+  hasUnappliedCurrentPricePreview = false,
   oauthReconnectReturn = false,
+  isDetailOpen = true,
   onRequestClose,
   bulkFetchButtonRef,
   onPreviewCurrentPrices,
@@ -212,8 +214,12 @@ export function SaxoReadOnlyPanel({
   onOpenExitOrderRule?: (simulationId: string, legId: string) => void;
   onDownloadJson?: () => void;
   onPendingStateChange?: (hasPending: boolean) => void;
+  /** A separate, unapplied current-price preview is not an account/history action count. */
+  hasUnappliedCurrentPricePreview?: boolean;
   /** One-shot OAuth UI return marker owned and consumed by the outer panel. */
   oauthReconnectReturn?: boolean;
+  /** Outer disclosure owns visibility; refresh only read-only connection metadata on open. */
+  isDetailOpen?: boolean;
   onRequestClose?: () => void;
   bulkFetchButtonRef?: RefObject<HTMLButtonElement | null>;
   onPreviewCurrentPrices?: () => Promise<string>;
@@ -275,8 +281,8 @@ export function SaxoReadOnlyPanel({
   const [highlightedSnapshotAccount, setHighlightedSnapshotAccount] = useState<SaxoAccountCode | null>(null);
 
   useEffect(() => {
-    void refreshStatus();
-  }, []);
+    if (isDetailOpen) void refreshStatus();
+  }, [isDetailOpen]);
 
   useEffect(() => {
     if (!oauthReconnectReturn) return;
@@ -1280,6 +1286,7 @@ export function SaxoReadOnlyPanel({
             <ReflectionPendingSummary
               ref={pendingSummaryRef}
               summary={reflectionSummary}
+              hasUnappliedCurrentPricePreview={hasUnappliedCurrentPricePreview}
               onShowMapping={() => scrollToSection("mapping")}
               onShowSnapshot={() => scrollToSection("snapshot")}
               onShowPositions={showPositionCandidatesFromSummary}
@@ -2184,6 +2191,7 @@ export type ReflectionSummary = {
 
 export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
   summary: ReflectionSummary;
+  hasUnappliedCurrentPricePreview?: boolean;
   onShowMapping: () => void;
   onShowSnapshot: () => void;
   onShowPositions: () => void;
@@ -2193,16 +2201,19 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
   onOpenOrderAction?: (action: SaxoExitOrderReview) => void;
   onPrimaryAction?: (action: ReflectionPendingAction) => void;
 }>(function ReflectionPendingSummary(
-  { summary, onShowMapping, onShowSnapshot, onShowPositions, onShowOrders, onShowHistory, onOpenHistoryAction, onOpenOrderAction, onPrimaryAction },
+  { summary, hasUnappliedCurrentPricePreview = false, onShowMapping, onShowSnapshot, onShowPositions, onShowOrders, onShowHistory, onOpenHistoryAction, onOpenOrderAction, onPrimaryAction },
   ref,
 ) {
   const orderActions = summary.orderActions ?? [];
   const hasFocusedSpread = summary.primaryAction?.kind === "spread";
   const visibleHistoryActions = summary.historyActions.filter((action) => !(summary.primaryAction?.kind === "history" && summary.primaryAction.action === action));
   const otherActionCount = Math.max(0, summary.requiredActionCount - (hasFocusedSpread ? 1 : 0));
+  const progress = !summary.hasPending && hasUnappliedCurrentPricePreview
+    ? { location: "価格候補の確認待ち", next: "未反映候補を確認・反映", remaining: "価格候補の確認・反映が残っています" }
+    : summary.progress;
   const otherConfirmations = (
     <>
-      {!hasFocusedSpread && summary.nextActionDetail ? <div className={`mt-2 rounded-md border px-3 py-2 text-sm font-bold ${summary.hasNewPositionCandidates ? "border-teal-300 bg-white text-teal-900" : "border-slate-200 bg-white text-slate-800"}`}>{summary.nextActionDetail}</div> : null}
+      {!hasFocusedSpread && summary.nextActionDetail ? <div className={`mt-2 rounded-md border px-3 py-2 text-sm font-bold ${summary.hasNewPositionCandidates ? "border-teal-300 bg-white text-teal-900" : "border-slate-200 bg-white text-slate-800"}`}>{!summary.hasPending && hasUnappliedCurrentPricePreview ? "口座・建玉・履歴の追加処理はありません。参考価格の確認・反映は残っています。" : summary.nextActionDetail}</div> : null}
       <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
         {summary.accountLines.map((line) => <PendingLine key={line.key} label={line.label} detail={line.detail} actionLabel={line.actionLabel} disabled={!line.actionable} onClick={line.target === "mapping" ? onShowMapping : onShowSnapshot} />)}
         {!hasFocusedSpread ? <PendingLine label="建玉候補" detail={summary.positionLine.detail} actionLabel={summary.positionLine.actionLabel} disabled={!summary.positionLine.actionable} tone={summary.positionLine.tone} onClick={onShowPositions} /> : null}
@@ -2216,13 +2227,14 @@ export const ReflectionPendingSummary = forwardRef<HTMLDivElement, {
   return (
     <div ref={ref} className={`rounded-md border p-3 ${summary.hasPending ? "border-teal-200 bg-teal-50" : "border-slate-200 bg-slate-50"}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-bold text-slate-950">{summary.hasPending ? "確認待ちがあります" : "今回の確認は完了しました"}</h3>
+        <h3 className="text-sm font-bold text-slate-950">{summary.hasPending ? "確認待ちがあります" : hasUnappliedCurrentPricePreview ? "価格候補が未反映です" : "今回の確認は完了しました"}</h3>
         <span className="text-xs font-semibold text-slate-600">口座・履歴を含む全体の反映待ち {summary.requiredActionCount}件</span>
       </div>
+      {hasUnappliedCurrentPricePreview ? <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900" role="status" data-testid="unapplied-current-price-preview">取得済み価格候補があります。ダッシュボードの「未反映候補を確認・反映」から内容を再表示してください。候補はまだ保存されていません。</p> : null}
       <div className="mt-2 rounded-md border border-white/80 bg-white px-3 py-2 text-xs leading-5 text-slate-700" aria-label="Saxo確認の現在地">
-        <div><span className="font-bold text-slate-900">現在地:</span> {summary.progress.location}</div>
-        <div><span className="font-bold text-slate-900">次にすること:</span> {summary.progress.next}</div>
-        <div><span className="font-bold text-slate-900">完了まで:</span> {summary.progress.remaining}</div>
+        <div><span className="font-bold text-slate-900">現在地:</span> {progress.location}</div>
+        <div><span className="font-bold text-slate-900">次にすること:</span> {progress.next}</div>
+        <div><span className="font-bold text-slate-900">完了まで:</span> {progress.remaining}</div>
       </div>
       {summary.primaryAction && !hasFocusedSpread ? (
         <button
