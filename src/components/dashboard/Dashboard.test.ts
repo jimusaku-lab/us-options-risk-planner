@@ -233,7 +233,7 @@ describe("synthetic leg history", () => {
     const stableHistory = ["実現利益+$1,505.52", "+190.0%", "年率換算（参考）+5,335.6%保有13日"];
     rerender(createElement(Dashboard, {
       simulations: [{ ...simulation, currentPriceUSD: 999 }], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs,
-      historyOpen: true, onHistoryOpenChange: vi.fn(), currentEstimateFxQuote: { pair: "USDJPY", rate: 180, date: "2026-09-11", fetchedAt: "2026-09-11T00:00:00Z", source: "frankfurter" },
+      historyOpen: true, onHistoryOpenChange: vi.fn(), currentEstimateFxQuote: { pair: "USDJPY", rate: 180, date: "2026-09-11", fetchedAt: "2026-09-11T00:00:00Z", source: "frankfurter" } as const,
     }));
     const rerenderedRow = Array.from(container.querySelectorAll("tr")).find((candidate) => candidate.textContent?.includes("XYZ"));
     stableHistory.forEach((text) => expect(rerenderedRow?.textContent).toContain(text));
@@ -255,7 +255,7 @@ describe("synthetic leg history", () => {
     expect(row?.textContent).toContain("実現損失-$74.48");
     expect(row?.textContent).toContain("建玉時支払 -$102.24 / 決済時受取 +$27.76（手数料込み）");
     expect(row?.textContent).not.toContain("現在株価");
-    expect(row?.textContent).toContain("警告なし");
+    expect(row?.querySelector('[aria-label="警告なし"]')).not.toBeNull();
     expect(row?.textContent).not.toContain("出口ルール");
   });
 
@@ -335,6 +335,48 @@ describe("synthetic leg history", () => {
   });
 });
 
+describe("R17 compact dashboard header", () => {
+  it("shows a currency-specific reference subtotal with calculated coverage and no DEMO badge", () => {
+    const makeLong = (id: string, ticker: string, price?: number) => createSimulation({
+      id, ticker, strategyType: "long_call", entryDate: "2026-09-01", expiryDate: "2026-10-02",
+      optionLegs: [{ ...createSimulation().optionLegs[0], id: `${id}-leg`, type: "call", side: "buy", premiumUSD: 2, quantity: 1, contractSize: 100, closeCostUSD: price, closePlan: price === undefined ? undefined : { enabled: true, commissionUSD: 2.24 } }],
+      optionEntryExecutions: [{ id: `${id}-entry`, legId: `${id}-leg`, tradeDate: "2026-09-01", contracts: 1, fillPriceUSD: 2, commissionUSD: 2.24, settlementCurrency: "USD", source: "manual", confirmed: true }],
+    });
+    const available = explicitFixtureQuotes(makeLong("available", "AVAIL", 3));
+    const missing = makeLong("missing", "MISS");
+    const props = { simulations: [available, missing], selectedId: available.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "demo" as const, accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn() };
+    const mounted = render(createElement(Dashboard, props));
+    expect(screen.getByTestId("dashboard-reference-profit-total")).toBeTruthy();
+    expect(screen.getByTestId("reference-profit-total-usd").getAttribute("aria-label")).toContain("計算済み 1/2");
+    expect(screen.queryByText("DEMO 実取引ではありません")).toBeNull();
+    expect(screen.queryByText("REAL 実資金管理")).toBeNull();
+    mounted.rerender(createElement(Dashboard, { ...props, workspace: "live" }));
+    expect(screen.getByText("REAL 実資金管理")).toBeTruthy();
+    expect(screen.queryByText("DEMO 実取引ではありません")).toBeNull();
+  });
+
+  it("uses only the remaining synthetic leg and counts its parent once", () => {
+    const partial = createSimulation({
+      id: "partial-synthetic", ticker: "SYN", strategyType: "synthetic_forward", entryDate: "2026-08-01", expiryDate: "2026-12-18",
+      optionLegs: [
+        { id: "call", type: "call", side: "buy", strikeUSD: 100, premiumUSD: 4, quantity: 1, contractSize: 100, expiryDate: "2026-12-18", closeCostUSD: 5, closePlan: { enabled: true, commissionUSD: 2.24, commissionSource: "manual" } },
+        { id: "put", type: "put", side: "sell", strikeUSD: 100, premiumUSD: 4, quantity: 1, contractSize: 100, expiryDate: "2026-12-18", closeCostUSD: 1, closePlan: { enabled: true, commissionUSD: 2.24, commissionSource: "manual" } },
+      ],
+      optionEntryExecutions: [
+        { id: "call-entry", legId: "call", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 4, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
+        { id: "put-entry", legId: "put", tradeDate: "2026-08-01", contracts: 1, fillPriceUSD: 4, settlementCurrency: "USD", commissionUSD: 2.24, source: "manual", confirmed: true },
+      ],
+      optionCloseExecutions: [{ id: "call-close", legId: "call", closeKind: "buyback", closeDate: "2026-09-01", contracts: 1, closePriceUSD: 5, commissionUSD: 2.24, settlementCurrency: "USD", realizedPnlUSD: 999_999, source: "manual", confirmed: true }],
+    });
+    explicitFixtureQuotes(partial);
+    render(createElement(Dashboard, { simulations: [partial], selectedId: partial.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: true, onHistoryOpenChange: vi.fn() }));
+    const total = screen.getByTestId("reference-profit-total-usd");
+    expect(total.textContent).toContain("+$295.52");
+    expect(total.textContent).not.toContain("999,999");
+    expect(total.getAttribute("aria-label")).toContain("計算済み 1/1");
+  });
+});
+
 describe("getSimulationTickerDisplayLabel", () => {
   it("restores an underlying ticker from a Saxo option instrument code", () => {
     const simulation = createSimulation({
@@ -385,7 +427,7 @@ describe("current price and strike display", () => {
     });
     render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn() }));
 
-    expect(screen.getByText("契約 / 現在株価")).toBeTruthy();
+    expect(screen.getByText("契約 / 株価")).toBeTruthy();
     expect(screen.getByText("現在株価 $219.39")).toBeTruthy();
     expect(screen.getByText("C $220.00 / -$0.61 / -0.3%")).toBeTruthy();
   });
@@ -502,7 +544,7 @@ describe("Dashboard close decision actions", () => {
     const simulation = currentShortPut("accept");
     const highMarginAccounts = { P: accountInputs.P, N: { ...accountInputs.N, marginUsagePercent: 75 } };
     render(createElement(Dashboard, { simulations: [simulation, { ...simulation, id: "second", ticker: "XYZ" }], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs: highMarginAccounts, historyOpen: false, onHistoryOpenChange: vi.fn() }));
-    expect(screen.getAllByText("警告なし")).toHaveLength(2);
+    expect(screen.getAllByLabelText("警告なし")).toHaveLength(2);
     expect(screen.queryByText(/証拠金使用率が高い/)).toBeNull();
   });
 
@@ -733,7 +775,7 @@ describe("Dashboard close decision actions", () => {
       onWorkflowTaskAction,
     }));
 
-    fireEvent.click(screen.getByRole("button", { name: "反対売買判断" }));
+    fireEvent.click(screen.getByRole("button", { name: /^反対売買判断:/ }));
 
     expect(onWorkflowTaskAction).toHaveBeenCalledWith(
       simulation.id,
@@ -789,7 +831,7 @@ describe("Dashboard close decision actions", () => {
       onWarningAction,
     }));
 
-    fireEvent.click(screen.getByRole("button", { name: "反対売買判断へ" }));
+    fireEvent.click(screen.getByRole("button", { name: /^反対売買判断へ:/ }));
 
     expect(onWarningAction).toHaveBeenCalledWith(
       simulation.id,

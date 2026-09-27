@@ -10,8 +10,8 @@ export function formatBasisAmount(result: BasisResult): string {
 }
 export function BasisMetric({result,label,compact=false}:{result:BasisResult;label?:string;compact?:boolean}) {
   const tone=(value:number|undefined)=>value===undefined||value===0?"text-slate-700":value>0?"text-emerald-700":"text-rose-700";
-  return <div className="text-sm"><span className="block text-xs font-semibold">{label ?? (result.valuationSource === "saxo-position" ? "Saxo評価（USD）" : "参考損益（中間値）")}</span>
-    <span className={`block font-bold ${tone(result.amount)}`}>{formatBasisAmount(result)}</span>
+  return <div className="min-w-0 text-sm"><span className="block whitespace-nowrap text-[11px] font-semibold">{label ?? (result.valuationSource === "saxo-position" ? "Saxo評価（USD）" : "参考損益（中間値）")}</span>
+    <span className={`block whitespace-nowrap font-bold tabular-nums ${tone(result.amount)}`}>{formatBasisAmount(result)}</span>
     {result.kind==="missing" ? compact ? null : <span className="block text-xs text-amber-800">{result.reason}</span> : <>
       <span className={`block text-xs ${tone(result.periodReturnPct)}`}>参考損益率 {result.periodReturnPct===undefined?"未計算":result.periodReturnPct.toFixed(1)+"%"}</span>
       {!compact && result.rateReason ? <span className="block text-xs text-slate-500">{result.rateReason}</span>:null}

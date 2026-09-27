@@ -29,6 +29,8 @@ import { calculatePositionBasisEvaluation } from "@/domain/positionBasisEvaluati
 import { diagnosePriceUpdate, type PriceUpdateAdoption, type PriceUpdateDiagnostic } from "@/domain/priceUpdateDiagnostic";
 import { BasisMetric, PositionBasisCard, formatBasisAmount } from "./PositionBasisCard";
 import { resolveCloseCommissionUSD } from "@/domain/closeCommissionStandard";
+import { needsOptionEntryConfirmation } from "@/domain/optionEntryExecutions";
+import { aggregateDashboardReferenceProfit } from "@/domain/dashboardReferenceProfitTotal";
 
 const statusClassName = {
   planned: "bg-sky-100 text-sky-800",
@@ -68,6 +70,39 @@ function formatCompactStrike(value: number | undefined): string {
   return value === undefined || !Number.isFinite(value)
     ? "未確認"
     : value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+function formatCompactProfit(amount: number | undefined, currency: "USD" | "JPY"): string {
+  if (amount === undefined) return "未計算";
+  if (amount === 0) return currency === "USD" ? "$0.00" : "0円";
+  const sign = amount > 0 ? "+" : "-";
+  return currency === "USD"
+    ? `${sign}$${Math.abs(amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `${sign}${Math.abs(amount).toLocaleString("ja-JP", { maximumFractionDigits: 0 })}円`;
+}
+
+function compactWorkflowActionLabel(label: string): string {
+  if (/決済/.test(label)) return "決済確認";
+  if (/約定|建玉|開始/.test(label)) return "約定確認";
+  return "対応";
+}
+
+function ReferenceProfitTotal({ totals }: { totals: ReturnType<typeof aggregateDashboardReferenceProfit> }) {
+  const currencyTotal = (currency: "USD" | "JPY") => {
+    const total = totals[currency];
+    if (total.eligibleCount === 0) return null;
+    const amountText = formatCompactProfit(total.amount, currency);
+    return <span className="whitespace-nowrap tabular-nums" data-testid={`reference-profit-total-${currency.toLowerCase()}`} aria-label={`${currency} 参考損益 ${amountText}、計算済み ${total.computedCount}/${total.eligibleCount}`}>
+      {currency} {amountText} <span className="font-normal text-slate-500">計算済み {total.computedCount}/{total.eligibleCount}</span>
+    </span>;
+  };
+  return <div aria-label="参考損益合計" data-testid="dashboard-reference-profit-total" className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs font-semibold text-slate-700">
+    <span className="font-bold text-slate-500">参考損益合計</span>
+    {currencyTotal("USD")}
+    {currencyTotal("JPY")}
+    {totals.unknownCurrencyCount > 0 ? <span className="whitespace-nowrap font-normal text-amber-700">通貨未確認 {totals.unknownCurrencyCount}件</span> : null}
+    {totals.unknownCurrencyCount === 0 && totals.USD.eligibleCount === 0 && totals.JPY.eligibleCount === 0 ? <span className="text-slate-500">対象なし</span> : null}
+  </div>;
 }
 
 const historyRiskWarningIds = new Set<RiskWarning["id"]>([
@@ -304,6 +339,28 @@ export function Dashboard({
   }, [isBulkDialogOpen, onBulkOptionPriceDialogClose]);
   const showHistory = historyOpen;
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "entry_confirmation" || simulation.status === "open");
+  const currentSimulationContexts = new Map(currentSimulations.map((simulation) => {
+    const simulationWithAccountBase = {
+      ...simulation,
+      availableCashJPY: simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT"
+        ? accountInputs.N.cashBalance * (simulation.referenceFxRateJPY ?? simulation.fxRateJPY)
+        : accountInputs.P.cashBalance,
+    };
+    const resolved = resolveEffectiveCoveredCallSimulation(simulationWithAccountBase, { wheelCycles, stockTransfers });
+    return [simulation.id, {
+      simulation: resolved.simulation,
+      coverage: resolved.coverage,
+      basisEvaluation: simulation.optionLegs.length ? calculatePositionBasisEvaluation(resolved.simulation, currentEstimateFxQuote) : undefined,
+    }] as const;
+  }));
+  const referenceProfitTotals = aggregateDashboardReferenceProfit(currentSimulations.map((simulation) => {
+    const context = currentSimulationContexts.get(simulation.id);
+    return {
+      eligible: simulation.status === "open" && simulation.optionLegs.length > 0 && !needsOptionEntryConfirmation(simulation),
+      fallbackCurrency: simulation.accountCurrency,
+      reference: context?.basisEvaluation?.reference ?? { kind: "missing" as const, currency: simulation.accountCurrency },
+    };
+  }));
   const historySimulations = simulations.filter((simulation) => endedStatuses.has(simulation.status));
   const closedLegHistoryItems = !journalFocusSimulationId ? getClosedSyntheticLegHistoryItems(simulations) : [];
   const exitOrderReviews = getSaxoExitOrderReviews(simulations, saxoOrders);
@@ -324,13 +381,8 @@ export function Dashboard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-bold text-slate-950">建玉ダッシュボード</h2>
-          <span
-            className={`rounded px-2 py-0.5 text-xs font-bold ${
-              workspace === "demo" ? "bg-sky-100 text-sky-800" : "bg-red-100 text-red-800"
-            }`}
-          >
-            {workspace === "demo" ? "DEMO 実取引ではありません" : "REAL 実資金管理"}
-          </span>
+          <ReferenceProfitTotal totals={referenceProfitTotals} />
+          {workspace === "demo" ? null : <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-bold text-red-800">REAL 実資金管理</span>}
         </div>
         <span className="text-sm text-slate-500">登録済み {simulations.length}件</span>
       </div>
@@ -410,21 +462,26 @@ export function Dashboard({
         <p className="mt-3 text-xs text-slate-500">N口座の実現損益は米ドル建て・手数料控除後・税引前です。円換算は取得済み為替がある場合だけ参考表示します。</p>
       ) : null}
       {visibleSimulations.length > 0 ? <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[980px] text-sm">
+        <table className="w-full min-w-[1220px] table-fixed text-sm">
+          <colgroup>
+            <col className="w-[6%]" /><col className="w-[6%]" /><col className="w-[5%]" /><col className="w-[13%]" />
+            <col className="w-[15%]" /><col className="w-[8%]" /><col className="w-[10%]" /><col className="w-[11%]" />
+            <col className="w-[13%]" /><col className="w-[4%]" /><col className="w-[6%]" /><col className="w-[3%]" />
+          </colgroup>
           <thead>
             <tr className="border-b border-slate-200 text-left text-slate-500">
               <th className="py-2 pr-3">銘柄</th>
               <th className="py-2 pr-3">状態</th>
               <th className="py-2 pr-3">口座</th>
               <th className="py-2 pr-3">戦略</th>
-              <th className="py-2 pr-3 text-right">契約 / 現在株価</th>
-              <th className="py-2 pr-3">満期</th>
-              <th className="py-2 pr-3 text-right">建玉時の受払</th>
-              <th className="py-2 pr-3 text-right">実績分母 / 保有期間損益率</th>
-              <th className="py-2 pr-3 text-right">損益・参考年率</th>
+              <th className="py-2 pr-2 text-right">契約 / 株価</th>
+              <th className="whitespace-nowrap py-2 pr-2">満期</th>
+              <th className="py-2 pr-2 text-right">建玉時</th>
+              <th className="py-2 pr-2 text-right">分母 / 期間損益率</th>
+              <th className="py-2 pr-2 text-right">損益 / 参考年率</th>
               <th className="py-2 pr-3 text-right">警告</th>
-              <th className="py-2 pr-3">次にやること</th>
-              <th className="py-2 pr-3 text-right">操作</th>
+              <th className="py-2 pr-2">次の操作</th>
+              <th className="py-2 pr-1 text-right">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -492,6 +549,8 @@ availableCashJPY:
               const simulationExitOrderReviews = pendingExitOrderReviews.filter((review) => review.simulationId === simulation.id);
               const simulationConfirmedExitOrderReviews = confirmedExitOrderReviews.filter((review) => review.simulationId === simulation.id);
               const primaryTask = getPrimaryWorkflowTask(simulationWithAccount);
+              const rowPrimaryTask = workflowTasks.find((task) => task.id === primaryTask.id) ?? workflowTasks[0];
+              const rowAdditionalTasks = workflowTasks.filter((task) => task.id !== rowPrimaryTask?.id);
               const closeCompletion = getOptionCloseCompletion(simulationWithAccount);
               const partialCloseSummary = closeCompletion.state === "partial"
                 ? getOptionLegCloseProgress(simulationWithAccount).legs
@@ -512,10 +571,7 @@ availableCashJPY:
               const tickerLabel = getSimulationTickerDisplayLabel(simulation);
               const blockingCount = countableWarnings.filter((warning) => warning.blocking).length;
               const attentionCount = countableWarnings.filter((warning) => !warning.blocking).length;
-              const warningLabel =
-                countableWarnings.length === 0
-                  ? "警告なし"
-                  : `${blockingCount > 0 ? `NG${blockingCount}件` : "NGなし"}・注意${attentionCount}件`;
+              const warningLabel = blockingCount > 0 ? `NG${blockingCount}` : attentionCount > 0 ? `注意${attentionCount}` : "—";
               const actionableWarning = countableWarnings.find((warning) => warning.actionAnchorId);
               const firstVisibleWarning = countableWarnings[0];
               const stockAcquisitionSummary = getStockAcquisitionSummary(simulation);
@@ -619,7 +675,8 @@ availableCashJPY:
                       {journalStatusLabel}
                     </button>
                     {stockAcquisitionSummary ? (
-                      <div className="mt-2 max-w-[260px] rounded-md border border-violet-200 bg-violet-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-violet-950">
+                      <details className="mt-1 max-w-[220px] text-[10px] text-violet-900"><summary className="cursor-pointer">株取得済み</summary>
+                      <div className="rounded-md border border-violet-200 bg-violet-50 px-2 py-1.5 text-[11px] font-semibold leading-5 text-violet-950">
                         <div>現物株取得: {stockAcquisitionSummary.shares}株 @ {stockAcquisitionSummary.price}</div>
                         <div>取得日: {stockAcquisitionSummary.date}</div>
                         <div>口座: {stockAcquisitionSummary.account}</div>
@@ -635,12 +692,12 @@ availableCashJPY:
                             ? "P→N株式移管は記録済みです。現在はN口座で株式保有中です。JSONバックアップを保存し、カバードコールを始める場合はC売り候補を確認します。"
                             : "今回の権利行使反映は完了です。次はJSONバックアップを保存してください。P→N移管を実行した場合のみ、移管記録へ進みます。"}
                         </div>
-                      </div>
+                      </div></details>
                     ) : null}
                   </td>
                   <td className="py-3 pr-3">
-                    <span className={`rounded px-2 py-1 text-xs font-bold ${statusClassName[simulation.status]}`}>
-                      {compositeLifecycle?.label ?? getStatusLabel(simulation.status)}
+                    <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold ${statusClassName[simulation.status]}`} title={compositeLifecycle?.label ?? getStatusLabel(simulation.status)}>
+                      {closeCompletion.state === "partial" ? "一部決済" : compositeLifecycle?.label ?? getStatusLabel(simulation.status)}
                     </span>
                   </td>
                   <td className="py-3 pr-3">
@@ -651,18 +708,11 @@ availableCashJPY:
                   <td className="py-3 pr-3 text-slate-700">
                     <div>{simulation.strategyType === "bear_put_spread" ? "ベア・プット" : verticalDefinition ? `${verticalDefinition.label}・スプレッド` : getStrategyLabel(simulation.strategyType)}</div>
                     {simulation.strategyType === "bear_put_spread" ? <p className="text-[11px] text-slate-500">P{formatCompactStrike(bearPutLong?.strikeUSD)}買い／P{formatCompactStrike(bearPutShort?.strikeUSD)}売り・{bearPutPairs ?? "未確認"}組</p> : null}
-                    {verticalDefinition && simulation.strategyType !== "bear_put_spread" ? <div className="mt-1 text-xs font-semibold text-indigo-700">{verticalDefinition.optionType === "call" ? "C" : "P"}買い／{verticalDefinition.optionType === "call" ? "C" : "P"}売り・2脚一体管理</div> : null}
-                    {bearPutLifecycle ? <div className="mt-1 text-xs font-semibold text-indigo-700">{bearPutLifecycle.label}</div> : null}
-                    {isCompositeOptionStrategy(simulation) ? <div className="mt-1 text-xs font-semibold text-indigo-700">C買い {callLeg?.quantity ?? 0} / P売り {putLeg?.quantity ?? 0}</div> : null}
+                    {verticalDefinition && simulation.strategyType !== "bear_put_spread" ? <div className="mt-0.5 whitespace-nowrap text-[10px] font-semibold text-indigo-700">{verticalDefinition.optionType === "call" ? "C" : "P"}買い / {verticalDefinition.optionType === "call" ? "C" : "P"}売り</div> : null}
+                    {bearPutLifecycle ? <div className="mt-0.5 text-[10px] font-semibold text-indigo-700">{bearPutLifecycle.label}</div> : null}
+                    {isCompositeOptionStrategy(simulation) ? <div className="mt-0.5 whitespace-nowrap text-[10px] font-semibold text-indigo-700">C{callLeg?.quantity ?? 0} / P{putLeg?.quantity ?? 0}</div> : null}
                     {simulation.strategyType === "synthetic_forward" ? (
-                      <div className="mt-1 text-xs text-indigo-700">
-                        <div>ネット約定 {simulation.syntheticForwardTicket?.netFillPriceUSD === undefined ? "未入力" : `${formatUSD(simulation.syntheticForwardTicket.netFillPriceUSD)} / 株`}</div>
-                        <div>実績総手数料 {simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.actualTotalCommissionUSD)} / 建玉時支払額 {simulation.syntheticForwardTicket?.entryCostUSD === undefined ? "未入力" : formatUSD(simulation.syntheticForwardTicket.entryCostUSD)}</div>
-                        <div>{getSyntheticPutAssignmentPolicy(simulation) === "accept" ? "方針: 株を取得できる" : getSyntheticPutAssignmentPolicy(simulation) === "avoid" ? "方針: 株を取得しない・反対売買で閉じる" : "方針未確認"}</div>
-                        {simulation.status === "planned" ? <div>注文時証拠金 {simulation.syntheticForwardTicket?.requiredMarginUSD === undefined ? "未確認" : formatUSD(simulation.syntheticForwardTicket.requiredMarginUSD)}</div> : (
-                          <details className="mt-1 text-[11px] text-slate-600"><summary className="cursor-pointer">建玉開始時の証拠金記録（任意）</summary><div className="mt-1">{simulation.syntheticForwardTicket?.requiredMarginUSD === undefined ? "未記録" : formatUSD(simulation.syntheticForwardTicket.requiredMarginUSD)}。現在の残存P売りの必要証拠金には使いません。</div></details>
-                        )}
-                      </div>
+                      <details className="mt-0.5 text-[10px] text-indigo-700"><summary className="cursor-pointer">詳細</summary><div className="mt-0.5">ネット約定 {simulation.syntheticForwardTicket?.netFillPriceUSD === undefined ? "未確認" : formatUSD(simulation.syntheticForwardTicket.netFillPriceUSD)} / 総手数料 {simulation.syntheticForwardTicket?.actualTotalCommissionUSD === undefined ? "未確認" : formatUSD(simulation.syntheticForwardTicket.actualTotalCommissionUSD)} / 方針 {getSyntheticPutAssignmentPolicy(simulation) ?? "未確認"} / 注文時証拠金 {simulation.syntheticForwardTicket?.requiredMarginUSD === undefined ? "未確認" : formatUSD(simulation.syntheticForwardTicket.requiredMarginUSD)}</div></details>
                     ) : null}
                   </td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold text-slate-700">
@@ -693,7 +743,7 @@ availableCashJPY:
                       </>
                     )}
                   </td>
-                  <td className="py-3 pr-3 text-slate-700">{simulation.expiryDate}</td>
+                  <td className="whitespace-nowrap py-3 pr-2 text-slate-700">{simulation.expiryDate}</td>
                   <td className="numeric-input py-3 pr-3 text-right font-semibold">
                     {bearPutEstimate && !isHistoryRow ? (
                       <>
@@ -817,15 +867,12 @@ availableCashJPY:
                         </>
                       )
                     ) : (
-                      <>
-                        {annualReturnLabel}
-                        {isSyntheticAnnualRateNotApplicable ? <span className="mt-1 block text-left text-[11px] font-medium leading-4 text-slate-500">建玉時ネット額はプレミアム年率として評価しません</span> : null}
-                      </>
+                      <span className="whitespace-nowrap">{annualReturnLabel}</span>
                     )}
                     {isHistoryRow && !isNAccountRow ? <span className="mt-1 block text-[11px] font-semibold text-slate-500">税前 / 税後</span> : null}
                     {!isHistoryRow && premiumDisplay.coveredCallAssignmentEstimate ? (
-                      <span className="mt-2 block rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-5 text-sky-950">
-                        <span className="block font-bold">権利行使時想定</span>
+                      <details className="mt-1 text-[10px] text-sky-900"><summary className="cursor-pointer">権利行使想定</summary>
+                      <span className="block rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-left text-[10px] font-semibold leading-4 text-sky-950">
                         <span className="block text-sky-800">主分母: 取得原価 {formatUSD(premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD)}</span>
                         {premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD !== undefined &&
                         Math.abs(premiumDisplay.coveredCallAssignmentEstimate.currentPriceDenominatorUSD - premiumDisplay.coveredCallAssignmentEstimate.costBasisDenominatorUSD) > 0.005 ? (
@@ -842,10 +889,8 @@ availableCashJPY:
                               : ""}
                           </span>
                         ) : null}
-                        <span className="block text-sky-800">
-                          満期時に株価が権利行使価格以上となり、株式が売却された場合の想定です。実績には含めません。
-                        </span>
                       </span>
+                      </details>
                     ) : null}
                   </td>
                   <td
@@ -854,36 +899,30 @@ availableCashJPY:
                     }`}
                     title="NGは注文前に解消すべき重大警告、注意は確認項目です。"
                   >
-                    <span className="block">{warningLabel}</span>
-                    {firstVisibleWarning ? (
-                      <span className="mt-1 block max-w-[220px] text-left text-[11px] font-semibold leading-4 text-slate-600">
-                        {firstVisibleWarning.message}
-                      </span>
-                    ) : null}
+                    <span className="block" aria-label={countableWarnings.length === 0 ? "警告なし" : warningLabel} title={firstVisibleWarning?.message}>{warningLabel}</span>
                     {actionableWarning ? (
                       <button
                         type="button"
-                        className="mt-1 rounded border border-current px-2 py-1 text-[11px] font-bold hover:bg-white"
+                        aria-label={`${actionableWarning.actionLabel ?? "反対売買判断へ"}: ${actionableWarning.message}`}
+                        className="mt-1 rounded border border-current px-1.5 py-0.5 text-[10px] font-bold hover:bg-white"
                         onClick={(event) => {
                           event.stopPropagation();
                           onWarningAction?.(simulation.id, actionableWarning);
                         }}
                       >
-                        {actionableWarning.actionLabel ?? "反対売買判断へ"}
+                        確認
                       </button>
                     ) : null}
                     {!isHistoryRow &&
                     simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" &&
                     coveredCallCoverage.coveredShares > 0 &&
                     coveredCallCoverage.requiredShares > 0 ? (
-                      <span className="mt-2 block rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-left text-[11px] font-semibold leading-4 text-emerald-800">
-                        カバー済み: N口座{coveredCallCoverage.coveredShares}株 / 必要{coveredCallCoverage.requiredShares}株
-                      </span>
+                      <details className="mt-1 text-[10px] text-emerald-800"><summary className="cursor-pointer">カバー済み {coveredCallCoverage.coveredShares}/{coveredCallCoverage.requiredShares}株</summary><span className="block">N口座の株式カバー状況</span></details>
                     ) : null}
                   </td>
                   <td className="py-3 pr-3">
-                    {partialCloseSummary ? <p className="mb-1 text-[11px] font-semibold leading-4 text-slate-600">一部決済済み: {partialCloseSummary}</p> : null}
-                    {simulationExitOrderReviews.map((review) => {
+                    {partialCloseSummary ? <p className="mb-1 whitespace-nowrap text-[10px] font-semibold leading-4 text-slate-600" title={`一部決済済み: ${partialCloseSummary}`}>一部決済: {partialCloseSummary}</p> : null}
+                    {simulationExitOrderReviews.length > 0 ? <details className="text-[10px]"><summary className="cursor-pointer">未約定注文 {simulationExitOrderReviews.length}件</summary><div className="mt-1">{simulationExitOrderReviews.map((review) => {
                       const prices = [review.takeProfitOrder?.price, review.upperExitOrder?.stopPrice ?? review.upperExitOrder?.price]
                         .filter((price): price is number => typeof price === "number" && Number.isFinite(price) && price > 0)
                         .map((price) => formatUSD(price));
@@ -905,15 +944,8 @@ availableCashJPY:
                           </button>
                         </div>
                       );
-                    })}
-                    {simulationConfirmedExitOrderReviews.map((review) => (
-                      <span
-                        key={`${review.simulationId}:${review.legId}:confirmed`}
-                        className="mb-1 inline-flex rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-800"
-                      >
-                        Saxo決済注文照合済み
-                      </span>
-                    ))}
+                    })}</div></details> : null}
+                    {simulationConfirmedExitOrderReviews.length > 0 ? <span className="mb-1 inline-flex whitespace-nowrap rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">注文照合済み {simulationConfirmedExitOrderReviews.length}件</span> : null}
                     {!isHistoryRow && (simulation.strategyType === "bear_put_spread" || verticalDefinition) ? (
                       <button type="button" className="rounded-md border border-teal-300 bg-teal-50 px-2 py-1 text-left text-xs font-bold text-teal-900 hover:bg-teal-100" onClick={(event) => { event.stopPropagation(); onCurrentEstimateAction?.(simulation.id, bearPutEstimate?.kind === "available" ? bearPutEstimate.evaluatedLegs[0]?.legId : verticalEstimate?.kind === "available" ? verticalEstimate.evaluatedLegIds[0] : undefined, "exit_price"); }}>
                         戦略の決済を確認
@@ -938,7 +970,15 @@ availableCashJPY:
                       </span>
                     ) : (
                       <div className="grid gap-1">
-                        {workflowTasks.map((workflowTask) => (
+                        {rowPrimaryTask ? <button
+                            key={rowPrimaryTask.id}
+                            type="button"
+                            aria-label={`${rowPrimaryTask.label}: ${rowPrimaryTask.detail}`}
+                            className={`rounded-md border px-1.5 py-1 text-left text-[11px] font-bold ${rowPrimaryTask.severity === "danger" ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100" : rowPrimaryTask.severity === "warning" ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100" : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-white"}`}
+                            title={rowPrimaryTask.detail}
+                            onClick={(event) => { event.stopPropagation(); onWorkflowTaskAction?.(simulation.id, rowPrimaryTask); }}
+                          >{compactWorkflowActionLabel(rowPrimaryTask.label)}</button> : null}
+                        {rowAdditionalTasks.length > 0 ? <details className="text-[10px]"><summary className="cursor-pointer whitespace-nowrap text-slate-500">他の確認 {rowAdditionalTasks.length}件</summary><div className="mt-1 grid gap-1">{rowAdditionalTasks.map((workflowTask) => (
                           <button
                             key={workflowTask.id}
                             type="button"
@@ -957,13 +997,15 @@ availableCashJPY:
                           >
                             {workflowTask.label}
                           </button>
-                        ))}
+                        ))}</div></details> : null}
                       </div>
                     )}
                   </td>
-                  <td className="py-3 pr-3 text-right">
+                  <td className="py-2 pr-1 text-right">
+                    <div className="flex flex-col items-end gap-1">
                     <button
-                      className="mr-2 inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
+                      aria-label={`${tickerLabel}を編集`}
+                      className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-1.5 text-slate-600 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
                       title="この建玉を編集"
                       onClick={(event) => {
                         event.stopPropagation();
@@ -973,7 +1015,8 @@ availableCashJPY:
                       <Pencil size={15} />
                     </button>
                     <button
-                      className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
+                      aria-label={`${tickerLabel}を削除`}
+                      className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-1.5 text-slate-600 hover:border-red-300 hover:bg-red-50 hover:text-red-700"
                       title="この建玉を削除"
                       disabled={Boolean(simulation.strategyGroupId)}
                       onClick={(event) => {
@@ -983,6 +1026,7 @@ availableCashJPY:
                     >
                       <Trash2 size={15} />
                     </button>
+                    </div>
                   </td>
                 </tr>
                 </Fragment>
