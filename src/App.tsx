@@ -65,6 +65,7 @@ import {
   resolveOrderActivityCloseMatch,
   resolveSaxoPositionSymbol,
   resolveSaxoPositionSymbolResolution,
+  resolveSaxoCompositeCorrectionCandidate,
   type OpeningHistoryFetchState,
   type SaxoSyntheticForwardPair,
   type SaxoApiOrderSnapshot,
@@ -584,7 +585,9 @@ export default function App() {
       const latest=useOptionsStore.getState().simulations;
       const next=latest.map((simulation) => {
         const original=originals.get(simulation.id);
-        if (!original || simulation.fxRateJPY!==original.fxRateJPY || simulation.fxRateJPY===quote.rate) return simulation;
+        const originalFx = original && Number.isFinite(original.fxRateJPY) ? original.fxRateJPY : undefined;
+        const currentFx = Number.isFinite(simulation.fxRateJPY) ? simulation.fxRateJPY : undefined;
+        if (!original || currentFx !== originalFx || currentFx === quote.rate) return simulation;
         return { ...simulation, fxRateJPY:quote.rate };
       });
       const updated=next.filter((s,i)=>s!==latest[i]).length;
@@ -613,14 +616,20 @@ export default function App() {
     setBulkStockPricePreview(null);
     const currentSimulations = useOptionsStore.getState().simulations.filter(simulation => !simulationId || simulation.id === simulationId);
     const targets = getCurrentOptionPriceTargets(currentSimulations);
-    const stockTargets = getCurrentStockPriceTargets(currentSimulations);
+    const correctionSimulationIds = new Set(currentSimulations
+      .filter((simulation) => Boolean(resolveSaxoCompositeCorrectionCandidate(simulation, saxoPositionCandidates)))
+      .map((simulation) => simulation.id));
+    const stockTargets = getCurrentStockPriceTargets(currentSimulations)
+      .filter((target) => !target.simulationIds.some((id) => correctionSimulationIds.has(id)));
     const requestId = ++bulkPriceRequestIdRef.current;
     const requestWorkspace = activeWorkspace;
     setBulkPricePreviewWorkspace(requestWorkspace);
     if (targets.length === 0 && stockTargets.length === 0) {
       setBulkOptionPricePreview([]);
       setBulkStockPricePreview([]);
-      const message = "価格取得対象の建玉中の残存脚・株式はありません。";
+      const message = correctionSimulationIds.size > 0
+        ? "原資産銘柄の訂正確認が必要な建玉は、確認後に現在株価を取得します。既存価格は変更していません。"
+        : "価格取得対象の建玉中の残存脚・株式はありません。";
       setBulkOptionPriceMessage(message);
       return message;
     }
@@ -670,9 +679,28 @@ export default function App() {
       const rows = positionResult?.status === "fulfilled" && positionResult.value.coverage?.status !== "partial"
         ? attachPositionValuations(currentSimulations,quoteRows,positionResult.value.positions,positionResult.value.environment,valuationBatchId)
         : quoteRows.map(row=>({...row,valuationReason:"Saxo評価の取得失敗・全件照合未完了"}));
-      const stockRows = stockResults.map((result, index) => result.status === "fulfilled"
-        ? createCurrentStockPricePreviewRow(result.value.target, result.value.quote)
-        : createCurrentStockPricePreviewRow(stockTargets[index], undefined, result.reason instanceof Error ? result.reason.message : "取得理由不明"));
+      const verifiedUnderlyingBySimulation = new Map<string, string>();
+      if (positionResult?.status === "fulfilled" && positionResult.value.coverage?.status !== "partial") {
+        for (const simulation of currentSimulations) {
+          const symbols = simulation.optionLegs.map((leg) => positionResult.value.positions.find((position) =>
+            position.kind === "option" && position.uic === leg.saxoUic && position.optionType === leg.type &&
+            position.side === (leg.side === "buy" ? "long" : "short") && position.strike !== undefined &&
+            Math.abs(position.strike - leg.strikeUSD) < 0.001 && position.expiry === leg.expiryDate,
+          )?.underlyingSymbol?.trim().toUpperCase()).filter((symbol): symbol is string => Boolean(symbol));
+          const unique = [...new Set(symbols)];
+          if (unique.length === 1) verifiedUnderlyingBySimulation.set(simulation.id, unique[0]);
+        }
+      }
+      const stockRows = stockResults.map((result, index) => {
+        const row = result.status === "fulfilled"
+          ? createCurrentStockPricePreviewRow(result.value.target, result.value.quote)
+          : createCurrentStockPricePreviewRow(stockTargets[index], undefined, result.reason instanceof Error ? result.reason.message : "取得理由不明");
+        const verifiedSymbols = row.simulationIds.map((id) => verifiedUnderlyingBySimulation.get(id)).filter(Boolean);
+        const uniqueVerified = [...new Set(verifiedSymbols)];
+        return uniqueVerified.length === 1 && uniqueVerified[0] !== row.ticker
+          ? { ...row, status: "unavailable" as const, reason: `Saxo確認済み原資産 ${uniqueVerified[0]} と保存銘柄 ${row.ticker} が一致しないため、訂正確認後に取得します。` }
+          : row;
+      });
       setBulkOptionPricePreview(rows);
       setBulkStockPricePreview(stockRows);
       setBulkOptionPriceProgress({ total: targets.length + stockTargets.length, completed: rows.length + stockRows.length });
@@ -815,6 +843,23 @@ export default function App() {
     window.setTimeout(() => {
       candidatePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
+  };
+  const confirmSaxoCompositeCorrection = (candidate: import("@/features/saxo/saxoAccountSync").SaxoCompositeCorrectionCandidate) => {
+    const current = useOptionsStore.getState().simulations.find((simulation) => simulation.id === candidate.simulationId);
+    if (!current) return;
+    const freshCandidate = resolveSaxoCompositeCorrectionCandidate(current, saxoPositionCandidates);
+    if (!freshCandidate || freshCandidate.ticker !== candidate.ticker || freshCandidate.positionIds.join("|") !== candidate.positionIds.join("|")) {
+      setQuoteStatus("Saxo建玉の照合結果が更新されたため、古い訂正候補は保存しません。再取得してから確認してください。");
+      return;
+    }
+    const currentLegIds = current.optionLegs.map((leg) => leg.id).sort().join("|");
+    const candidateLegIds = [...candidate.legIds].sort().join("|");
+    if (current.ticker !== candidate.fromTicker || current.strategyType !== candidate.fromStrategyType || currentLegIds !== candidateLegIds) {
+      setQuoteStatus("この分類候補は古くなっています。現在の建玉を再取得してから確認してください。保存は行っていません。");
+      return;
+    }
+    upsertSimulation({ ...current, ticker: candidate.ticker, strategyType: candidate.strategyType, underlyingName: candidate.ticker, currentPriceUSD: Number.NaN });
+    setQuoteStatus(`${candidate.ticker} の複合建玉分類を確認済みとして保存しました。約定・台帳・現金は変更していません。`);
   };
   const createSimulationFromSaxoPosition = (
     position: SaxoApiPositionSnapshot,
@@ -2109,6 +2154,7 @@ export default function App() {
     onCreateHistoryDraft: applySaxoHistoryDraftToSelectedSimulation,
     onCreateAssignmentDraft: applySaxoAssignmentDraftToSelectedSimulation,
     onCreatePositionDraft: createSimulationFromSaxoPosition,
+    onConfirmCompositeCorrection: confirmSaxoCompositeCorrection,
     onCreateSyntheticForwardDraft: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[], options?: { forceEntryConfirmation?: boolean }) => createSyntheticForwardFromSaxoPositions(pair, historyItems, true, options?.forceEntryConfirmation),
     onRecoverSyntheticForwardDraft: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[]) => createSyntheticForwardFromSaxoPositions(pair, historyItems, false),
     onLinkPositionToExisting: linkSaxoPositionToExistingSimulation,

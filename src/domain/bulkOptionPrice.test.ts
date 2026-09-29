@@ -72,4 +72,12 @@ describe("generic bulk option price contract", () => {
     expect(stale[0]).toMatchObject({ currentPriceUSD: 101, optionLegs: [{ closeCostUSD: 3.5 }] });
     expect(stale[1].currentPriceUSD).toBe(100);
   });
+  it("treats an invalid saved stock price as missing for CAS and avoids invalid option snapshots", () => {
+    const original = { ...standalone(), currentPriceUSD: Number.NaN };
+    const optionTarget = getCurrentOptionPriceTargets([original])[0];
+    const optionRow = createCurrentOptionPricePreviewRow(optionTarget, quote({ bid: 4.05 }));
+    const updated = applyCurrentPricePreview([original], [optionRow], [], { capturedAt: "2026-09-29T00:00:00Z" });
+    expect(updated[0].optionLegs[0].closeCostUSD).toBe(4.05);
+    expect(updated[0].optionLegs[0].valueSnapshots).toBeUndefined();
+  });
 });

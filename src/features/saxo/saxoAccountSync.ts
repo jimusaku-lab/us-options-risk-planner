@@ -1632,17 +1632,51 @@ function hasOptionShapeDiff(position: SaxoApiPositionSnapshot, leg: OptionLeg): 
 
 export type SaxoPositionSymbolResolution = { symbol?: string; sourceConflict: boolean };
 
+export type SaxoCompositeCorrectionCandidate = {
+  simulationId: string;
+  fromTicker: string;
+  fromStrategyType: TradeSimulation["strategyType"];
+  strategyType: "bull_call_spread";
+  ticker: string;
+  accountCode: SaxoAccountCode;
+  underlyingIdentity: string;
+  legIds: string[];
+  positionIds: string[];
+  reason: string;
+};
+
+export function resolveSaxoCompositeCorrectionCandidate(simulation: TradeSimulation, positions: SaxoApiPositionSnapshot[]): SaxoCompositeCorrectionCandidate | undefined {
+  if (simulation.optionLegs.length !== 2 || simulation.accountCode !== "N" || simulation.stockPosition && simulation.stockPosition.shares > 0) return undefined;
+  const buy = simulation.optionLegs.find((leg) => leg.type === "call" && leg.side === "buy");
+  const sell = simulation.optionLegs.find((leg) => leg.type === "call" && leg.side === "sell");
+  const expiry = buy?.expiryDate;
+  const date = expiry ? new Date(`${expiry}T00:00:00Z`) : new Date(Number.NaN);
+  if (!buy || !sell || buy.expiryDate !== sell.expiryDate || !expiry || !/^\d{4}-\d{2}-\d{2}$/.test(expiry) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== expiry || !Number.isFinite(buy.strikeUSD) || !Number.isFinite(sell.strikeUSD) || buy.strikeUSD >= sell.strikeUSD || buy.quantity <= 0 || buy.quantity !== sell.quantity) return undefined;
+  const found = [buy, sell].map((leg) => positions.filter((position) => position.kind === "option" && position.accountAssignment === "N" && position.side === (leg.side === "buy" ? "long" : "short") && position.optionType === "call" && position.uic === leg.saxoUic && position.expiry === expiry && position.strike !== undefined && Math.abs(position.strike - leg.strikeUSD) < 0.001 && Number.isFinite(position.quantity) && Math.abs(Math.abs(position.quantity!) - leg.quantity) < 0.0001));
+  if (found.some((items) => items.length !== 1)) return undefined;
+  const [buyPosition, sellPosition] = found.map((items) => items[0]);
+  const savedKeys = simulation.optionLegs.map((leg) => leg.saxoAccountKey).filter(Boolean);
+  if (!buyPosition?.accountKey || buyPosition.accountKey !== sellPosition?.accountKey || savedKeys.some((key) => key !== buyPosition.accountKey) || !buyPosition.underlyingIdentity || buyPosition.underlyingIdentity !== sellPosition?.underlyingIdentity || !buyPosition.underlyingSymbol || buyPosition.underlyingSymbol !== sellPosition?.underlyingSymbol || simulation.strategyType === "bull_call_spread" && simulation.ticker === buyPosition.underlyingSymbol) return undefined;
+  return { simulationId: simulation.id, fromTicker: simulation.ticker, fromStrategyType: simulation.strategyType, strategyType: "bull_call_spread", ticker: buyPosition.underlyingSymbol, accountCode: "N", underlyingIdentity: buyPosition.underlyingIdentity, legIds: [buy.id, sell.id], positionIds: [buyPosition.positionId ?? buyPosition.id, sellPosition.positionId ?? sellPosition.id], reason: "確認済み両脚の原資産一致による分類訂正候補です。" };
+}
+
 export function resolveSaxoPositionSymbolResolution(position: SaxoApiPositionSnapshot, simulations: TradeSimulation[] = []): SaxoPositionSymbolResolution {
   const directText = position.symbol?.trim() ?? "";
   const directTicker = directText ? parseLikelyTicker(directText) : undefined;
   const direct = normalizeSymbol(directText);
   const normalizedDirect = directTicker ?? (direct && /^[A-Z][A-Z0-9.]{0,9}$/.test(direct) ? direct : undefined);
 
-  const textCandidates = [position.underlyingSymbol, position.instrumentCode, position.underlyingName, position.displayName].filter(
+  const verifiedUnderlyingCandidates = (position.underlyingSymbol?.trim() ? [position.underlyingSymbol] : [position.underlyingName]).filter(
     (value): value is string => Boolean(value?.trim()),
   );
-  const resolvedTextCandidates = textCandidates.map((candidate) => parseLikelyTicker(candidate)).filter((value): value is string => Boolean(value));
-  if (normalizedDirect && resolvedTextCandidates.some((candidate) => candidate !== normalizedDirect)) return { sourceConflict: true };
+  const resolvedUnderlying = [...new Set(verifiedUnderlyingCandidates.map((candidate) => parseLikelyTicker(candidate)).filter((value): value is string => Boolean(value)))];
+  if (resolvedUnderlying.length > 1) return { sourceConflict: true };
+  if (resolvedUnderlying.length === 1) {
+    if (normalizedDirect && normalizedDirect !== resolvedUnderlying[0] && !(position.kind === "option" && position.underlyingIdentity)) return { sourceConflict: true };
+    return { symbol: resolvedUnderlying[0], sourceConflict: false };
+  }
+  const textCandidates = [position.instrumentCode, position.displayName].filter((value): value is string => Boolean(value?.trim()));
+  if (position.kind === "option" && normalizedDirect && position.instrumentCode?.includes(":")) return { sourceConflict: true };
   if (normalizedDirect) return { symbol: normalizedDirect, sourceConflict: false };
   for (const candidate of textCandidates) {
     const parsed = parseLikelyTicker(candidate);

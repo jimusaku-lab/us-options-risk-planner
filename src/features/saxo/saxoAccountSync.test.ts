@@ -32,6 +32,7 @@ import {
   resolveSaxoHistoryOptionLegMatch,
   resolveSaxoPositionSymbol,
   resolveSaxoPositionSymbolResolution,
+  resolveSaxoCompositeCorrectionCandidate,
   resolveOpeningExecution,
   resolveEntryHistoryEvidence,
   hasAppliedSaxoSnapshot,
@@ -63,6 +64,25 @@ const pAccount: AccountState = {
 };
 
 describe("Saxo read-only account sync", () => {
+  it("offers an explicit anonymous composite correction without mutating the simulation", () => {
+    const simulation: TradeSimulation = {
+      id: "sim-anon", name: "anonymous", ticker: "BROKER", strategyType: "covered_call", status: "open",
+      accountCode: "N", accountEnvironment: "PROD_N_USD_SETTLEMENT", accountCurrency: "USD", entryDate: "2026-08-01", expiryDate: "2027-01-15", dte: 100,
+      fxRateJPY: 150, currentPriceUSD: Number.NaN, stockPosition: null, brokerMarginJPY: 0, marginBufferMultiplier: 1, denominatorMode: "cash_secured", taxProfileId: "japan_derivative_separate_tax_user_confirm",
+      optionLegs: [
+        { id: "call-buy", type: "call", side: "buy", strikeUSD: 100, premiumUSD: 4, quantity: 1, expiryDate: "2027-01-15", saxoUic: 101, saxoAccountKey: "acct-anon" },
+        { id: "call-sell", type: "call", side: "sell", strikeUSD: 120, premiumUSD: 2, quantity: 1, expiryDate: "2027-01-15", saxoUic: 102, saxoAccountKey: "acct-anon" },
+      ],
+    };
+    const positions: SaxoApiPositionSnapshot[] = [
+      { id: "pos-buy", accountKey: "acct-anon", accountAssignment: "N", accountCode: "N", kind: "option", assetType: "StockOption", symbol: "BROKER-C100", underlyingSymbol: "BASE", underlyingIdentity: "uic:900", side: "long", optionType: "call", strike: 100, expiry: "2027-01-15", quantity: 1, uic: 101, missingFields: [], fetchedAt: "2026-08-01T00:00:00Z" },
+      { id: "pos-sell", accountKey: "acct-anon", accountAssignment: "N", accountCode: "N", kind: "option", assetType: "StockOption", symbol: "BROKER-C120", underlyingSymbol: "BASE", underlyingIdentity: "uic:900", side: "short", optionType: "call", strike: 120, expiry: "2027-01-15", quantity: 1, uic: 102, missingFields: [], fetchedAt: "2026-08-01T00:00:00Z" },
+    ];
+    expect(resolveSaxoCompositeCorrectionCandidate(simulation, positions)).toMatchObject({ ticker: "BASE", strategyType: "bull_call_spread", fromTicker: "BROKER", fromStrategyType: "covered_call" });
+    expect(resolveSaxoCompositeCorrectionCandidate({ ...simulation, ticker: "BASE", strategyType: "bull_call_spread" }, positions)).toBeUndefined();
+    expect(resolveSaxoCompositeCorrectionCandidate(simulation, positions.map((position, index) => ({ ...position, underlyingIdentity: index === 0 ? "uic:901" : position.underlyingIdentity })))).toBeUndefined();
+    expect(resolveSaxoCompositeCorrectionCandidate(simulation, positions.map((position, index) => ({ ...position, accountKey: index === 0 ? "acct-other" : position.accountKey })))).toBeUndefined();
+  });
   it("groups a bear put spread only by explicit shared multi-leg parent evidence", () => {
     const base = { accountKey: "acct", accountAssignment: "N", accountCode: "N", assetType: "StockOption", kind: "option", optionType: "put", expiry: "2026-10-02", quantity: 1, contractSize: 100, underlyingIdentity: "uic:1:stock", underlyingSymbol: "TEST", currency: "USD", missingFields: [] as string[], fetchedAt: "2026-09-12T00:00:00Z" } as const;
     const long = { ...base, id: "long", side: "long", strike: 100, multiLegOrderId: "parent-anon" } as SaxoApiPositionSnapshot;

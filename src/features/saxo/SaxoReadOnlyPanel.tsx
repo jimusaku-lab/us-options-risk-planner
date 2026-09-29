@@ -53,6 +53,7 @@ import {
   resolveSaxoHistoryUnderlyingSymbol,
   resolveSaxoPositionSymbol,
   resolveSaxoPositionSymbolResolution,
+  resolveSaxoCompositeCorrectionCandidate,
   type OpeningHistoryFetchState,
   type SaxoAccountMapping,
   type SaxoApiAccount,
@@ -60,6 +61,7 @@ import {
   type SaxoApiOrderSnapshot,
   type SaxoApiPositionSnapshot,
   type SaxoApiStatus,
+  type SaxoCompositeCorrectionCandidate,
   type SaxoConfigStatus,
   type SaxoSetupGuidance,
   type SaxoMappedCode,
@@ -164,6 +166,7 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft,
   onCreateAssignmentDraft,
   onCreatePositionDraft,
+  onConfirmCompositeCorrection,
   strategyLedger,
   onCommitSpread,
   onCreateSyntheticForwardDraft,
@@ -197,6 +200,7 @@ export function SaxoReadOnlyPanel({
   onCreateHistoryDraft?: (item: SaxoHistoryDiscoveryItem) => { simulationId?: string; closeExecutionId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreateAssignmentDraft?: (item: SaxoHistoryDiscoveryItem, stockItem?: SaxoHistoryDiscoveryItem) => { simulationId?: string; errorMessage?: string; diagnostics?: string; warningMessage?: string } | void;
   onCreatePositionDraft?: (position: SaxoApiPositionSnapshot, historyItems?: SaxoHistoryDiscoveryItem[], historyFetchState?: OpeningHistoryFetchState) => void;
+  onConfirmCompositeCorrection?: (candidate: SaxoCompositeCorrectionCandidate) => void;
   strategyLedger?: StrategyLedger;
   onCommitSpread?: (prepared: PreparedStrategyImport, requestRevision: number) => Promise<{ reasons?: string[] }>;
   onCreateSyntheticForwardDraft?: (pair: SaxoSyntheticForwardPair, historyItems?: SaxoHistoryDiscoveryItem[], options?: { forceEntryConfirmation?: boolean }) => void;
@@ -350,6 +354,12 @@ export function SaxoReadOnlyPanel({
       ignoredPositionIds.includes(position.id) ? { ...position, accountAssignment: "ignored" as const, accountCode: undefined } : position,
     );
   }, [ignoredPositionIds, positions, workspaceMappings]);
+  const compositeCorrectionCandidates = useMemo(
+    () => simulations
+      .map((simulation) => resolveSaxoCompositeCorrectionCandidate(simulation, mappedPositions))
+      .filter((candidate): candidate is SaxoCompositeCorrectionCandidate => Boolean(candidate)),
+    [mappedPositions, simulations],
+  );
 
   const mappedOrders = useMemo(
     () => applyOrderAccountMappings(orders, workspaceMappings),
@@ -1282,6 +1292,17 @@ export function SaxoReadOnlyPanel({
               <h3 className="font-bold">一部の明細は、新しいスプレッドにまとめていません</h3>
               <p className="mt-1 text-xs">現在の保有分を特定できないためです。元の明細は残しています。重複を削除したり、数量を書き換えたりする必要はありません。</p>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">{spreadIssues.map(issue => <li key={`${issue.code}:${issue.label}`}>{issue.label}: {issue.reason}</li>)}</ul>
+            </section> : null}
+            {onConfirmCompositeCorrection && compositeCorrectionCandidates.length ? <section className="rounded border border-amber-300 bg-amber-50 p-3 text-sm" aria-label="既存複合建玉の確認候補">
+              <h3 className="font-bold text-amber-950">既存複合建玉の確認候補</h3>
+              <p className="mt-1 text-xs text-amber-900">Saxoの確認済み脚を照合した訂正候補です。自動保存せず、確認した分類だけを変更します。約定・台帳・現金は変更しません。</p>
+              {compositeCorrectionCandidates.map((candidate) => <div key={candidate.simulationId} className="mt-2 flex flex-wrap items-center justify-between gap-3 rounded border border-amber-200 bg-white px-3 py-2">
+                <div>
+                  <p className="font-semibold">{candidate.fromTicker} / {candidate.fromStrategyType} → {candidate.ticker} / {candidate.strategyType}</p>
+                  <p className="text-xs text-slate-600">{candidate.reason}</p>
+                </div>
+                <button type="button" className="rounded bg-amber-700 px-3 py-2 text-xs font-semibold text-white" onClick={() => onConfirmCompositeCorrection(candidate)}>この訂正候補を確認して保存</button>
+              </div>)}
             </section> : null}
             <ReflectionPendingSummary
               ref={pendingSummaryRef}
