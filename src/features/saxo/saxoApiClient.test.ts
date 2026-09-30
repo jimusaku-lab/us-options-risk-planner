@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchSaxoOptionPremiumCandidate } from "./saxoApiClient";
+import { fetchSaxoOptionPremiumCandidate, fetchSaxoOptionPremiumCandidatesPreview, resolveLocalHelperBase } from "./saxoApiClient";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -7,6 +7,10 @@ afterEach(() => {
 });
 
 describe("Saxo API client", () => {
+  it("rejects non-loopback helper bases", () => {
+    expect(resolveLocalHelperBase("https://example.invalid")).toBe("http://127.0.0.1:18787");
+    expect(resolveLocalHelperBase("http://127.0.0.1:18787/")).toBe("http://127.0.0.1:18787");
+  });
   it("sends existing option UIC identifiers for premium candidate lookup", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
       ok: true,
@@ -92,5 +96,27 @@ describe("Saxo API client", () => {
       uic: 54341397,
       assetType: "StockOption",
     })).rejects.toThrow("Saxo APIレート制限に達しました");
+  });
+
+  it("uses the read-only local helper for bulk preview without persisting anything", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ fetchedAt: "2026-08-15T00:00:00.000Z", readOnly: true, results: [] }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchSaxoOptionPremiumCandidatesPreview([{
+      targetId: "fixture-target",
+      symbol: "ABC",
+      expiry: "2027-01-15",
+      strike: 100,
+      optionType: "call",
+      uic: 123,
+    }]);
+    const requestUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(requestUrl.hostname).toBe("127.0.0.1");
+    expect(requestUrl.port).toBe("18787");
+    expect(requestUrl.pathname).toBe("/api/saxo/options/premium-candidates/preview");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ targets: [{ targetId: "fixture-target" }] });
+    expect(window.localStorage.length).toBe(0);
   });
 });

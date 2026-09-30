@@ -31,7 +31,7 @@
 ## 既知制約
 
 - サンプルは合成データです。
-- 公開版は証券会社やローカル取得基盤へ直接接続しません。
+- 公開版は証券会社へ直接接続しません。利用者が自身のPC上でSaxo read-only local helperを起動した場合に限り、静的UIからそのloopback helperを呼び出します（公開サーバーは中継しません）。
 - 実オプション相場のBid/Ask/OI/Volume/IV/Greeks成功系は、ローカル版でUSオプション相場権限付与後に再確認します。
 - Lastのみの価格は保守価格として扱いません。
 - 複数脚コンボ、シンセティック、上級戦略は手動確認レビュー止まりです。
@@ -54,3 +54,6 @@
 - [v1 RC QAチェックリスト](public-screening-release-checklist-2026-07-06.md)
 - [公開版スクリーニング利用ガイド](public-screening-user-guide-2026-07-06.md)
 - [us_options_screening_package.v1 仕様メモ](public-screening-package-spec-2026-07-06.md)
+# 2026-09-30 R19: 公開版からローカルhelperへ接続
+
+GitHub Pages版は静的UIのまま、必要な利用者だけが自身のPCで起動したSaxo read-only local helper (`127.0.0.1:18787`)へ接続できます。公開サーバーへ認証情報やSaxoデータを送るproxyはありません。helperの固定Origin/CORS許可、接続状態、read-only capabilityを確認してから候補をpreviewし、ユーザーが明示的に確認・反映した場合だけ保存します。準備は[友人向けSaxo API接続準備ガイド](友人向けSaxo%20API接続準備ガイド.md)を参照してください。password、2FA、AppKey/Secret、token、口座識別子、未マスクrawをアプリやGemini等の外部AIへ貼り付けないでください。

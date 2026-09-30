@@ -4,6 +4,10 @@
 
 このアプリは発注、注文変更、注文取消を行いません。Saxoの値を読み取り、アプリ内の手入力候補や差分プレビューとして使うだけです。
 
+GitHub Pages版は静的UIです。Saxo read-onlyを使う場合も、公開サーバーを経由せず、同じPCで利用者が起動した `127.0.0.1:18787` のローカルhelperへ固定Originで接続します。helperが起動していない、接続状態またはbulk capabilityが確認できない場合は価格取得を有効化しません。候補価格は明示的な確認・反映まで保存されません。
+
+password、2FA、AppKey/Secret、access token、AccountKey/UIC等の識別子、未マスクのraw応答はGitHub、ChatGPT、Codex、メール、チャット、Gemini等の外部AIへ貼り付けないでください。相談時は銘柄・口座・ID・金額を匿名化した一般情報だけを使ってください。
+
 ## 1. 何を作るのか
 
 Saxo OpenAPIを使うには、Saxo Developer PortalでOpenAPI applicationを作ります。

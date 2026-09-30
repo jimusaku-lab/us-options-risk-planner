@@ -404,7 +404,6 @@ export default function App() {
     };
   }, [activeWorkspace]);
   useEffect(() => {
-    if (import.meta.env.GITHUB_PAGES === "true") { setBulkOptionPriceCapability("unavailable"); return; }
     let cancelled = false;
     fetchSaxoStatus().then((status) => {
       if (!cancelled) setBulkOptionPriceCapability(status.connected && status.capabilities?.bulkOptionPremiumPreview ? "available" : "unavailable");
@@ -637,12 +636,6 @@ export default function App() {
     setBulkOptionPriceMessage("株価とオプション候補価格をread-onlyで取得中...");
     setBulkOptionPriceLoading(true);
     try {
-      if (import.meta.env.GITHUB_PAGES === "true") {
-        const message = "公開版ではSaxo read-only価格取得を利用できません。保存価格は変更していません。";
-        setBulkOptionPriceCapability("unavailable");
-        setBulkOptionPriceMessage(message);
-        return message;
-      }
       // Recheck the runtime contract after reconnect, not just at application startup.
       const status = await fetchSaxoStatus();
       if (requestId !== bulkPriceRequestIdRef.current || requestWorkspace !== useOptionsStore.getState().activeWorkspace) return "価格取得はキャンセルされました。";
@@ -2173,7 +2166,7 @@ export default function App() {
     onDownloadJson: downloadJson,
     onPendingStateChange: setSaxoHasPendingReflection,
     hasUnappliedCurrentPricePreview,
-    onPreviewCurrentPrices: import.meta.env.GITHUB_PAGES === "true" ? undefined : previewBulkOptionPrices,
+    onPreviewCurrentPrices: previewBulkOptionPrices,
     oauthReconnectReturn: oauthReturnPending,
     bulkFetchButtonRef: saxoBulkFetchButtonRef,
   };
@@ -2282,7 +2275,7 @@ export default function App() {
                 onBulkOptionPriceReferenceConfirmedChange={setBulkOptionPriceReferenceConfirmed}
                 onBulkOptionPriceDialogClose={closeBulkOptionPriceDialog}
                 bulkOptionPriceAvailable={bulkOptionPriceAvailable}
-                onFetchBulkOptionPrices={import.meta.env.GITHUB_PAGES === "true" ? undefined : previewBulkOptionPrices}
+                onFetchBulkOptionPrices={previewBulkOptionPrices}
                 onApplyBulkOptionPrices={applyBulkOptionPrices}
                 journalFocusSimulationId={journalFocusSimulationId}
                 onClearJournalFocus={() => setJournalFocusSimulationId(null)}
@@ -2571,7 +2564,7 @@ export default function App() {
               onBulkOptionPriceReferenceConfirmedChange={setBulkOptionPriceReferenceConfirmed}
               onBulkOptionPriceDialogClose={closeBulkOptionPriceDialog}
               bulkOptionPriceAvailable={bulkOptionPriceAvailable}
-              onFetchBulkOptionPrices={import.meta.env.GITHUB_PAGES === "true" ? undefined : previewBulkOptionPrices}
+              onFetchBulkOptionPrices={previewBulkOptionPrices}
               onApplyBulkOptionPrices={applyBulkOptionPrices}
               journalFocusSimulationId={journalFocusSimulationId}
               onClearJournalFocus={() => setJournalFocusSimulationId(null)}

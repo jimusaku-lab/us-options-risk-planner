@@ -9,9 +9,15 @@ import type {
   SaxoOptionPremiumCandidate,
 } from "@/features/saxo/saxoAccountSync";
 
-const SAXO_LOCAL_API_BASE = import.meta.env.VITE_SAXO_LOCAL_API_BASE ?? "http://127.0.0.1:18787";
+const SAXO_LOCAL_API_BASE = resolveLocalHelperBase(import.meta.env.VITE_SAXO_LOCAL_API_BASE);
 const DEFAULT_FETCH_TIMEOUT_MS = 5_000;
 const PREMIUM_CANDIDATE_FETCH_TIMEOUT_MS = 20_000;
+
+export function resolveLocalHelperBase(configured?: string): string {
+  const candidate = configured?.trim().replace(/\/$/, "");
+  if (candidate && /^https?:\/\/(127\.0\.0\.1|localhost):18787$/i.test(candidate)) return candidate;
+  return "http://127.0.0.1:18787";
+}
 
 export type SaxoAccountsResponse = {
   environment: "sim" | "live";
