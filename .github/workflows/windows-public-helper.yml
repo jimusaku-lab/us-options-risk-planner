@@ -1,0 +1,26 @@
+name: Windows public Saxo helper contract
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - codex/windows-public-r25
+
+jobs:
+  helper-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run portable read-only helper contract tests
+        run: node --test scripts/start-saxo-readonly-public.node-test.mjs

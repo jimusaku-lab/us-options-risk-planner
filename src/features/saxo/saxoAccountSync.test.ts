@@ -621,7 +621,12 @@ describe("Saxo read-only account sync", () => {
   });
 
   it("separates local API down, missing client id, and missing environment guidance", () => {
-    expect(createSaxoSetupGuidance(null).code).toBe("local_api_down");
+    const unavailable = createSaxoSetupGuidance(null);
+    expect(unavailable.code).toBe("local_api_down");
+    expect(unavailable.detail).toMatch(/loopback|通信/);
+    expect(unavailable.command).toBe("node scripts/start-saxo-readonly-local.mjs --public");
+    expect(unavailable.command).not.toContain("SAXO_CLIENT_ID=");
+    expect(unavailable.command).not.toContain("dev:all");
 
     expect(
       createSaxoSetupGuidance({

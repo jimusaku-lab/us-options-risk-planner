@@ -2,6 +2,8 @@
 
 このガイドは、GitHub Pages版の米国株オプション建玉管理アプリで、Saxo OpenAPIをRead-only接続するための準備手順です。
 
+Windowsで初めて準備する方は、先に[Windows向けhelperガイド](saxo-api-windows-local-helper-guide-2026-07-08.md)を開いてください。入手・起動・本人認証までを順番に説明しています。
+
 このアプリは発注、注文変更、注文取消を行いません。Saxoの値を読み取り、アプリ内の手入力候補や差分プレビューとして使うだけです。
 
 GitHub Pages版は静的UIです。Saxo read-onlyを使う場合も、公開サーバーを経由せず、同じPCで利用者が起動した `127.0.0.1:18787` のローカルhelperへ固定Originで接続します。helperが起動していない、接続状態またはbulk capabilityが確認できない場合は価格取得を有効化しません。候補価格は明示的な確認・反映まで保存されません。
@@ -14,14 +16,16 @@ Saxo OpenAPIを使うには、Saxo Developer PortalでOpenAPI applicationを作�
 
 - SIM application: Developer Portalで最初に作成・検証するアプリです。
 - LIVE app: 本番口座へRead-only接続するために申請または取得するアプリ資格情報です。
-- LIVE AppKey（Client ID）: このアプリをSaxo OpenAPIへ接続するための識別子です。この値だけを自分のMacのローカル設定に入れます。
+- LIVE AppKey（Client ID）: このアプリをSaxo OpenAPIへ接続するための識別子です。この値だけを自分のPCのhelper設定欄に入れます。
 - Redirect URI: Saxoで認証が終わった後に、ローカルAPIへ戻るためのURLです。
 
-このアプリで使うRedirect URI:
+このアプリが認証要求に使うRedirect URI（実行時）:
 
 ```text
 http://localhost:18787/api/saxo/auth/callback
 ```
+
+PKCE用のSaxo Portal登録値は、公式仕様に従いportを含めず `http://localhost/api/saxo/auth/callback` とします。実行時は上記18787番へ戻ります。ログイン成功後に表示する公開アプリURLとは別です。公開アプリのhelperポートは既定の18787を使用してください。
 
 ## 2. 似ている情報の違い
 
@@ -53,7 +57,7 @@ Saxo OpenAPIを使うためのアプリ登録です。
 
 このアプリをSaxo APIへ接続するための識別子です。
 
-- 自分のMacのローカルAPI設定に入力します。
+- 自分のPCのhelper設定欄に入力します。
 - Saxo Account IDやP/N口座番号ではありません。
 - Client Secretではありません。
 
@@ -75,8 +79,8 @@ LIVE接続は本番口座のRead-only接続です。SIM / Trial口座ではあ�
 
 - SIM applicationだけでは本番口座の値は取得できません。
 - LIVE appを使う場合は、Developer PortalのLive Apps側で申請または取得します。
-- LIVE appのRedirect URIにも、上記のローカルAPI callback URLを登録してください。
-- アプリ側の環境はLIVEにします。
+- LIVE appにも、PKCE用のローカルAPI callbackを登録してください（登録時はportなし、実行時は18787番）。
+- アプリの上部をREALに切り替え、接続環境はLIVEにします。
 - 接続後、P口座がJPY、N口座がUSDであることを確認してから反映してください。
 - SIM / Trial / 通貨不一致の値をREALワークスペースへ反映しないでください。
 
@@ -91,14 +95,14 @@ PCに置く必要があるのは、Saxoと通信するためのローカルAPI�
 なぜ補助ツールが必要か:
 
 - GitHub Pagesは静的Webアプリであり、SaxoのOAuth tokenを安全に保存する場所にはできません。
-- macOS KeychainやWindows側の保存領域は、利用者本人のPC上の補助ツールから使います。
+- macOSの対応環境では、本人が選択した場合にKeychainで接続を保持できます。Windowsでは現状tokenはhelper稼働中のメモリ内のみで、helperやPCの再起動後はSaxo公式画面で再ログインが必要です。
 - GitHub PagesはSaxo APIの中継サーバにはなりません。
 - この仕組みにより、Saxo ID、パスワード、2FAコード、OAuth token、口座情報はGitHub Pagesや作者側には保存されません。
 
-ローカルAPI補助ツールのフォルダで、次を実行します。
+[公開リポジトリ](https://github.com/jimusaku-lab/us-options-risk-planner)のCode → Download ZIPから取得・展開し、[Node.js 24 LTS](https://nodejs.org/en/download)を準備します。`package.json`・`scripts`・`server`が並ぶフォルダで、次を実行します。helperだけなら`npm install`や画面アプリのbuildは不要です。
 
-```bash
-npm run dev:saxo-api
+```text
+node scripts/start-saxo-readonly-local.mjs --public
 ```
 
 `.env.local` の例:
@@ -115,23 +119,14 @@ SAXO_LOCAL_API_PORT=18787
 
 ### Mac / Windows の違い
 
-アプリが表示する起動コマンドは、使っているPCに合わせる必要があります。
+上のNode.jsコマンドは両方のOSで共通です。
 
 - Mac: ターミナルで起動します。
-- Windows: PowerShellで起動します。
+- Windows: 展開したhelperフォルダでPowerShellまたはコマンドプロンプトを開いて起動します。
 
-Mac向けの環境変数指定形式は、Windowsではそのまま使えません。
-WindowsではPowerShell形式で環境変数を設定します。
+公開版では`--public`が公開サイト向けの設定を選ぶため、Mac用の環境変数コマンドをWindowsへ貼り付ける必要はありません。PowerShellの実行ポリシーや、ファイアウォール・ブラウザの安全機能を無効化しないでください。ローカル通信の許可を尋ねられた場合だけ、接続元がこの公開サイトであることを確認してサイト単位で許可します。
 
-Macでは、ローカルAPI補助ツールのフォルダをターミナルで開いてから、アプリが表示する1行コマンドを貼り付けます。
-`>` だけが出て止まった場合は `Control + C` でキャンセルし、1行コマンドを貼り直します。
-
-```powershell
-cd "C:\path\to\saxo-local-api-helper"
-$env:SAXO_LOCAL_UI_ALLOWED_ORIGIN="https://jimusaku-lab.github.io"
-$env:SAXO_LOCAL_UI_RETURN_URL="https://jimusaku-lab.github.io/us-options-risk-planner/"
-npm run dev:saxo-api
-```
+以前のhelperを持っている場合も、今回の起動修理を使うには最新版のソースが必要です。既存の`.env.local`を削除・公開せず保持し、起動中の旧helperは本人がそのターミナルで終了してから更新してください。二重起動して既存プロセスを置き換える機能はありません。
 
 ### 起動できたかどうかの見方
 
@@ -144,6 +139,8 @@ Saxo read-only local API listening on http://127.0.0.1:18787
 この表示が出たら、ターミナル/PowerShellは閉じずに置いてください。
 その後、アプリ画面に戻って `起動できたか確認` を押します。
 
+取得・確認・保存の間はPC、helper、アプリを開いておきます。閉じたままの自動取得・常時同期・無確認のREAL自動保存は実装していません。新規・決済・満期等のイベントも取得範囲と根拠を確認して反映します。
+
 Macでコマンド貼り付け後に `>` だけが表示されて止まった場合は、まだ実行されていません。
 `Control + C` でキャンセルし、アプリが表示する1行コマンドを貼り直してください。
 
@@ -153,7 +150,7 @@ Macでコマンド貼り付け後に `>` だけが表示されて止まった場
 そのため、ローカルAPIを起動するフォルダに `.env.local` が必要です。
 
 既に自分のローカル版でSaxo接続できている場合は、その `.env.local` をローカルAPI補助ツールのフォルダへコピーして使えます。
-初めて使う場合は、Saxo Developer Portalで取得したLIVE AppKeyを `.env.local` に設定します。
+初めて使う場合は、helperを起動後、アプリの設定・診断内で本人のLIVE AppKeyとLIVE環境を保存すると、helperの`.env.local`へ記録されます。tokenをこのファイルへ書き込む必要はありません。
 
 `.env.local` はGitHubにpushしてはいけません。
 このリポジトリでは `.gitignore` で除外します。
@@ -180,7 +177,7 @@ Macでコマンド貼り付け後に `>` だけが表示されて止まった場
 - 未マスクの取引明細や口座残高
 - JSONバックアップの中身
 
-Client ID / AppKeyは秘密鍵ではありませんが、チャットに貼らず、自分のMacのローカル設定欄へだけ入力してください。
+Client ID / AppKeyは秘密鍵ではありませんが、チャットに貼らず、自分のPCのhelper設定欄へだけ入力してください。
 
 ## 7. ChatGPT/Codexへ相談する時の文例
 
@@ -197,14 +194,17 @@ Saxo API接続を使う場合だけ、Saxoとの通信を担当するPC側補助
 1. 私のPCがMacかWindowsかを確認してください。
 2. Saxo Developer Portalに入る手順を案内してください。
 3. OpenAPI applicationを作る手順を案内してください。
-4. Redirect URIとして次を登録するよう案内してください。
-   http://localhost:18787/api/saxo/auth/callback
+4. PKCE用Redirect URIをSaxo公式仕様に従って登録するよう案内してください。
+   Portal登録: http://localhost/api/saxo/auth/callback
+   このアプリの実行時callback: http://localhost:18787/api/saxo/auth/callback
 5. LIVE AppKey（Client ID）を確認する手順を案内してください。
-6. PC側補助ツールの準備に必要なNode.js/npm、.env.local、起動コマンドの手順を、Mac/Windows別に案内してください。
+6. 最新helperのZIPを展開し、Node.js 24を準備し、正しいフォルダで次の共通コマンドを実行する手順を案内してください。npm installは不要です。
+   node scripts/start-saxo-readonly-local.mjs --public
 7. ローカルAPI起動後、次の成功ログが出ているか確認するよう案内してください。
    Saxo read-only local API listening on http://127.0.0.1:18787
 8. Macでターミナルに `>` だけが出て止まった場合は、Control + Cでキャンセルして1行コマンドを貼り直すよう案内してください。
-9. アプリ画面に戻って「起動できたか確認」を押し、その後「Saxo接続」または「Saxo再接続」へ進むよう案内してください。
+9. アプリをREALに切り替えて「起動できたか確認」を押し、本人のLIVE AppKey設定、Saxo公式認証、口座割当、取得・確認・保存へ順に進むよう案内してください。
+10. Windowsではhelper終了後の再ログインが必要です。無確認の自動保存やブラウザを閉じた常時同期があるとは案内しないでください。
 
 絶対に共有しない情報:
 - Saxo ID
@@ -233,6 +233,7 @@ Saxo ID、パスワード、2FAコード、OAuth tokenは、ChatGPT/Codexにも�
 
 ## 8. 公式参考
 
+- [Authorization Code Grant (PKCE)](https://www.developer.saxo/openapi/learn/oauth-authorization-code-grant-pkce)
 - [How do I get started with OpenAPI](https://openapi.help.saxo/hc/en-us/articles/5231611647517-How-do-I-get-started-with-OpenAPI)
 - [What redirect URL should I use](https://openapi.help.saxo/hc/en-us/articles/4416527810065-What-redirect-URL-should-I-use)
 - [How do I find keys for setting up OAuth](https://openapi.help.saxo/hc/en-us/articles/4416514219409-How-do-I-find-keys-for-setting-up-OAuth)

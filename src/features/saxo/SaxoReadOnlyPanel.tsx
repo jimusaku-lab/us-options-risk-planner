@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from
 import { getStrategyLabel } from "@/domain/strategyLabels";
 import { isManagedTwoLegStrategy } from "@/domain/verticalSpread";
 import { SpreadStrategyCandidates } from "./SpreadStrategyCandidates";
+import { SaxoCallbackUriSetup } from "./saxoCallbackUri";
 import { getPotentialSpreadPositionIds, getSpreadImportIssueGroups, reconcileStrategyCandidates, type SpreadImportIssue } from "./spreadStrategyImport";
 import { emptyStrategyLedger, type PreparedStrategyImport, type StrategyCandidate, type StrategyCoverage, type StrategyLedger } from "@/domain/strategyLedger";
 import { Ban, Cable, CheckCircle2, Clipboard, Download, Eye, FilePlus2, Link2, LogOut, RefreshCw, Save, ShieldCheck } from "lucide-react";
@@ -92,11 +93,8 @@ const SAXO_IGNORED_HISTORY_KEY = "us-options-saxo-ignored-history-candidates-v1"
 const SAXO_DRAFTED_POSITION_KEY = "us-options-saxo-drafted-position-candidates-v1";
 const SAXO_LINKED_POSITION_KEY = "us-options-saxo-linked-position-candidates-v1";
 const SAXO_LINKED_POSITION_TARGET_KEY = "us-options-saxo-linked-position-targets-v1";
-const SAXO_LOCAL_API_START_COMMAND = [
-  "cd /Users/motomichi/Documents/30_ファイナンス（作業中）/apps/us-options-risk-planner",
-  "npm run dev:all",
-].join("\n");
-const SAXO_LOCAL_API_ONLY_COMMAND = "npm run dev:saxo-api";
+const SAXO_LOCAL_API_START_COMMAND = "node scripts/start-saxo-readonly-local.mjs --public";
+const SAXO_LOCAL_API_ONLY_COMMAND = SAXO_LOCAL_API_START_COMMAND;
 
 type SaxoPanelConnectionState = NonNullable<SaxoApiStatus["connectionState"]> | "disconnected" | "local_api_down";
 type LinkedSimulationResolution =
@@ -701,7 +699,7 @@ export function SaxoReadOnlyPanel({
       setLocalApiDown(true);
       const nextMessage = error instanceof Error ? error.message : "SaxoローカルAPIへ接続できません。";
       setApiErrorMessage(nextMessage);
-      setMessage("まだ起動していません。コピーしたコマンドをターミナルで実行してください。");
+      setMessage("SaxoローカルAPIへ接続できません。helperの起動状態とブラウザーloopback許可を確認してください。");
     } finally {
       setIsLoading(false);
     }
@@ -732,7 +730,7 @@ export function SaxoReadOnlyPanel({
       setMessage(
         error instanceof Error
           ? error.message
-          : "SaxoローカルAPIが起動していません。別ターミナルで `npm run dev:saxo-api` または `npm run dev:all` を起動してください。",
+          : "SaxoローカルAPIへ接続できません。helperの起動状態、ブラウザーloopback許可、ローカル通信・権限を確認してください。",
       );
     } finally {
       setIsLoading(false);
@@ -754,20 +752,19 @@ export function SaxoReadOnlyPanel({
     }
   }
 
-  async function copyRedirectUri() {
-    const redirectUri = status?.redirectUri ?? configStatus?.redirectUri ?? "http://localhost:18787/api/saxo/auth/callback";
+  async function copyPortalRegistrationUri(portalRegistrationUri: string) {
     try {
-      await navigator.clipboard.writeText(redirectUri);
-      setMessage("redirect URIをコピーしました。");
+      await navigator.clipboard.writeText(portalRegistrationUri);
+      setMessage("Saxo Developer Portal登録用（ポートなし）Redirect URIをコピーしました。");
     } catch {
-      setMessage(`redirect URI: ${redirectUri}`);
+      setMessage(`Portal登録用（ポートなし）Redirect URI: ${portalRegistrationUri}`);
     }
   }
 
   async function copyLocalApiStartCommand() {
     try {
       await navigator.clipboard.writeText(SAXO_LOCAL_API_START_COMMAND);
-      setMessage("起動コマンドをコピーしました。Macのターミナルに貼り付けてEnterを押してください。");
+      setMessage("起動コマンドをコピーしました。helperフォルダーのターミナルで実行してください。");
     } catch {
       setMessage("起動コマンドをコピーできませんでした。画面上のコマンドを手動でコピーしてください。");
     }
@@ -775,7 +772,7 @@ export function SaxoReadOnlyPanel({
 
   async function loadAccounts() {
     if (localApiDown) {
-      setMessage("SaxoローカルAPIが起動していません。先にローカルAPIを起動してください。");
+      setMessage("ローカルhelperに接続できません。起動状態、このサイトのloopback通信許可を確認してください。");
       return;
     }
     if (connectionState !== "connected") {
@@ -804,7 +801,7 @@ export function SaxoReadOnlyPanel({
 
   async function loadSnapshots() {
     if (localApiDown) {
-      setMessage("SaxoローカルAPIが起動していません。先にローカルAPIを起動してください。");
+      setMessage("ローカルhelperに接続できません。起動状態、このサイトのloopback通信許可を確認してください。");
       return;
     }
     setIsLoading(true);
@@ -824,7 +821,7 @@ export function SaxoReadOnlyPanel({
   async function loadPositions() {
     spreadRequest.current += 1; setSpreadRequestRevision(spreadRequest.current); setSpreadCoverage([]);
     if (localApiDown) {
-      setMessage("SaxoローカルAPIが起動していません。先にローカルAPIを起動してください。");
+      setMessage("ローカルhelperに接続できません。起動状態、このサイトのloopback通信許可を確認してください。");
       return;
     }
     setIsLoading(true);
@@ -845,7 +842,7 @@ export function SaxoReadOnlyPanel({
   async function loadOrders() {
     spreadRequest.current += 1; setSpreadRequestRevision(spreadRequest.current); setSpreadCoverage([]);
     if (localApiDown) {
-      setMessage("SaxoローカルAPIが起動していません。先にローカルAPIを起動してください。");
+      setMessage("ローカルhelperに接続できません。起動状態、このサイトのloopback通信許可を確認してください。");
       return;
     }
     setIsLoading(true);
@@ -866,7 +863,7 @@ export function SaxoReadOnlyPanel({
   async function loadHistoryDiscovery() {
     spreadRequest.current += 1; setSpreadRequestRevision(spreadRequest.current); setSpreadCoverage([]);
     if (localApiDown) {
-      setMessage("SaxoローカルAPIが起動していません。先にローカルAPIを起動してください。");
+      setMessage("ローカルhelperに接続できません。起動状態、このサイトのloopback通信許可を確認してください。");
       return;
     }
     setIsLoading(true);
@@ -892,7 +889,7 @@ export function SaxoReadOnlyPanel({
 
   async function loadAllReadOnlyData() {
     if (localApiDown) {
-      setMessage("SaxoローカルAPIが起動していません。先にローカルAPIを起動してください。");
+      setMessage("ローカルhelperに接続できません。起動状態、このサイトのloopback通信許可を確認してください。");
       return;
     }
     setIsLoading(true);
@@ -1064,7 +1061,7 @@ export function SaxoReadOnlyPanel({
     try {
       const nextStatus = await enableSaxoPersistence();
       setStatus(nextStatus);
-      setMessage(nextStatus.message ?? "このMacに接続保持を保存しました");
+      setMessage(nextStatus.message ?? "接続保持をこの端末に保存しました");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "接続保持を有効化できませんでした。");
       await refreshStatus();
@@ -1140,7 +1137,7 @@ export function SaxoReadOnlyPanel({
   const connectionState: SaxoPanelConnectionState = localApiDown ? "local_api_down" : (status?.connectionState ?? (status?.connected ? "connected" : "disconnected"));
   const statusLabel =
     connectionState === "local_api_down"
-        ? "API未起動: 起動コマンドをコピーしてターミナルで実行"
+        ? "ローカルhelperに接続できません。起動状態とこのサイトのloopback許可を確認"
       : connectionState === "connected"
       ? `Saxo接続中 ${status?.environment.toUpperCase() ?? "SIM"} / 発注機能なし`
       : connectionState === "reconnect_required"
@@ -1257,7 +1254,7 @@ export function SaxoReadOnlyPanel({
                 connectionState={connectionState}
                 onClientIdChange={setSetupClientId}
                 onEnvironmentChange={setSetupEnvironment}
-                onCopyRedirectUri={copyRedirectUri}
+                onCopyPortalRegistrationUri={copyPortalRegistrationUri}
                 onSaveConfig={saveLocalConfig}
                 onRefreshStatus={refreshStatus}
                 onEnablePersistence={enablePersistence}
@@ -1834,7 +1831,7 @@ function StatusRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SaxoDailySummary({
+export function SaxoDailySummary({
   statusLabel,
   connectionState,
   environment,
@@ -1862,7 +1859,7 @@ function SaxoDailySummary({
   const persistence = status?.tokenPersistence;
   const canPersistConnection =
     connectionState === "connected" &&
-    persistence?.supported !== false &&
+    persistence?.supported === true &&
     persistence?.enabled !== true;
   const persistenceEnabled = connectionState === "connected" && persistence?.enabled === true;
   const tone =
@@ -1889,7 +1886,7 @@ function SaxoDailySummary({
       {canPersistConnection ? (
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-200 bg-white/80 px-3 py-2 text-xs leading-5 text-emerald-950">
           <div>
-            <div className="font-bold">Saxo接続中です。次回以降の再ログインを減らすには、このMacに接続保持を保存できます。</div>
+            <div className="font-bold">Saxo接続中です。この端末で接続保持を利用できます。</div>
             <div className="mt-0.5 text-emerald-800">保存するのはOAuth接続保持情報のみです。Saxo Account ID、パスワード、2FAコードは保存しません。</div>
           </div>
           <button
@@ -1899,13 +1896,18 @@ function SaxoDailySummary({
             disabled={isLoading}
           >
             <Save size={14} />
-            接続をこのMacに保持
+            この端末に接続を保持
           </button>
+        </div>
+      ) : null}
+      {connectionState === "connected" && persistence?.supported === false ? (
+        <div className="mt-2 rounded-md border border-slate-200 bg-white/80 px-3 py-2 text-xs leading-5 text-slate-700">
+          この環境ではtokenはhelper稼働中のみ保持されます。helper終了後はSaxo公式画面で再ログインしてください。
         </div>
       ) : null}
       {persistenceEnabled ? (
         <div className="mt-2 rounded-md border border-emerald-200 bg-white/80 px-3 py-2 text-xs font-bold text-emerald-950">
-          接続保持: 有効 / 保存先: {persistence?.storage ?? "macOS Keychain"}
+          接続保持: 有効 / 保存先: {persistence?.storage ?? "未確認"}
         </div>
       ) : null}
     </div>
@@ -1927,9 +1929,9 @@ function LocalApiDownCard({
     <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-bold text-amber-950">Saxo APIを使うには、先にこのMacでローカルAPIを起動します。</h3>
+          <h3 className="text-sm font-bold text-amber-950">Saxo APIを使うには、この端末でローカルhelperへ接続します。</h3>
           <p className="mt-1 text-sm leading-6 text-amber-900">
-            Saxo接続の前に、下の起動コマンドをMacのターミナルで実行してください。起動できるまでSaxoログインやまとめて取得は使いません。
+            helperのZIPを展開し、package.json・scripts・serverがあるフォルダーを開いて、下のコマンドをターミナルで実行してください。ブラウザーにローカルネットワーク接続の確認が出た場合は、この公開サイトからのloopback接続を許可してください。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1957,7 +1959,7 @@ function LocalApiDownCard({
         </li>
         <li className="rounded-md border border-amber-200 bg-white p-3">
           <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">2</span>
-          <span className="font-bold">Macのターミナルを開いて貼り付け、Enter</span>
+          <span className="font-bold">ターミナルを開いて貼り付け、Enter</span>
         </li>
         <li className="rounded-md border border-amber-200 bg-white p-3">
           <span className="mr-2 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900">3</span>
@@ -1968,6 +1970,9 @@ function LocalApiDownCard({
         <div>
           <div className="font-bold text-amber-950">推奨コマンド</div>
           <pre className="mt-1 overflow-x-auto rounded bg-white p-2 text-slate-800">{SAXO_LOCAL_API_START_COMMAND}</pre>
+          <a className="mt-2 inline-block font-semibold text-amber-900 underline" href="https://github.com/jimusaku-lab/us-options-risk-planner/blob/main/docs/saxo-api-windows-local-helper-guide-2026-07-08.md" target="_blank" rel="noreferrer">
+            helperの準備・Saxo設定・接続手順を開く
+          </a>
         </div>
       </div>
     </div>
@@ -1986,7 +1991,7 @@ function SaxoDiagnostics({
   connectionState,
   onClientIdChange,
   onEnvironmentChange,
-  onCopyRedirectUri,
+  onCopyPortalRegistrationUri,
   onSaveConfig,
   onRefreshStatus,
   onEnablePersistence,
@@ -2004,7 +2009,7 @@ function SaxoDiagnostics({
   connectionState: SaxoPanelConnectionState;
   onClientIdChange: (value: string) => void;
   onEnvironmentChange: (value: "sim" | "live") => void;
-  onCopyRedirectUri: () => void;
+  onCopyPortalRegistrationUri: (uri: string) => void;
   onSaveConfig: () => void;
   onRefreshStatus: () => void;
   onEnablePersistence: () => void;
@@ -2021,8 +2026,8 @@ function SaxoDiagnostics({
         <StatusRow label="接続期限" value={formatDateTime(status?.connectionExpiresAt)} />
         <StatusRow label="access token期限" value={formatDateTime(status?.tokenExpiresAt)} />
         <StatusRow label="接続維持" value={formatPersistenceState(status)} />
-        <StatusRow label="保存先" value={status?.tokenPersistence?.storage ?? "macOS Keychain"} />
-        <StatusRow label="redirect URI" value={status?.redirectUri ?? "http://localhost:18787/api/saxo/auth/callback"} />
+        <StatusRow label="保存先" value={status?.tokenPersistence?.storage ?? "未確認"} />
+        <StatusRow label="ローカルhelper実行時 callback URL（ポートあり）" value={status?.redirectUri ?? "http://localhost:18787/api/saxo/auth/callback"} />
       </dl>
       <ReadOnlyStorageNotice status={status} />
       <SetupGuidanceBox guidance={setupGuidance} redirectUri={status?.redirectUri ?? "http://localhost:18787/api/saxo/auth/callback"} />
@@ -2041,7 +2046,7 @@ function SaxoDiagnostics({
           isSaving={isSavingConfig}
           onClientIdChange={onClientIdChange}
           onEnvironmentChange={onEnvironmentChange}
-          onCopyRedirectUri={onCopyRedirectUri}
+          onCopyPortalRegistrationUri={onCopyPortalRegistrationUri}
           onSave={onSaveConfig}
         />
       ) : null}
@@ -2050,22 +2055,16 @@ function SaxoDiagnostics({
           <RefreshCw size={15} />
           {connectionState === "local_api_down" ? "起動できたか確認" : "接続状態を再確認"}
         </button>
-        <button
-          className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 disabled:opacity-40"
-          onClick={onEnablePersistence}
-          disabled={isLoading || connectionState !== "connected" || status?.tokenPersistence?.supported === false || status?.tokenPersistence?.enabled === true}
-        >
-          <Save size={15} />
-          接続をこのMacに保持
-        </button>
-        <button
-          className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 disabled:opacity-40"
-          onClick={onDisablePersistence}
-          disabled={isLoading || status?.tokenPersistence?.supported === false || status?.tokenPersistence?.enabled !== true}
-        >
-          <Ban size={15} />
-          接続保持を解除
-        </button>
+        {status?.tokenPersistence?.supported === true ? (
+          <>
+            <button className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 disabled:opacity-40" onClick={onEnablePersistence} disabled={isLoading || connectionState !== "connected" || status?.tokenPersistence?.enabled === true}>
+              <Save size={15} />この端末に接続を保持
+            </button>
+            <button className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800 disabled:opacity-40" onClick={onDisablePersistence} disabled={isLoading || status?.tokenPersistence?.enabled !== true}>
+              <Ban size={15} />接続保持を解除
+            </button>
+          </>
+        ) : null}
         <button className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-800" onClick={onDisconnect}>
           <LogOut size={15} />
           Saxo logout
@@ -2396,16 +2395,20 @@ function ReadOnlyStorageNotice({ status }: { status: SaxoApiStatus | null }) {
         Saxo Account ID、パスワード、2FAコードは保存しません。Saxoログインは公式画面で本人が行います。
       </p>
       <p className="mt-1">
-        OAuth tokenはブラウザlocalStorageやGit管理下のファイルには保存しません。接続保持を有効にした場合だけ、このMacのmacOS Keychainに保存します。
+        OAuth tokenはブラウザlocalStorageやGit管理下のファイルには保存しません。保存先と再起動後の動作はhelperが返す能力表示に従います。
       </p>
       <p className="mt-1">
         接続維持: <span className="font-bold">{persistence?.enabled ? "有効" : "無効"}</span> / 保存先:{" "}
-        <span className="font-bold">{persistence?.storage ?? "macOS Keychain"}</span>
+        <span className="font-bold">{persistence?.storage ?? "未確認"}</span>
       </p>
       <p className="mt-1">
-        {persistence?.enabled
-          ? "次回ローカルAPI起動時に、refresh tokenが有効ならSaxoログインを省略できる可能性があります。期限切れや失効時だけ再ログインが必要です。"
-          : "接続保持を有効にするまでは、ローカルAPI再起動やPC再起動後にSaxo公式画面で再ログインが必要です。"}
+        {!persistence
+          ? "保存能力を確認できていません。"
+          : !persistence.supported
+            ? "この環境ではtokenはhelper稼働中のメモリ内だけに保持されます。helper終了後はSaxo公式画面で再ログインが必要です。"
+            : persistence.enabled
+              ? "次回helper起動時に接続を復元できる場合があります。期限切れや失効時は再ログインが必要です。"
+              : "接続保持が無効です。helper再起動後はSaxo公式画面で再ログインが必要です."}
       </p>
       {persistence?.message ? <p className="mt-1 text-slate-500">{persistence.message}</p> : null}
     </div>
@@ -2426,7 +2429,7 @@ function SetupGuidanceBox({ guidance, redirectUri }: { guidance: SaxoSetupGuidan
       <div className="font-bold">{guidance.title}</div>
       <p>{guidance.detail}</p>
       {guidance.command ? <code className="mt-1 block font-mono text-xs">{guidance.command}</code> : null}
-      <p className="mt-1 text-xs">redirect URI: <code className="font-mono">{redirectUri}</code></p>
+      <p className="mt-1 text-xs">ローカルhelper実行時 callback URL（ポートあり）: <code className="font-mono">{redirectUri}</code></p>
     </div>
   );
 }
@@ -2438,7 +2441,7 @@ function ConnectionSetupSection({
   isSaving,
   onClientIdChange,
   onEnvironmentChange,
-  onCopyRedirectUri,
+  onCopyPortalRegistrationUri,
   onSave,
 }: {
   configStatus: SaxoConfigStatus | null;
@@ -2447,7 +2450,7 @@ function ConnectionSetupSection({
   isSaving: boolean;
   onClientIdChange: (value: string) => void;
   onEnvironmentChange: (value: "sim" | "live") => void;
-  onCopyRedirectUri: () => void;
+  onCopyPortalRegistrationUri: (uri: string) => void;
   onSave: () => void;
 }) {
   const redirectUri = configStatus?.redirectUri ?? "http://localhost:18787/api/saxo/auth/callback";
@@ -2505,20 +2508,7 @@ function ConnectionSetupSection({
             <option value="live">LIVE</option>
           </select>
         </label>
-        <div className="rounded-md border border-amber-200 bg-white px-3 py-2">
-          <div className="text-xs font-bold text-slate-700">redirect URI</div>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <code className="break-all rounded bg-slate-100 px-2 py-1 text-xs text-slate-900">{redirectUri}</code>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-xs font-bold text-slate-800"
-              onClick={onCopyRedirectUri}
-            >
-              <Clipboard size={13} />
-              コピー
-            </button>
-          </div>
-        </div>
+        <SaxoCallbackUriSetup runtimeCallbackUri={redirectUri} onCopyPortalRegistrationUri={onCopyPortalRegistrationUri} />
         <button
           type="button"
           className="inline-flex w-fit items-center gap-1 rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
@@ -2562,9 +2552,9 @@ function formatSaxoEnvironmentStatus(status: SaxoApiStatus | null): string {
 function formatPersistenceState(status: SaxoApiStatus | null): string {
   const persistence = status?.tokenPersistence;
   if (!persistence) return "未確認";
-  if (!persistence.supported) return "無効 / macOS Keychain非対応";
+  if (!persistence.supported) return "helper稼働中のみ保持 / 終了後は再ログイン";
   if (persistence.enabled) {
-    if (persistence.restored) return "有効 / Keychainから復元";
+    if (persistence.restored) return "有効 / 保存先から復元";
     return "有効";
   }
   if (persistence.status === "expired" || persistence.status === "invalid") return "無効 / 再ログイン必要";

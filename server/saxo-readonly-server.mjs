@@ -45,12 +45,12 @@ let tokenPersistenceStatus = {
   supported: process.platform === "darwin",
   enabled: false,
   restored: false,
-  storage: KEYCHAIN_STORAGE_LABEL,
+  storage: process.platform === "darwin" ? KEYCHAIN_STORAGE_LABEL : "session-memory",
   status: process.platform === "darwin" ? "not_checked" : "unsupported",
-  message: process.platform === "darwin" ? "Keychain確認前です。" : "macOS以外ではKeychain接続保持は無効です。",
+  message: process.platform === "darwin" ? "Keychain確認前です。" : "この環境ではtokenはhelperのメモリ内だけに保持されます。helper終了後はSaxo公式画面で再ログインしてください。",
 };
 
-if (!IS_TEST_PROCESS) await restoreTokenStateFromKeychain();
+if (!IS_TEST_PROCESS && process.env.SAXO_SKIP_KEYCHAIN_RESTORE !== "1") await restoreTokenStateFromKeychain();
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -2359,6 +2359,7 @@ function getStatus(message) {
       bulkOptionPremiumPreview: true,
       orderActivitiesCloseLifecycle: true,
       spreadStrategyImport: true,
+      tokenPersistence: process.platform === "darwin",
     },
     connected: connectionState === "connected",
     connectionState,
@@ -2501,7 +2502,7 @@ function getTokenPersistenceStatus() {
 
 async function enableTokenPersistence() {
   if (!tokenPersistenceStatus.supported) {
-    throw new HttpError(400, "keychain_unsupported", "macOS Keychainが使えない環境です。");
+    throw new HttpError(400, "keychain_unsupported", "この環境では接続保持に対応していません。");
   }
   if (!tokenState?.refreshToken) {
     throw new HttpError(400, "not_connected", "Saxo接続後に接続保持を有効化してください。");
@@ -2522,7 +2523,7 @@ async function disableTokenPersistence() {
     status: tokenPersistenceStatus.supported ? "disabled" : "unsupported",
     message: tokenPersistenceStatus.supported
       ? "Keychainの接続維持情報を削除しました。現在のメモリ上接続はlogoutまで維持されます。"
-      : "macOS以外ではKeychain接続保持は無効です。",
+      : "この環境では接続保持に対応していません。tokenはhelper終了までメモリ内に保持されます。",
   };
 }
 

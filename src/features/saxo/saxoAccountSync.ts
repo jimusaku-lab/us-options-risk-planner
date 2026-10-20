@@ -16,7 +16,7 @@ export type SaxoMappedCode = SaxoAccountCode | "ignore" | "unmapped";
 export type SaxoApiStatus = {
   mode: "saxo_readonly";
   apiContractVersion?: string;
-  capabilities?: { optionPremiumCandidate?: boolean; bulkOptionPremiumPreview?: boolean };
+  capabilities?: { optionPremiumCandidate?: boolean; bulkOptionPremiumPreview?: boolean; tokenPersistence?: boolean };
   connected: boolean;
   connectionState?: "disconnected" | "connected" | "reconnect_required";
   environment: SaxoEnvironment;
@@ -2503,9 +2503,9 @@ export function createSaxoSetupGuidance(status: SaxoApiStatus | null, apiErrorMe
     return {
       code: "local_api_down",
       tone: "danger",
-      title: "SaxoローカルAPIが起動していません",
-      detail: apiErrorMessage ?? "別ターミナルでローカルAPIを起動してから、状態更新を押してください。",
-      command: "SAXO_CLIENT_ID=... SAXO_ENVIRONMENT=sim npm run dev:all",
+      title: "SaxoローカルAPIへ接続できません",
+      detail: apiErrorMessage ?? "helperの起動状態、ブラウザーのloopback許可、ローカル通信を確認してください。",
+      command: "node scripts/start-saxo-readonly-local.mjs --public",
     };
   }
   if (!status.oauthConfigured) {
@@ -2514,7 +2514,7 @@ export function createSaxoSetupGuidance(status: SaxoApiStatus | null, apiErrorMe
       tone: "danger",
       title: "LIVE AppKey（Client ID）が未設定です",
       detail: "Saxo Developer Portalで作成したLIVE AppKeyを、設定・診断内の接続セットアップからこの端末内に保存してください。SaxoTraderGOのログインIDやP/N口座番号ではありません。",
-      command: "SAXO_CLIENT_ID=... SAXO_ENVIRONMENT=sim npm run dev:all",
+      command: "node scripts/start-saxo-readonly-local.mjs --public",
     };
   }
   if (status.environmentConfigured === false) {
@@ -2523,7 +2523,7 @@ export function createSaxoSetupGuidance(status: SaxoApiStatus | null, apiErrorMe
       tone: "warning",
       title: "SAXO_ENVIRONMENT が未設定です",
       detail: "現在はsim扱いですが、実検証では sim / live を明示してください。",
-      command: "SAXO_CLIENT_ID=... SAXO_ENVIRONMENT=sim npm run dev:all",
+      command: "node scripts/start-saxo-readonly-local.mjs --public",
     };
   }
   if (status.connectionState === "reconnect_required") {

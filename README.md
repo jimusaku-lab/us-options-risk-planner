@@ -12,7 +12,7 @@
 - 発注、注文変更、注文取消、権利行使操作は実装していません。
 - 戦略適性は売買推奨ではなく、持ち込みデータを分類するための参考表示です。
 
-公開版からローカルhelperを使う場合の準備は [友人向けSaxo API接続準備ガイド](docs/%E5%8F%8B%E4%BA%BA%E5%90%91%E3%81%91Saxo%20API%E6%8E%A5%E7%B6%9A%E6%BA%96%E5%82%99%E3%82%AC%E3%82%A4%E3%83%89.md) を参照してください。候補価格は明示確認・反映まで保存されません。Saxo Account ID / password、2FA、AppKey/Secret、token、口座識別子、未マスクrawをアプリやAIへ貼り付けず、Gemini等を含む外部AIには匿名化した一般情報だけを渡してください。
+公開版からSaxo read-only helperを使う場合は、[Windows向けhelperガイド](docs/saxo-api-windows-local-helper-guide-2026-07-08.md)を参照してください。LIVE AppKeyは本人がアプリの接続セットアップ欄へ入力し、Saxo Account ID / password、2FA、AppKey/Secret、token、口座識別子、未マスクrawはチャットや外部AIへ共有しないでください。候補価格は明示確認・反映まで保存されません。
 
 ## データ保存方針
 

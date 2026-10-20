@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { sampleAmznSimulation } from "@/data/sampleAmzn";
-import { createEffectiveHistoryEndpoints, createHistoryReflectionStates, createReflectionSummary, getDisplayPositionMissingFields, getSaxoOrderCategoryLabel, getSaxoOrderDisplayCategory, HistoryDiscoveryPreview, isActionRequiredRegularPositionRow, ReflectionPendingSummary, sanitizePersistedSaxoHistoryKeys, SaxoPanelCloseButton, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
+import { createEffectiveHistoryEndpoints, createHistoryReflectionStates, createReflectionSummary, getDisplayPositionMissingFields, getSaxoOrderCategoryLabel, getSaxoOrderDisplayCategory, HistoryDiscoveryPreview, isActionRequiredRegularPositionRow, ReflectionPendingSummary, sanitizePersistedSaxoHistoryKeys, SaxoDailySummary, SaxoPanelCloseButton, SyntheticForwardHoldRow, SyntheticForwardPairRow } from "./SaxoReadOnlyPanel";
 import type { ReflectionSummary } from "./SaxoReadOnlyPanel";
 import type { AccountInputs } from "@/store/useOptionsStore";
 import type { TradeSimulation } from "@/types/domain";
@@ -18,6 +18,29 @@ it("uses the same safe close callback from the API header and footer", () => {
   fireEvent.click(screen.getByRole("button", { name: "Saxo API詳細を下部から閉じる" }));
 
   expect(onRequestClose).toHaveBeenCalledTimes(2);
+});
+
+it("explains session-memory token handling without showing unsupported persistence controls", () => {
+  render(<SaxoDailySummary
+    statusLabel="Saxo接続済み"
+    connectionState="connected"
+    environment="LIVE"
+    status={{
+      mode: "saxo_readonly", connected: true, connectionState: "connected", environment: "live",
+      environmentConfigured: true, hasToken: true, readOnly: true, orderEndpointsEnabled: false,
+      bindAddress: "127.0.0.1", oauthConfigured: true,
+      tokenPersistence: { supported: false, enabled: false, restored: false, storage: "session-memory", status: "unsupported" },
+    }}
+    isLoading={false}
+    workspace="live"
+    lastSyncedAt={undefined}
+    onOpenDiagnostics={vi.fn()}
+    onEnablePersistence={vi.fn()}
+  />);
+
+  expect(screen.getByText(/helper稼働中のみ保持/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /接続を.*保持/ })).not.toBeInTheDocument();
+  expect(screen.queryByText(/macOS Keychain/)).not.toBeInTheDocument();
 });
 
 const callPosition = {

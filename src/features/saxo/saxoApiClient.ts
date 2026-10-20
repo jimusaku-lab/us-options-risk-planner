@@ -190,6 +190,6 @@ function createLocalApiFetchFailureMessage(error: unknown, timeoutMessage?: stri
   if (error instanceof DOMException && error.name === "AbortError") {
     return timeoutMessage ?? "SaxoローカルAPIの応答がタイムアウトしました。少し時間を置いて再試行してください。";
   }
-  return "SaxoローカルAPIが起動していません。別ターミナルで `npm run dev:saxo-api` または `npm run dev:all` を起動してください。";
+  return "SaxoローカルAPIへ接続できません。helperの起動状態、ブラウザーのloopback許可、ローカル通信・権限を確認してください。";
 }
 import { adaptLegacyPositionValuation } from "./positionValuationAdapter";

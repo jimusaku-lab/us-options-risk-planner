@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:saxo-api": "node scripts/start-saxo-readonly-local.mjs",
+    "start:saxo:public": "node scripts/start-saxo-readonly-local.mjs --public",
     "dev:all": "sh -c 'trap \"kill 0\" INT TERM EXIT; npm run dev:saxo-api & npm run dev'",
     "build": "tsc -b && vite build",
     "build:pages": "GITHUB_PAGES=true npm run build",

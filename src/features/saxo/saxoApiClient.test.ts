@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchSaxoOptionPremiumCandidate, fetchSaxoOptionPremiumCandidatesPreview, resolveLocalHelperBase } from "./saxoApiClient";
+import { fetchSaxoOptionPremiumCandidate, fetchSaxoOptionPremiumCandidatesPreview, fetchSaxoStatus, resolveLocalHelperBase } from "./saxoApiClient";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -118,5 +118,10 @@ describe("Saxo API client", () => {
     expect(requestUrl.pathname).toBe("/api/saxo/options/premium-candidates/preview");
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ targets: [{ targetId: "fixture-target" }] });
     expect(window.localStorage.length).toBe(0);
+  });
+
+  it("reports a generic loopback connection failure without assuming the helper process is stopped", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
+    await expect(fetchSaxoStatus()).rejects.toThrow(/helperの起動状態.*loopback許可.*ローカル通信・権限/);
   });
 });
