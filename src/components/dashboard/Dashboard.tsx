@@ -1,7 +1,8 @@
 import type { RiskWarning, StockTransferEvent, TradeSimulation, WheelCycle, WorkflowTask } from "@/types/domain";
 import type { AccountInputs, WorkspaceMode } from "@/store/useOptionsStore";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronUp, Pencil, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, Trash2, LineChart } from "lucide-react";
+import { AccountExpiryPayoffDialog } from "./AccountExpiryPayoffDialog";
 import { calculateDenominators, getPrimaryDenominator } from "@/domain/denominators";
 import { calculateDashboardPremiumDisplay } from "@/domain/dashboardDisplay";
 import { calculateCurrentPositionEstimate, getSyntheticPutAssignmentPolicy } from "@/domain/currentPositionEstimate";
@@ -320,6 +321,8 @@ export function Dashboard({
   onSaxoExitOrderAction?: (simulationId: string, legId: string) => void;
 }) {
   const [isBulkDialogOpen, setIsBulkDialogOpen] = useState(false);
+  const [payoffPositionId, setPayoffPositionId] = useState<string>();
+  const payoffPosition = simulations.find((position) => position.id === payoffPositionId && position.status === "open");
   useEffect(() => {
     if (bulkOptionPriceOpenRequest > 0) setIsBulkDialogOpen(true);
   }, [bulkOptionPriceOpenRequest]);
@@ -704,6 +707,7 @@ availableCashJPY:
                     <span className={simulation.accountEnvironment === "PROD_N_USD_SETTLEMENT" ? "rounded bg-emerald-100 px-2 py-1 text-xs font-bold text-emerald-800" : "rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800"}>
                       {getAccountEnvironmentLabel(simulation.accountEnvironment)}
                     </span>
+                    {simulation.status === "open" ? <button type="button" className="mt-1 block rounded border border-sky-300 px-2 py-1 text-xs font-bold text-sky-800 focus-visible:outline focus-visible:outline-2" aria-label={`${simulation.ticker} · ${getAccountEnvironmentLabel(simulation.accountEnvironment)}の損益チャートを開く`} aria-haspopup="dialog" onClick={(event) => { event.stopPropagation(); setPayoffPositionId(simulation.id); }}><span className="inline-flex items-center gap-0.5"><LineChart aria-hidden="true" size={12} />損益チャート</span></button> : null}
                   </td>
                   <td className="py-3 pr-3 text-slate-700">
                     <div>{simulation.strategyType === "bear_put_spread" ? "ベア・プット" : verticalDefinition ? `${verticalDefinition.label}・スプレッド` : getStrategyLabel(simulation.strategyType)}</div>
@@ -1040,6 +1044,7 @@ availableCashJPY:
         </table>
       </div> : null}
       {focusedSimulation && focusedSimulation.optionLegs.length > 0 && !endedStatuses.has(focusedSimulation.status) ? <PositionBasisCard simulation={focusedSimulation} fx={currentEstimateFxQuote} /> : null}
+      {payoffPosition ? <AccountExpiryPayoffDialog key={payoffPosition.id} initial={payoffPosition} account={getAccountEnvironmentLabel(payoffPosition.accountEnvironment)} positions={simulations.filter((position) => position.status === "open" && position.accountEnvironment === payoffPosition.accountEnvironment && position.accountCode === payoffPosition.accountCode && position.accountCurrency === payoffPosition.accountCurrency)} onClose={() => setPayoffPositionId(undefined)} /> : null}
     </section>
   );
 }
