@@ -386,6 +386,11 @@ export default function App() {
     stockRefreshRequestRef.current++;
   }, [activeWorkspace]);
   useEffect(() => {
+    bulkPriceRequestIdRef.current += 1;
+    setBulkOptionPriceOpenRequest(0);
+    setBulkOptionPriceLoading(false);
+  }, [activeWorkspace]);
+  useEffect(() => {
     if (activeWorkspace !== "live") {
       setSameDayUsdJpyQuote(null);
       return;
@@ -607,12 +612,12 @@ export default function App() {
   };
   const bulkOptionPriceAvailable = bulkOptionPriceCapability === "available";
   const previewBulkOptionPrices = async (simulationId?: string): Promise<string> => {
+    const keepPrevious = bulkPricePreviewWorkspace === activeWorkspace && !bulkOptionPriceAdoption && (bulkOptionPricePreview !== null || bulkStockPricePreview !== null);
     setBulkOptionPriceScope(simulationId);
-    setBulkOptionPriceAdoption(undefined);
+    if (!keepPrevious) setBulkOptionPriceAdoption(undefined);
     setBulkOptionPriceOpenRequest(value => value + 1);
     setBulkOptionPriceReferenceConfirmed(false);
-    setBulkOptionPricePreview(null);
-    setBulkStockPricePreview(null);
+    if (!keepPrevious) { setBulkOptionPricePreview(null); setBulkStockPricePreview(null); }
     const currentSimulations = useOptionsStore.getState().simulations.filter(simulation => !simulationId || simulation.id === simulationId);
     const targets = getCurrentOptionPriceTargets(currentSimulations);
     const correctionSimulationIds = new Set(currentSimulations
@@ -624,8 +629,7 @@ export default function App() {
     const requestWorkspace = activeWorkspace;
     setBulkPricePreviewWorkspace(requestWorkspace);
     if (targets.length === 0 && stockTargets.length === 0) {
-      setBulkOptionPricePreview([]);
-      setBulkStockPricePreview([]);
+      if (!keepPrevious) { setBulkOptionPricePreview([]); setBulkStockPricePreview([]); }
       const message = correctionSimulationIds.size > 0
         ? "原資産銘柄の訂正確認が必要な建玉は、確認後に現在株価を取得します。既存価格は変更していません。"
         : "価格取得対象の建玉中の残存脚・株式はありません。";
@@ -644,9 +648,8 @@ export default function App() {
       if (!capable) {
         const message = !status.connected ? "Saxoは未接続です。再接続後に価格取得を再確認してください。保存価格は変更していません。"
           : "SaxoローカルAPIは一括価格取得に未対応です。口座・履歴の取得とは別に、ローカルAPIの更新を確認してください。";
-        setBulkOptionPricePreview(targets.map(target => ({ target, status: "unavailable", reason: message })));
-        setBulkStockPricePreview([]);
-        setBulkOptionPriceMessage(message);
+        if (!keepPrevious) { setBulkOptionPricePreview(targets.map(target => ({ target, status: "unavailable", reason: message }))); setBulkStockPricePreview([]); }
+        setBulkOptionPriceMessage(keepPrevious ? `${message} 前回の価格候補を保持しています。` : message);
         return message;
       }
       const valuationBatchId = `valuation:${requestId}:${new Date().toISOString()}`;
@@ -694,6 +697,12 @@ export default function App() {
           ? { ...row, status: "unavailable" as const, reason: `Saxo確認済み原資産 ${uniqueVerified[0]} と保存銘柄 ${row.ticker} が一致しないため、訂正確認後に取得します。` }
           : row;
       });
+      if (keepPrevious && !rows.some(row => row.status === "ready" || row.status === "confirmable_reference") && !stockRows.some(row => row.status === "ready")) {
+        const message = "反映可能な新しい価格を取得できませんでした。前回の価格候補を保持しています。";
+        setBulkOptionPriceMessage(message);
+        return message;
+      }
+      setBulkOptionPriceAdoption(undefined);
       setBulkOptionPricePreview(rows);
       setBulkStockPricePreview(stockRows);
       setBulkOptionPriceProgress({ total: targets.length + stockTargets.length, completed: rows.length + stockRows.length });
@@ -702,13 +711,10 @@ export default function App() {
       return message;
     } catch (error) {
       if (requestId !== bulkPriceRequestIdRef.current || requestWorkspace !== useOptionsStore.getState().activeWorkspace) return "価格取得はキャンセルされました。";
-      setBulkOptionPricePreview(null);
-      setBulkStockPricePreview(null);
       const message = error instanceof Error ? error.message : "Saxo候補価格を取得できませんでした。";
       const displayMessage = /not_found|実装していません|404/i.test(message) ? "SaxoローカルAPIが旧版です。ローカルAPIを更新して再起動してください。個別取得は利用できます。" : `${message} 既存価格は変更していません。`;
-      setBulkOptionPricePreview(targets.map(target => ({ target, status: "unavailable", reason: displayMessage })));
-      setBulkStockPricePreview([]);
-      setBulkOptionPriceMessage(displayMessage);
+      if (!keepPrevious) { setBulkOptionPricePreview(targets.map(target => ({ target, status: "unavailable", reason: displayMessage }))); setBulkStockPricePreview([]); }
+      setBulkOptionPriceMessage(keepPrevious ? `${displayMessage} 前回の価格候補を保持しています。` : displayMessage);
       return displayMessage;
     } finally {
       if (requestId === bulkPriceRequestIdRef.current) setBulkOptionPriceLoading(false);
@@ -2166,7 +2172,14 @@ export default function App() {
     onDownloadJson: downloadJson,
     onPendingStateChange: setSaxoHasPendingReflection,
     hasUnappliedCurrentPricePreview,
-    onPreviewCurrentPrices: previewBulkOptionPrices,
+    onPreviewCurrentPrices: () => { setActiveView("positions"); return previewBulkOptionPrices(); },
+    hasCurrentPricePreview: bulkPricePreviewWorkspace === activeWorkspace && !bulkOptionPriceAdoption && ((bulkOptionPricePreview?.length ?? 0) > 0 || (bulkStockPricePreview?.length ?? 0) > 0),
+    currentPriceLoading: bulkOptionPriceLoading,
+    onShowExistingCurrentPricePreview: () => {
+      if (bulkPricePreviewWorkspace !== useOptionsStore.getState().activeWorkspace || bulkOptionPriceAdoption) return;
+      setActiveView("positions");
+      setBulkOptionPriceOpenRequest(value => value + 1);
+    },
     oauthReconnectReturn: oauthReturnPending,
     bulkFetchButtonRef: saxoBulkFetchButtonRef,
   };
@@ -2264,7 +2277,7 @@ export default function App() {
                 onRefreshFx={refreshAllFx}
                 bulkOptionPricePreview={bulkOptionPricePreview}
                 bulkOptionPricePreviewWorkspace={bulkPricePreviewWorkspace}
-                bulkOptionPriceOpenRequest={bulkOptionPriceOpenRequest}
+                bulkOptionPriceOpenRequest={bulkPricePreviewWorkspace === activeWorkspace ? bulkOptionPriceOpenRequest : 0}
                 bulkOptionPriceScope={bulkOptionPriceScope}
                 bulkOptionPriceAdoption={bulkOptionPriceAdoption}
                 bulkStockPricePreview={bulkStockPricePreview}
@@ -2553,7 +2566,7 @@ export default function App() {
               onRefreshFx={refreshAllFx}
               bulkOptionPricePreview={bulkOptionPricePreview}
               bulkOptionPricePreviewWorkspace={bulkPricePreviewWorkspace}
-              bulkOptionPriceOpenRequest={bulkOptionPriceOpenRequest}
+              bulkOptionPriceOpenRequest={bulkPricePreviewWorkspace === activeWorkspace ? bulkOptionPriceOpenRequest : 0}
                 bulkOptionPriceScope={bulkOptionPriceScope}
                 bulkOptionPriceAdoption={bulkOptionPriceAdoption}
               bulkStockPricePreview={bulkStockPricePreview}

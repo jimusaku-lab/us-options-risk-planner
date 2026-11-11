@@ -94,7 +94,7 @@ it("omits reason and rateReason only in compact metrics while preserving the det
 
 it("opens shared whole-portfolio preview from the management bar after capability recovery", () => {
  const simulation=createSimulation(), fetch=vi.fn(), manual=vi.fn();
- const props={simulations:[simulation],selectedId:simulation.id,onSelect:vi.fn(),onEdit:vi.fn(),onDelete:vi.fn(),workspace:"live" as const,accountInputs,historyOpen:false,onHistoryOpenChange:vi.fn(),onFetchBulkOptionPrices:fetch,onCurrentEstimateAction:manual,bulkOptionPriceAvailable:false};
+ const props={simulations:[simulation],selectedId:simulation.id,onSelect:vi.fn(),onEdit:vi.fn(),onDelete:vi.fn(),workspace:"live" as const,accountInputs,historyOpen:false,onHistoryOpenChange:vi.fn(),onFetchBulkOptionPrices:fetch,onCurrentEstimateAction:manual,bulkOptionPriceAvailable:false,bulkOptionPricePreviewWorkspace:"live"};
  const {rerender}=render(createElement(Dashboard,props));
  expect(screen.queryByRole("button",{name:"Bid/Ask候補価格を取得"})).toBeNull();
  fireEvent.click(screen.getByRole("button",{name:"価格を一括更新"}));
@@ -114,6 +114,9 @@ it("reopens same-workspace unapplied price candidates without fetching again", (
  expect(fetch).not.toHaveBeenCalled();
  expect(screen.getByRole("dialog")).toBeInTheDocument();
  expect(screen.getByRole("dialog").textContent).toContain("195");
+ fireEvent.click(screen.getByRole("button",{name:"現在オプション価格の確認を閉じる"}));
+ fireEvent.click(screen.getByRole("button",{name:"最新建玉の価格を再取得"}));
+ expect(fetch).toHaveBeenCalledOnce();
 });
 
 describe("synthetic leg history", () => {
@@ -462,12 +465,12 @@ describe("current price and strike display", () => {
 describe("bulk current option price panel", () => {
   it("renders a read-only preview before one explicit apply action", () => {
     const fetch = vi.fn(); const apply = vi.fn(); const simulation = createSimulation({ ticker: "ABC" });
-    render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), bulkOptionPriceAvailable: true, onFetchBulkOptionPrices: fetch, onApplyBulkOptionPrices: apply, bulkOptionPricePreview: [{ target: { targetId: "sim:leg", simulationId: "sim", legId: "leg", ticker: "ABC", strategyType: "short_put", optionType: "put", side: "sell", strike: 195, expiry: "2026-07-24", quantity: 1 }, status: "ready", selectedPriceUSD: 2.4, selectedField: "ask", reason: "買戻し候補のAskを採用" }] }));
+    render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), bulkOptionPriceAvailable: true, onFetchBulkOptionPrices: fetch, onApplyBulkOptionPrices: apply, bulkOptionPricePreviewWorkspace: "live", bulkOptionPricePreview: [{ target: { targetId: "sim:leg", simulationId: "sim", legId: "leg", ticker: "ABC", strategyType: "short_put", optionType: "put", side: "sell", strike: 195, expiry: "2026-07-24", quantity: 1 }, status: "ready", selectedPriceUSD: 2.4, selectedField: "ask", reason: "買戻し候補のAskを採用" }] }));
     expect(screen.queryByTestId("bulk-option-price-panel")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "価格を一括更新" }));
+    fireEvent.click(screen.getByRole("button", { name: "未反映候補を確認・反映" }));
     expect(screen.getByRole("dialog", { name: "現在オプション価格を一括更新" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "取得成功分1脚を一括反映" }));
-    expect(fetch).toHaveBeenCalledOnce(); expect(apply).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled(); expect(apply).toHaveBeenCalledOnce();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
   it("keeps the public surface safely disabled", () => {
@@ -476,8 +479,8 @@ describe("bulk current option price panel", () => {
   });
   it("requires and clears the in-dialog OldIndicative confirmation before it enables apply", () => {
     const simulation = createSimulation({ ticker: "ABC" }); const onConfirmation = vi.fn(); const onClose = vi.fn();
-    render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), bulkOptionPriceAvailable: true, onFetchBulkOptionPrices: vi.fn(), onApplyBulkOptionPrices: vi.fn(), bulkOptionPriceReferenceConfirmed: false, onBulkOptionPriceReferenceConfirmedChange: onConfirmation, onBulkOptionPriceDialogClose: onClose, bulkOptionPricePreview: [{ target: { targetId: "sim:leg", simulationId: "sim", legId: "leg", ticker: "ABC", strategyType: "short_put", optionType: "put", side: "sell", strike: 195, expiry: "2026-07-24", quantity: 1 }, candidate: { environment: "live", fetchedAt: "2026-08-15T00:00:00Z", status: "available", classification: "available", source: "fixture", message: "ok", ask: 2.4, quoteDiagnostics: { priceTypeAsk: "OldIndicative" } }, status: "confirmable_reference", selectedPriceUSD: 2.4, selectedField: "ask", reason: "参考値" }] }));
-    fireEvent.click(screen.getByRole("button", { name: "価格を一括更新" }));
+    render(createElement(Dashboard, { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live", accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), bulkOptionPriceAvailable: true, onFetchBulkOptionPrices: vi.fn(), onApplyBulkOptionPrices: vi.fn(), bulkOptionPriceReferenceConfirmed: false, onBulkOptionPriceReferenceConfirmedChange: onConfirmation, onBulkOptionPriceDialogClose: onClose, bulkOptionPricePreviewWorkspace: "live", bulkOptionPricePreview: [{ target: { targetId: "sim:leg", simulationId: "sim", legId: "leg", ticker: "ABC", strategyType: "short_put", optionType: "put", side: "sell", strike: 195, expiry: "2026-07-24", quantity: 1 }, candidate: { environment: "live", fetchedAt: "2026-08-15T00:00:00Z", status: "available", classification: "available", source: "fixture", message: "ok", ask: 2.4, quoteDiagnostics: { priceTypeAsk: "OldIndicative" } }, status: "confirmable_reference", selectedPriceUSD: 2.4, selectedField: "ask", reason: "参考値" }] }));
+    fireEvent.click(screen.getByRole("button", { name: "未反映候補を確認・反映" }));
     expect(screen.getByText("取得成功 1脚 / 通常 0脚 / 参考値・要確認 1脚 / 反映不可 0脚")).toBeTruthy();
     expect(screen.getByRole("button", { name: "取得成功分0脚を一括反映" })).toBeDisabled();
     fireEvent.click(screen.getByRole("checkbox"));
@@ -846,13 +849,15 @@ describe("Dashboard close decision actions", () => {
     const simulation = createSimulation({ ticker: "TEST", optionLegs: [{ ...createSimulation().optionLegs[0], id: "leg", contractSize: 100 }] });
     const fetch = vi.fn();
     const row = createCurrentOptionPricePreviewRow(getCurrentOptionPriceTargets([simulation])[0], { environment: "live", source: "fixture", status: "available", classification: "available", message: "fixture", fetchedAt: "2026-09-26T00:00:00Z", ask: 2, quoteDiagnostics: { priceTypeBid: "Indicative", priceTypeAsk: "Indicative" } });
-    const props = { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live" as const, accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onFetchBulkOptionPrices: fetch, bulkOptionPricePreview: [row] };
+    const props = { simulations: [simulation], selectedId: simulation.id, onSelect: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), workspace: "live" as const, accountInputs, historyOpen: false, onHistoryOpenChange: vi.fn(), onFetchBulkOptionPrices: fetch, bulkOptionPricePreviewWorkspace: "live", bulkOptionPricePreview: [row] };
     const mounted = render(createElement(Dashboard, props));
     expect(screen.queryByText("中間値を取得できませんでした")).toBeNull();
     expect(screen.queryByText(/Bidが未取得/)).toBeNull();
     expect(screen.queryByRole("button", { name: "取得結果を確認" })).toBeNull();
     expect(screen.queryByText(/今回の取得結果は未保持です/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "価格を一括更新" }));
+    fireEvent.click(screen.getByRole("button", { name: "未反映候補を確認・反映" }));
+    expect(fetch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "全建玉の価格を再取得" }));
     expect(fetch).toHaveBeenCalledExactlyOnceWith();
     const details = screen.getByText("価格の取得根拠・診断").closest("details")!;
     expect(details.open).toBe(false);

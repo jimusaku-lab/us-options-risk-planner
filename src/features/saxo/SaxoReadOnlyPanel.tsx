@@ -186,6 +186,9 @@ export function SaxoReadOnlyPanel({
   onRequestClose,
   bulkFetchButtonRef,
   onPreviewCurrentPrices,
+  onShowExistingCurrentPricePreview,
+  hasCurrentPricePreview = false,
+  currentPriceLoading = false,
 }: {
   workspace: WorkspaceMode;
   accountInputs: AccountInputs;
@@ -225,6 +228,9 @@ export function SaxoReadOnlyPanel({
   onRequestClose?: () => void;
   bulkFetchButtonRef?: RefObject<HTMLButtonElement | null>;
   onPreviewCurrentPrices?: () => Promise<string>;
+  onShowExistingCurrentPricePreview?: () => void;
+  hasCurrentPricePreview?: boolean;
+  currentPriceLoading?: boolean;
 }) {
   const [showConnectionDetails, setShowConnectionDetails] = useState(false);
   const [currentPricePreviewMessage, setCurrentPricePreviewMessage] = useState("");
@@ -956,15 +962,6 @@ export function SaxoReadOnlyPanel({
           : "まとめて取得が完了しました。反映待ちサマリーを確認してください。",
       );
       window.setTimeout(() => (document.querySelector('[aria-label="スプレッドの組み合わせ確認"]') ?? pendingSummaryRef.current)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
-      // Price preview is distinct from account/history reflection; never adopt here.
-      if (onPreviewCurrentPrices) {
-        try {
-          const priceMessage = await onPreviewCurrentPrices();
-          if (spreadRequest.current === requestRevision) setCurrentPricePreviewMessage(priceMessage);
-        } catch {
-          if (spreadRequest.current === requestRevision) setCurrentPricePreviewMessage("取得できませんでした。口座・履歴の取得結果は保持しています。");
-        }
-      }
     } finally {
       setIsLoading(false);
     }
@@ -1281,6 +1278,20 @@ export function SaxoReadOnlyPanel({
               onLoadHistory={loadHistoryDiscovery}
               bulkFetchButtonRef={bulkFetchButtonRef}
             />
+            <section aria-label="取得後の操作" className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+              <p className="font-semibold">① 建玉・決済を確認して反映</p>
+              <p className="text-xs text-slate-600">下の反映待ちから確認します。保留して次へ進むこともできます。</p>
+              <button type="button" className="mt-2 rounded bg-slate-900 px-3 py-2 font-bold text-white" onClick={() => scrollToSection("pending")}>建玉・決済の確認へ</button>
+              <p className="mt-2 font-semibold">② 現在の価格を取得・確認</p>
+              <p className="text-xs text-slate-600">保存後の最新建玉を含めて再取得します。価格は確認するまで反映されません。</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {onPreviewCurrentPrices ? <button type="button" className="rounded border border-slate-300 bg-white px-3 py-2 font-semibold disabled:opacity-40" disabled={isLoading || currentPriceLoading} onClick={async () => {
+                  try { setCurrentPricePreviewMessage(await onPreviewCurrentPrices()); }
+                  catch { setCurrentPricePreviewMessage("取得できませんでした。口座・履歴の取得結果は保持しています。"); }
+                }}>{currentPriceLoading ? "現在の価格を取得中" : "現在の価格を取得・確認"}</button> : null}
+                {hasCurrentPricePreview && onShowExistingCurrentPricePreview ? <button type="button" className="rounded border border-slate-300 bg-white px-3 py-2 font-semibold disabled:opacity-40" disabled={currentPriceLoading} onClick={onShowExistingCurrentPricePreview}>取得済み価格候補を確認</button> : null}
+              </div>
+            </section>
             {currentPricePreviewMessage ? <p className="text-xs text-slate-600" role="status">価格候補: {currentPricePreviewMessage}</p> : null}
             {onCommitSpread && spreadCandidates.length ? <div id="saxo-spread-candidates">
               <SpreadStrategyCandidates candidates={spreadCandidates} ledger={strategyLedger ?? emptyStrategyLedger()} simulations={simulations} onCommit={onCommitSpread} />

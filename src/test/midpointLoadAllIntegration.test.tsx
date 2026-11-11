@@ -15,6 +15,9 @@ let premiumCalls = 0;
 let statusCalls = 0;
 let missingFirstBid = false;
 let requestedTargets: string[][] = [];
+let failHistory = false;
+let failStock = false;
+let bidBump = 0;
 function fixture(): TradeSimulation {
   return {
     id: "mid-parent", status: "open", name: "Anonymous spread", ticker: "TEST", strategyType: "bull_call_spread",
@@ -33,7 +36,7 @@ function fixture(): TradeSimulation {
 }
 beforeEach(() => {
   connected = false; capability = true; premiumCalls = 0; statusCalls = 0;
-  missingFirstBid = false; requestedTargets = [];
+  missingFirstBid = false; requestedTargets = []; failHistory = false; failStock = false; bidBump = 0;
   localStorage.clear(); localStorage.setItem("us-options-first-run-notice-accepted", "true");
   const simulation = fixture();
   useOptionsStore.setState({ activeWorkspace: "live", simulationsByWorkspace: { demo: [], live: [simulation] }, simulations: [simulation], strategyLedgersByWorkspace: { demo: emptyStrategyLedger(), live: emptyStrategyLedger() }, selectedSimulationId: simulation.id, selectedSimulationIds: { demo: "", live: simulation.id }, wheelCycles: [], wheelEvents: [], stockTransfers: [], wheelCyclesByWorkspace: { demo: [], live: [] }, wheelEventsByWorkspace: { demo: [], live: [] }, stockTransfersByWorkspace: { demo: [], live: [] } });
@@ -51,13 +54,15 @@ beforeEach(() => {
       "/api/saxo/history/discovery": { ...envelope, endpoints: [{ endpoint: "trades", label: "trades", classification: "ok", itemCount: 0, message: "", items: [], coverage: { status: "complete", completedPages: 1 } }] },
     };
     if (path === "/api/saxo/status") statusCalls++;
+    if (path === "/api/saxo/history/discovery" && failHistory) throw new Error("anonymous history failure");
+    if (path === "/api/market/quote" && failStock) throw new Error("anonymous stock failure");
     if (path === "/api/saxo/options/premium-candidates/preview") {
       premiumCalls++;
       const targets = JSON.parse(String(init?.body)).targets as { targetId: string }[];
       requestedTargets.push(targets.map(target => target.targetId));
       responses[path] = { ...envelope, results: targets.map(({ targetId }) => ({
         targetId, candidate: { ...envelope, status: "available", classification: "available", source: "fixture",
-          bid: missingFirstBid && targetId === "mid-parent:mid-long" ? undefined : targetId.endsWith("mid-long") ? 12 : 2, ask: targetId.endsWith("mid-long") ? 14 : 4,
+          bid: missingFirstBid && targetId === "mid-parent:mid-long" ? undefined : targetId.endsWith("mid-long") ? 12 + bidBump : 2, ask: targetId.endsWith("mid-long") ? 14 + bidBump : 4,
           quoteDiagnostics: { priceTypeBid: "OldIndicative", priceTypeAsk: "OldIndicative" } },
       })) };
     }
@@ -102,6 +107,11 @@ describe("R15 App all-fetch to common price preview", () => {
     const persistence = vi.spyOn(Storage.prototype, "setItem");
     const priceWrites = () => persistence.mock.calls.filter(([key]) => key === "us-options-simulations-v2");
     fireEvent.click(button);
+    await screen.findByText("まとめて取得が完了しました。反映待ちサマリーを確認してください。");
+    expect(screen.queryByRole("dialog")).toBeNull(); expect(premiumCalls).toBe(0);
+    expect(screen.getByRole("button", { name: "建玉・決済の確認へ" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "取得済み価格候補を確認" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
     const dialog = await screen.findByRole("dialog", { name: "現在オプション価格を一括更新" });
     const apply = await within(dialog).findByRole("button", { name: /一括反映/ });
     expect(premiumCalls).toBe(1);
@@ -114,7 +124,7 @@ describe("R15 App all-fetch to common price preview", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(useOptionsStore.getState().simulations).toEqual(before);
     expect(screen.getByText("まとめて取得が完了しました。反映待ちサマリーを確認してください。")).toBeInTheDocument();
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: "取得済み価格候補を確認" }));
     const reopened = await screen.findByRole("dialog");
     const checkbox = await within(reopened).findByRole("checkbox", { name: /OldIndicative/ });
     expect(checkbox).not.toBeChecked();
@@ -129,6 +139,7 @@ describe("R15 App all-fetch to common price preview", () => {
     expect(saved.optionEntryExecutions).toEqual(before[0].optionEntryExecutions);
     expect(saved.optionCloseExecutions).toEqual(before[0].optionCloseExecutions);
     expect(saved.status).toBe("open");
+    expect(screen.queryByRole("button", { name: "取得済み価格候補を確認" })).toBeNull();
     expect(JSON.parse(localStorage.getItem("us-options-simulations-v2")!).live[0].optionLegs).toEqual(saved.optionLegs);
   });
   it("uses only whole-portfolio fetch and keeps mixed results compact, atomic and persistent", async () => {
@@ -139,6 +150,9 @@ describe("R15 App all-fetch to common price preview", () => {
     const button = await mountAndReconnect();
     const persistence = vi.spyOn(Storage.prototype, "setItem");
     fireEvent.click(button);
+    await screen.findByText("まとめて取得が完了しました。反映待ちサマリーを確認してください。");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(await within(dialog).findByRole("checkbox", { name: /OldIndicative/ }));
     expect(within(dialog).getByText("価格の取得根拠・診断").closest("details")!.open).toBe(false);
@@ -151,7 +165,7 @@ describe("R15 App all-fetch to common price preview", () => {
       expect(within(row).queryByRole("button", { name: /取得結果|候補価格|まとめて更新/ })).toBeNull();
     }
     missingFirstBid = false;
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
     const result = await screen.findByRole("dialog");
     await waitFor(() => expect(premiumCalls).toBe(2));
     expect(requestedTargets[1]).toEqual(["mid-parent:mid-long", "mid-parent:mid-short", "good-parent:mid-long", "good-parent:mid-short"]);
@@ -162,7 +176,7 @@ describe("R15 App all-fetch to common price preview", () => {
     expect(persistence.mock.calls.filter(([key]) => key === "us-options-simulations-v2")).toHaveLength(2);
     const recovered = structuredClone(useOptionsStore.getState().simulations[0]);
     missingFirstBid = true;
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
     const retry = await screen.findByRole("dialog");
     fireEvent.click(await within(retry).findByRole("checkbox", { name: /OldIndicative/ }));
     fireEvent.click(within(retry).getByRole("button", { name: /一括反映/ }));
@@ -176,9 +190,47 @@ describe("R15 App all-fetch to common price preview", () => {
     const before = structuredClone(useOptionsStore.getState().simulations);
     fireEvent.click(button);
     await screen.findByText("まとめて取得が完了しました。反映待ちサマリーを確認してください。");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
     await screen.findByRole("dialog");
     await waitFor(() => expect(screen.getAllByText(/一括価格取得に未対応/).length).toBeGreaterThan(0));
     expect(premiumCalls).toBe(0);
     expect(useOptionsStore.getState().simulations).toEqual(before);
+  });
+  it("preserves unapplied candidates on load and failed re-fetch and hides them on workspace switch", async () => {
+    const button = await mountAndReconnect(); fireEvent.click(button);
+    await screen.findByText("まとめて取得が完了しました。反映待ちサマリーを確認してください。");
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
+    const first = await screen.findByRole("dialog"); await within(first).findByRole("checkbox", { name: /OldIndicative/ });
+    fireEvent.click(within(first).getByRole("button", { name: "現在オプション価格の確認を閉じる" }));
+    fireEvent.click(button); await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.queryByRole("dialog")).toBeNull(); expect(premiumCalls).toBe(1);
+    expect(screen.getByRole("button", { name: "取得済み価格候補を確認" })).toBeEnabled();
+    capability = false; fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
+    const retry = await screen.findByRole("dialog"); await within(retry).findByText(/前回の価格候補を保持しています/);
+    expect(within(retry).getByRole("checkbox", { name: /OldIndicative/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^DEMO$/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("button", { name: "取得済み価格候補を確認" })).toBeNull();
+  });
+  it("allows explicit review after partial history failure and does not mark zero results as an existing candidate", async () => {
+    failHistory = true; useOptionsStore.setState({ simulations: [], simulationsByWorkspace: { demo: [], live: [] } });
+    const button = await mountAndReconnect(); fireEvent.click(button);
+    await screen.findByText(/まとめて取得は一部失敗しました/); expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
+    const dialog = await screen.findByRole("dialog"); fireEvent.click(within(dialog).getByRole("button", { name: "現在オプション価格の確認を閉じる" }));
+    expect(screen.queryByRole("button", { name: "取得済み価格候補を確認" })).toBeNull(); expect(premiumCalls).toBe(0);
+  });
+  it("shows newly successful option quotes when stock re-fetch fails, rather than keeping an old batch", async () => {
+    const button = await mountAndReconnect(); fireEvent.click(button);
+    await screen.findByText("まとめて取得が完了しました。反映待ちサマリーを確認してください。");
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
+    const first = await screen.findByRole("dialog"); await within(first).findByRole("checkbox", { name: /OldIndicative/ });
+    fireEvent.click(within(first).getByRole("button", { name: "現在オプション価格の確認を閉じる" }));
+    failStock = true; bidBump = 2;
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
+    const next = await screen.findByRole("dialog"); await waitFor(() => expect(premiumCalls).toBe(2));
+    await waitFor(() => expect(next.textContent).toContain("14 / 16"));
+    expect(next.textContent).not.toContain("前回の価格候補を保持しています");
   });
 });

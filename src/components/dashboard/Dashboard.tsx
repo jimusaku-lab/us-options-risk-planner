@@ -321,11 +321,18 @@ export function Dashboard({
   onSaxoExitOrderAction?: (simulationId: string, legId: string) => void;
 }) {
   const [isBulkDialogOpen, setIsBulkDialogOpen] = useState(false);
+  const previousPriceWorkspace = useRef(workspace);
+  useEffect(() => {
+    if (previousPriceWorkspace.current !== workspace) {
+      previousPriceWorkspace.current = workspace;
+      setIsBulkDialogOpen(false);
+    }
+  }, [workspace]);
   const [payoffPositionId, setPayoffPositionId] = useState<string>();
   const payoffPosition = simulations.find((position) => position.id === payoffPositionId && position.status === "open");
   useEffect(() => {
-    if (bulkOptionPriceOpenRequest > 0) setIsBulkDialogOpen(true);
-  }, [bulkOptionPriceOpenRequest]);
+    if (bulkOptionPriceOpenRequest > 0 && bulkOptionPricePreviewWorkspace === workspace) setIsBulkDialogOpen(true);
+  }, [bulkOptionPriceOpenRequest, bulkOptionPricePreviewWorkspace, workspace]);
   const priceDiagnostics = new Map(simulations.flatMap(simulation => {
     const result = diagnosePriceUpdate(simulation, bulkOptionPricePreview ?? [], bulkOptionPriceReferenceConfirmed, bulkOptionPriceAdoption);
     return result ? [[simulation.id, result] as const] : [];
@@ -341,6 +348,7 @@ export function Dashboard({
     return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", onKeyDown); };
   }, [isBulkDialogOpen, onBulkOptionPriceDialogClose]);
   const showHistory = historyOpen;
+  const hasReusablePricePreview = bulkOptionPricePreviewWorkspace === workspace && !bulkOptionPriceAdoption && ((bulkOptionPricePreview?.length ?? 0) > 0 || (bulkStockPricePreview?.length ?? 0) > 0);
   const currentSimulations = simulations.filter((simulation) => simulation.status === "planned" || simulation.status === "entry_confirmation" || simulation.status === "open");
   const currentSimulationContexts = new Map(currentSimulations.map((simulation) => {
     const simulationWithAccountBase = {
@@ -409,7 +417,8 @@ export function Dashboard({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-        {bulkOptionPriceAvailable || onFetchBulkOptionPrices ? <button type="button" title={bulkOptionPricePreview && bulkOptionPricePreviewWorkspace === workspace && !bulkOptionPriceAdoption ? "未反映候補の確認を再開します。取得済みの候補は再取得しません" : "取得時点の現在決済候補価格をread-onlyで確認します"} aria-description="決済実績・状態・数量は変更しません" disabled={bulkOptionPriceLoading} className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white disabled:bg-slate-400" onClick={() => { const reuse = Boolean(bulkOptionPricePreview && bulkOptionPricePreviewWorkspace === workspace && !bulkOptionPriceAdoption); setIsBulkDialogOpen(true); if (!reuse) onFetchBulkOptionPrices?.(); }}>{bulkOptionPriceLoading ? `${bulkOptionPriceProgress.total}脚中 ${bulkOptionPriceProgress.completed}脚` : bulkOptionPricePreview && bulkOptionPricePreviewWorkspace === workspace && !bulkOptionPriceAdoption ? "未反映候補を確認・反映" : "価格を一括更新"}</button> : <span className="text-xs text-amber-700">Saxo価格取得は利用できません（未接続・未対応または公開版）。</span>}
+        {bulkOptionPriceAvailable || onFetchBulkOptionPrices ? <button type="button" title={hasReusablePricePreview ? "未反映候補の確認を再開します。取得済みの候補は再取得しません" : "取得時点の現在決済候補価格をread-onlyで確認します"} aria-description="決済実績・状態・数量は変更しません" disabled={bulkOptionPriceLoading} className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white disabled:bg-slate-400" onClick={() => { setIsBulkDialogOpen(true); if (!hasReusablePricePreview) onFetchBulkOptionPrices?.(); }}>{bulkOptionPriceLoading ? `${bulkOptionPriceProgress.total}脚中 ${bulkOptionPriceProgress.completed}脚` : hasReusablePricePreview ? "未反映候補を確認・反映" : "価格を一括更新"}</button> : <span className="text-xs text-amber-700">Saxo価格取得は利用できません（未接続・未対応または公開版）。</span>}
+        {onFetchBulkOptionPrices && hasReusablePricePreview ? <button type="button" disabled={bulkOptionPriceLoading} className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-800 disabled:opacity-40" onClick={() => { setIsBulkDialogOpen(true); onFetchBulkOptionPrices(); }}>最新建玉の価格を再取得</button> : null}
         {isPositionFocusMode ? (
           <button
             className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
@@ -438,7 +447,7 @@ export function Dashboard({
         </div>
       </div>
       {bulkOptionPriceMessage && !isBulkDialogOpen ? <p className="mt-2 text-right text-xs text-slate-500">{bulkOptionPriceMessage}</p> : null}
-      {isBulkDialogOpen ? <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 pt-12" role="presentation">
+      {isBulkDialogOpen && bulkOptionPricePreviewWorkspace === workspace ? <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 pt-12" role="presentation">
         <div role="dialog" aria-modal="true" aria-labelledby="bulk-option-price-dialog-title" className="w-full max-w-5xl rounded-lg bg-white p-4 shadow-xl">
           <div className="flex items-start justify-between gap-3"><div>
             <h3 id="bulk-option-price-dialog-title" className="text-base font-bold">現在オプション価格を一括更新</h3>
@@ -448,7 +457,7 @@ export function Dashboard({
           {bulkOptionPriceMessage ? <p className="mt-3 text-xs text-slate-600">{bulkOptionPriceMessage}</p> : null}
           {priceDiagnostics.size > 0 ? <details className="mt-2 text-xs"><summary className="cursor-pointer">価格の取得根拠・診断</summary>{Array.from(priceDiagnostics.values()).map(result => <PriceDiagnosticDetails key={result.simulationId} result={result} />)}</details> : null}
           {onFetchBulkOptionPrices ? <button type="button" disabled={bulkOptionPriceLoading} className="my-2 rounded border px-2 py-1 text-xs disabled:opacity-40" onClick={() => onFetchBulkOptionPrices()}>全建玉の価格を再取得</button> : null}
-          {bulkOptionPricePreview ? <BulkOptionPricePreview currentFx={currentEstimateFxQuote} rows={bulkOptionPricePreview} stockRows={bulkStockPricePreview ?? []} diagnostics={priceDiagnostics} simulations={simulations} referenceConfirmed={bulkOptionPriceReferenceConfirmed} onReferenceConfirmedChange={onBulkOptionPriceReferenceConfirmedChange ?? (() => {})} onApply={() => { onApplyBulkOptionPrices?.(); setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }} /> : null}
+          {!bulkOptionPriceLoading && bulkOptionPricePreview && bulkOptionPricePreviewWorkspace === workspace ? <BulkOptionPricePreview currentFx={currentEstimateFxQuote} rows={bulkOptionPricePreview} stockRows={bulkStockPricePreview ?? []} diagnostics={priceDiagnostics} simulations={simulations} referenceConfirmed={bulkOptionPriceReferenceConfirmed} onReferenceConfirmedChange={onBulkOptionPriceReferenceConfirmedChange ?? (() => {})} onApply={() => { onApplyBulkOptionPrices?.(); setIsBulkDialogOpen(false); onBulkOptionPriceDialogClose?.(); }} /> : null}
         </div>
       </div> : null}
       {simulations.length === 0 ? (

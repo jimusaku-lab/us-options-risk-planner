@@ -47,6 +47,7 @@ trades.forEach(trade => { trade.brokerAccountKey = accountKey; trade.accountKey 
 const originalStore = useOptionsStore.getState();
 const requests: string[] = [];
 const unexpectedRequests: string[] = [];
+let previewTargets: string[] = [];
 const scrollDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
 
 beforeEach(() => {
@@ -62,6 +63,7 @@ beforeEach(() => {
   });
   requests.length = 0;
   unexpectedRequests.length = 0;
+  previewTargets = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, "http://fixture.invalid");
     const method = init?.method ?? "GET";
@@ -69,8 +71,9 @@ beforeEach(() => {
     const envelope = { environment: "live", readOnly: true, fetchedAt };
     const responses: Record<string, unknown> = {
       "/api/market/fx/usdjpy": { pair: "USDJPY", rate: 150, source: "local_proxy", date: "2026-09-12", fetchedAt },
+      "/api/market/quote": { symbol: "TEST", source: "fixture", date: "2026-09-12", fetchedAt },
       "/api/saxo/status": { mode: "saxo_readonly", connected: true, connectionState: "connected", hasToken: true, readOnly: true,
-        environment: "live", environmentConfigured: true, oauthConfigured: true, bindAddress: "127.0.0.1", orderEndpointsEnabled: false },
+        environment: "live", environmentConfigured: true, oauthConfigured: true, bindAddress: "127.0.0.1", orderEndpointsEnabled: false, capabilities: { bulkOptionPremiumPreview: true } },
       "/api/saxo/config/status": { mode: "saxo_readonly", readOnly: true, environment: "live", environmentConfigured: true,
         clientIdConfigured: true, configurationWarnings: [], localConfigFileExists: true },
       "/api/saxo/accounts/snapshot": { ...envelope, accounts: [] },
@@ -79,6 +82,11 @@ beforeEach(() => {
       "/api/saxo/history/discovery": { ...envelope, fromDate: "2026-09-01", toDate: "2026-09-12",
         endpoints: [{ endpoint: "trades", label: "TEST trades", classification: "ok", itemCount: trades.length, message: "", items: trades, coverage: { completedPages: 1, status: "complete" } }] },
     };
+    if (method === "POST" && url.pathname === "/api/saxo/options/premium-candidates/preview") {
+      const targets = JSON.parse(String(init?.body)).targets as { targetId: string }[];
+      previewTargets = targets.map(target => target.targetId);
+      return { ok: true, status: 200, json: async () => ({ ...envelope, results: targets.map(({targetId}) => ({targetId, candidate: {...envelope, status: "available", classification: "available", source: "fixture", bid: 1, ask: 2, quoteDiagnostics: {priceTypeBid: "Tradable", priceTypeAsk: "Tradable"}}})) }) } as Response;
+    }
     if (method !== "GET" || !(url.pathname in responses)) {
       unexpectedRequests.push(`${method} ${url.pathname}`);
       throw new Error("RED_BASELINE blocks all non-fixture transport");
@@ -132,6 +140,10 @@ describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE production import", () => {
     await waitFor(() => expect(fetchButton).toBeEnabled());
     fireEvent.click(fetchButton);
     await screen.findByText("まとめて取得が完了しました。反映待ちサマリーを確認してください。");
+    expect(screen.queryByRole("dialog", { name: "現在オプション価格を一括更新" })).toBeNull();
+    expect(previewTargets).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "建玉・決済の確認へ" }));
+    expect(screen.getByRole("button", { name: "現在の価格を取得・確認" })).toBeEnabled();
     expect(requests).toEqual(expect.arrayContaining([
       "GET /api/saxo/positions/snapshot", "GET /api/saxo/orders/snapshot", "GET /api/saxo/history/discovery",
     ]));
@@ -152,6 +164,7 @@ describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE production import", () => {
     const persistence = vi.spyOn(Storage.prototype, "setItem");
     fireEvent.click(apply);
     await waitFor(() => expect(useOptionsStore.getState().simulations).toHaveLength(1));
+    expect(screen.queryByRole("dialog", { name: "現在オプション価格を一括更新" })).toBeNull();
     expect(persistence.mock.calls.filter(([key]) => key === "us-options-simulations-v2")).toHaveLength(1);
     const parent = useOptionsStore.getState().simulations[0];
     expect(parent.strategyType).toBe("bear_put_spread");
@@ -180,6 +193,12 @@ describe("SPREAD-REPAIR-20260912-R2 RED_BASELINE production import", () => {
     fireEvent.click(screen.getByRole("button", { name: "全建玉一覧に戻る" }));
     const secondDetails = screen.getByText("Saxo API詳細").closest("details")!;
     secondDetails.open = true; fireEvent(secondDetails, new Event("toggle"));
+    const beforePrice = structuredClone(useOptionsStore.getState().simulations);
+    fireEvent.click(screen.getByRole("button", { name: "現在の価格を取得・確認" }));
+    const priceDialog = await screen.findByRole("dialog", { name: "現在オプション価格を一括更新" });
+    await waitFor(() => expect(previewTargets).toEqual(expect.arrayContaining(parent.optionLegs.map(leg => `${parent.id}:${leg.id}`))));
+    expect(previewTargets).toHaveLength(2); expect(useOptionsStore.getState().simulations).toEqual(beforePrice);
+    fireEvent.click(within(priceDialog).getByRole("button", { name: "現在オプション価格の確認を閉じる" }));
     const fetchAgain = await screen.findByRole("button", { name: "まとめて取得" });
     fireEvent.click(fetchAgain);
     await waitFor(() => expect(fetchAgain).toBeEnabled());
