@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SimulationEditor } from "./SimulationEditor";
+import { SimulationEditor, formatCloseHoldingDays } from "./SimulationEditor";
 import type { TradeSimulation } from "@/types/domain";
 import type { SaxoApiOrderSnapshot, SaxoHistoryDiscoveryItem } from "@/features/saxo/saxoAccountSync";
 
@@ -10,6 +10,46 @@ afterEach(() => {
 });
 
 describe("SimulationEditor", () => {
+  it("formats holding days only for display, retaining weighted fractions", () => {
+    expect(formatCloseHoldingDays(56.00000000000001)).toBe("56");
+    expect(formatCloseHoldingDays(56.375)).toBe("56.38");
+  });
+
+  it("shows long-sale proceeds, purchase cost and round-trip fees without changing profit", () => {
+    const simulation = buildSampleLongOptionCloseSimulation("call");
+    simulation.optionLegs[0].premiumUSD = 4.5;
+    simulation.optionEntryExecutions![0] = { ...simulation.optionEntryExecutions![0], tradeDate: "2026-08-01", fillPriceUSD: 4.5, commissionUSD: 2.24 };
+    simulation.optionCloseExecutions![0] = { ...simulation.optionCloseExecutions![0], source: "manual", closeDate: "2026-09-26", closePriceUSD: 6.2, commissionUSD: 2.24 };
+    render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} />);
+    expect(screen.getByText(/売却代金 \$620\.00 - 購入代金 \$450\.00 - 往復手数料 \$4\.48/)).toBeInTheDocument();
+    expect(screen.getByText(/\$165\.52/)).toBeInTheDocument();
+    expect(screen.getByText(/56日/)).toBeInTheDocument();
+  });
+
+  it("retains short buyback and does not label expiry as a sale", () => {
+    const simulation = buildSampleLongOptionCloseSimulation("put");
+    simulation.strategyType = "short_put";
+    simulation.optionLegs[0].side = "sell";
+    simulation.optionCloseExecutions![0].source = "manual";
+    const view = render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} />);
+    expect(screen.getByText(/プレミアム.*買戻し.*手数料/)).toBeInTheDocument();
+    view.unmount();
+    const expired = buildSampleLongOptionCloseSimulation("call");
+    expired.optionCloseExecutions![0] = { ...expired.optionCloseExecutions![0], source: "manual", closeKind: "expired", closePriceUSD: 0 };
+    render(<SimulationEditor simulation={expired} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} />);
+    expect(screen.queryByText(/売却代金.*購入代金/)).not.toBeInTheDocument();
+  });
+
+  it("preserves the JPY broker-statement result presentation", () => {
+    const simulation = buildSampleLongOptionCloseSimulation("call");
+    simulation.accountCode = "P";
+    simulation.accountEnvironment = "PROD_P_JPY_SETTLEMENT";
+    simulation.accountCurrency = "JPY";
+    simulation.optionCloseExecutions![0] = { ...simulation.optionCloseExecutions![0], source: "manual", settlementCurrency: "JPY", brokerRealizedPnlJPY: 12345 };
+    render(<SimulationEditor simulation={simulation} workspace="live" canUseExternalQuotes={false} externalQuoteModeLabel="無効" onChange={vi.fn()} />);
+    expect(screen.getByText(/Saxo実績ベース \/ 実現損益.*12,345円を採用/)).toBeInTheDocument();
+    expect(screen.queryByText(/売却代金.*購入代金/)).not.toBeInTheDocument();
+  });
   it("auto-selects a long-call entry leg created from a Saxo position draft", () => {
     const simulation = buildVisaLongCallSimulation();
 

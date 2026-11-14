@@ -59,6 +59,10 @@ type SimulationEditorProps = {
   focusRequest?: { anchorId: string; requestId: number; saxoHistoryIssue?: "missing-close-candidate"; sourceTradeId?: string; exitOrderReview?: boolean } | null;
 };
 
+export function formatCloseHoldingDays(days: number): string {
+  return String(Number(days.toFixed(2)));
+}
+
 function formatAcquisitionTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "未確認";
@@ -3084,7 +3088,7 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                         <div className="text-xs font-semibold">実績年率</div>
                         <div className="numeric-input font-bold">{visibleResult.annualReturnPct === undefined || visibleResult.holdingDays === undefined
                           ? `未計算：${visibleResult.annualReturnMissingReason ?? "購入時支払額または保有日数"}`
-                          : `${formatPct(visibleResult.annualReturnPct)}（${visibleResult.holdingDays}日）`}</div>
+                          : `${formatPct(visibleResult.annualReturnPct)}（${formatCloseHoldingDays(visibleResult.holdingDays)}日）`}</div>
                       </div>
                       <div>
                         <div className="text-xs font-semibold">計算内訳</div>
@@ -3096,6 +3100,10 @@ export function SimulationEditor({ simulation, workspace, standardNOptionCommiss
                               参考: 記帳額 {execution.brokerBookedAmountJPY === undefined ? "-" : formatJPY(execution.brokerBookedAmountJPY, { signed: true })} / 取引費用{" "}
                               {execution.brokerTransactionCostJPY === undefined ? "-" : formatJPY(execution.brokerTransactionCostJPY, { signed: true })} / 為替{" "}
                               {execution.brokerExchangeRateJPY === undefined ? "-" : execution.brokerExchangeRateJPY.toFixed(6)}
+                            </>
+                          ) : visibleResult.leg.side === "buy" && !isExpiredExecution ? (
+                            <>
+                              {visibleResult.basis === "saxo_broker_statement" ? "Saxo実績ベース" : "概算"} / 売却代金 {formatUSD(visibleResult.closeCostUSD)} - 購入代金 {formatUSD(visibleResult.entryPremiumUSD)} - 往復手数料 {formatUSD(visibleResult.openCommissionUSD + visibleResult.closeCommissionUSD)}
                             </>
                           ) : (
                             <>
